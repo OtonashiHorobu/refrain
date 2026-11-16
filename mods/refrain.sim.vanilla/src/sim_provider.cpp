@@ -33,10 +33,12 @@
 #include <refrain/world/store.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <map>
 #include <memory>
 #include <set>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -355,6 +357,250 @@ struct sim_provider {
                                 sizeof(payload));
         return 1;
     }
+
+    /// Fill the contract projection from one record the provider owns. The
+    /// name, the world and the profile uuid are borrowed from the record and
+    /// stay valid for the duration of the call because the record lives in the
+    /// provider's table.
+    static void project_player(const sim::player_state &record,
+                               refrain_services_sim_player_info &out) {
+        out.struct_size = REFRAIN_SERVICES_SIM_PLAYER_INFO_SIZE;
+        out.connection = record.connection;
+        out.profile_id = abi::to_bytes(std::span<const std::uint8_t>{
+            record.profile_id.data(), record.profile_id.size()});
+        out.name = abi::to_borrowed(std::string_view{record.name});
+        out.world = abi::to_borrowed(std::string_view{record.world});
+        out.entity_id = record.id;
+        out.x = record.x;
+        out.y = record.y;
+        out.z = record.z;
+        out.yaw = record.yaw;
+        out.pitch = record.pitch;
+        out.on_ground = record.on_ground ? 1 : 0;
+        out.game_mode = record.game_mode;
+        out.health = record.health;
+        out.view_distance = record.view_distance;
+    }
+
+    static auto player_count(void *self,
+                             refrain_services_sim_handle_sim_world handle)
+        -> std::uint32_t {
+        auto *provider{static_cast<sim_provider *>(self)};
+        if (provider == nullptr) {
+            return 0;
+        }
+        auto *world{provider->find(handle)};
+        if (world == nullptr) {
+            return 0;
+        }
+        return static_cast<std::uint32_t>(world->players().size());
+    }
+
+    static auto
+    player_at(void *self, refrain_services_sim_handle_sim_world handle,
+              std::uint32_t index, refrain_services_sim_player_info *out)
+        -> refrain_status {
+        if (out == nullptr) {
+            return REFRAIN_SERVICES_SIM_SIM_ERROR_INVALID_ARGUMENT;
+        }
+        auto *provider{static_cast<sim_provider *>(self)};
+        if (provider == nullptr) {
+            return REFRAIN_SERVICES_SIM_SIM_ERROR_INVALID_HANDLE;
+        }
+        auto *world{provider->find(handle)};
+        if (world == nullptr) {
+            return REFRAIN_SERVICES_SIM_SIM_ERROR_NOT_FOUND;
+        }
+        const auto *record{world->players().nth(index)};
+        if (record == nullptr) {
+            return REFRAIN_SERVICES_SIM_SIM_ERROR_OUT_OF_BOUNDS;
+        }
+        project_player(*record, *out);
+        return REFRAIN_STATUS_OK;
+    }
+
+    static auto player_by_connection(
+        void *self, refrain_services_sim_handle_sim_world handle,
+        std::uint64_t connection, refrain_services_sim_player_info *out)
+        -> refrain_status {
+        if (out == nullptr) {
+            return REFRAIN_SERVICES_SIM_SIM_ERROR_INVALID_ARGUMENT;
+        }
+        auto *provider{static_cast<sim_provider *>(self)};
+        if (provider == nullptr) {
+            return REFRAIN_SERVICES_SIM_SIM_ERROR_INVALID_HANDLE;
+        }
+        auto *world{provider->find(handle)};
+        if (world == nullptr) {
+            return REFRAIN_SERVICES_SIM_SIM_ERROR_NOT_FOUND;
+        }
+        const auto *record{world->players().find_by_connection(connection)};
+        if (record == nullptr) {
+            return REFRAIN_SERVICES_SIM_SIM_ERROR_NOT_FOUND;
+        }
+        project_player(*record, *out);
+        return REFRAIN_STATUS_OK;
+    }
+
+    static auto
+    add_player(void *self, refrain_services_sim_handle_sim_world handle,
+               const refrain_services_sim_player_registration *registration,
+               std::uint64_t *out_value) -> refrain_status {
+        if (registration == nullptr || out_value == nullptr) {
+            return REFRAIN_SERVICES_SIM_SIM_ERROR_INVALID_ARGUMENT;
+        }
+        if (registration->struct_size !=
+            REFRAIN_SERVICES_SIM_PLAYER_REGISTRATION_SIZE) {
+            return REFRAIN_SERVICES_SIM_SIM_ERROR_INVALID_ARGUMENT;
+        }
+        auto *provider{static_cast<sim_provider *>(self)};
+        if (provider == nullptr) {
+            return REFRAIN_SERVICES_SIM_SIM_ERROR_INVALID_HANDLE;
+        }
+        auto *world{provider->find(handle)};
+        if (world == nullptr) {
+            return REFRAIN_SERVICES_SIM_SIM_ERROR_NOT_FOUND;
+        }
+        const auto profile{abi::to_span(registration->profile_id)};
+        if (!profile.empty() && profile.size() != sim::profile_uuid_size) {
+            return REFRAIN_SERVICES_SIM_SIM_ERROR_INVALID_ARGUMENT;
+        }
+        sim::player_table::registration record{};
+        record.connection = registration->connection;
+        std::copy(profile.begin(), profile.end(), record.profile_id.begin());
+        record.name = abi::to_string(registration->name);
+        record.world = abi::to_string(registration->world);
+        record.x = registration->x;
+        record.y = registration->y;
+        record.z = registration->z;
+        record.game_mode = registration->game_mode;
+        record.inventory_slots = registration->inventory_slots;
+        auto added{world->add_player(std::move(record))};
+        if (!added) {
+            return entity_error(added.error());
+        }
+        *out_value = *added;
+        return REFRAIN_STATUS_OK;
+    }
+
+    static auto remove_player(void *self,
+                              refrain_services_sim_handle_sim_world handle,
+                              std::uint64_t connection) -> std::uint8_t {
+        auto *provider{static_cast<sim_provider *>(self)};
+        if (provider == nullptr) {
+            return 0;
+        }
+        auto *world{provider->find(handle)};
+        return world != nullptr && world->remove_player(connection) ? 1 : 0;
+    }
+
+    static auto
+    set_player_transform(void *self,
+                         refrain_services_sim_handle_sim_world handle,
+                         std::uint64_t connection, double x, double y, double z,
+                         float yaw, float pitch) -> refrain_status {
+        auto *player{find_player(self, handle, connection)};
+        if (player == nullptr) {
+            return REFRAIN_SERVICES_SIM_SIM_ERROR_NOT_FOUND;
+        }
+        player->x = x;
+        player->y = y;
+        player->z = z;
+        player->yaw = yaw;
+        player->pitch = pitch;
+        return REFRAIN_STATUS_OK;
+    }
+
+    static auto
+    set_player_position(void *self,
+                        refrain_services_sim_handle_sim_world handle,
+                        std::uint64_t connection, double x, double y, double z)
+        -> refrain_status {
+        auto *provider{static_cast<sim_provider *>(self)};
+        if (provider == nullptr) {
+            return REFRAIN_SERVICES_SIM_SIM_ERROR_INVALID_HANDLE;
+        }
+        auto *world{provider->find(handle)};
+        if (world == nullptr) {
+            return REFRAIN_SERVICES_SIM_SIM_ERROR_NOT_FOUND;
+        }
+        auto *player{world->players().find_by_connection(connection)};
+        if (player == nullptr) {
+            return REFRAIN_SERVICES_SIM_SIM_ERROR_NOT_FOUND;
+        }
+        world->set_player_position(*player, x, y, z);
+        return REFRAIN_STATUS_OK;
+    }
+
+    static auto set_player_view_distance(
+        void *self, refrain_services_sim_handle_sim_world handle,
+        std::uint64_t connection, std::int32_t distance) -> refrain_status {
+        if (distance < 0) {
+            return REFRAIN_SERVICES_SIM_SIM_ERROR_INVALID_ARGUMENT;
+        }
+        auto *player{find_player(self, handle, connection)};
+        if (player == nullptr) {
+            return REFRAIN_SERVICES_SIM_SIM_ERROR_NOT_FOUND;
+        }
+        player->view_distance = distance;
+        return REFRAIN_STATUS_OK;
+    }
+
+    static auto move_player(void *self,
+                            refrain_services_sim_handle_sim_world handle,
+                            std::uint64_t connection, double dx, double dy,
+                            double dz, std::uint8_t *out_value)
+        -> refrain_status {
+        if (out_value == nullptr) {
+            return REFRAIN_SERVICES_SIM_SIM_ERROR_INVALID_ARGUMENT;
+        }
+        auto *provider{static_cast<sim_provider *>(self)};
+        if (provider == nullptr) {
+            return REFRAIN_SERVICES_SIM_SIM_ERROR_INVALID_HANDLE;
+        }
+        auto *world{provider->find(handle)};
+        if (world == nullptr) {
+            return REFRAIN_SERVICES_SIM_SIM_ERROR_NOT_FOUND;
+        }
+        auto *player{world->players().find_by_connection(connection)};
+        if (player == nullptr) {
+            return REFRAIN_SERVICES_SIM_SIM_ERROR_NOT_FOUND;
+        }
+        *out_value = world->move_player(*player, dx, dy, dz) ? 1 : 0;
+        return REFRAIN_STATUS_OK;
+    }
+
+    static auto jump(void *self, refrain_services_sim_handle_sim_world handle,
+                     std::uint64_t connection) -> refrain_status {
+        auto *provider{static_cast<sim_provider *>(self)};
+        if (provider == nullptr) {
+            return REFRAIN_SERVICES_SIM_SIM_ERROR_INVALID_HANDLE;
+        }
+        auto *world{provider->find(handle)};
+        if (world == nullptr) {
+            return REFRAIN_SERVICES_SIM_SIM_ERROR_NOT_FOUND;
+        }
+        auto *player{world->players().find_by_connection(connection)};
+        if (player == nullptr) {
+            return REFRAIN_SERVICES_SIM_SIM_ERROR_NOT_FOUND;
+        }
+        world->jump(*player);
+        return REFRAIN_STATUS_OK;
+    }
+
+    /// Resolve one player record by connection for the write calls.
+    [[nodiscard]] static auto
+    find_player(void *self, refrain_services_sim_handle_sim_world handle,
+                std::uint64_t connection) -> sim::player_state * {
+        auto *provider{static_cast<sim_provider *>(self)};
+        if (provider == nullptr) {
+            return nullptr;
+        }
+        auto *world{provider->find(handle)};
+        return world == nullptr
+                   ? nullptr
+                   : world->players().find_by_connection(connection);
+    }
 };
 
 auto sim_vtable() -> const refrain_services_sim_vtable & {
@@ -371,6 +617,16 @@ auto sim_vtable() -> const refrain_services_sim_vtable & {
         .set_blocks = &sim_provider::set_blocks,
         .spawn_entity = &sim_provider::spawn_entity,
         .remove_entity = &sim_provider::remove_entity,
+        .player_count = &sim_provider::player_count,
+        .player_at = &sim_provider::player_at,
+        .player_by_connection = &sim_provider::player_by_connection,
+        .add_player = &sim_provider::add_player,
+        .remove_player = &sim_provider::remove_player,
+        .set_player_transform = &sim_provider::set_player_transform,
+        .set_player_position = &sim_provider::set_player_position,
+        .set_player_view_distance = &sim_provider::set_player_view_distance,
+        .move_player = &sim_provider::move_player,
+        .jump = &sim_provider::jump,
     };
     return table;
 }

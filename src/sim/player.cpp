@@ -6,6 +6,7 @@
 
 #include <fmt/format.h>
 
+#include <algorithm>
 #include <limits>
 #include <utility>
 
@@ -38,6 +39,7 @@ auto player_table::add(registration record) -> result<entity_id> {
     value.game_mode = record.game_mode;
     value.inventory.resize(record.inventory_slots);
     players_.emplace(*id, std::move(value));
+    order_.push_back(*id);
     by_connection_.emplace(connection, *id);
     return *id;
 }
@@ -47,7 +49,12 @@ auto player_table::remove(std::uint64_t connection) -> bool {
     if (found == by_connection_.end()) {
         return false;
     }
-    players_.erase(found->second);
+    const auto id{found->second};
+    players_.erase(id);
+    const auto position{std::find(order_.begin(), order_.end(), id)};
+    if (position != order_.end()) {
+        order_.erase(position);
+    }
     by_connection_.erase(found);
     return true;
 }
@@ -108,6 +115,14 @@ auto player_table::first() noexcept -> player_state * {
 
 auto player_table::first() const noexcept -> const player_state * {
     return players_.empty() ? nullptr : &players_.begin()->second;
+}
+
+auto player_table::nth(std::size_t index) const noexcept
+    -> const player_state * {
+    if (index >= order_.size()) {
+        return nullptr;
+    }
+    return find(order_[index]);
 }
 
 auto player_table::allocate_entity_id() -> result<entity_id> {

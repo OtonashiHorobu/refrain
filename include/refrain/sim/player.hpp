@@ -31,6 +31,9 @@ using entity_id = std::uint64_t;
 /// is never reachable by a client.
 inline constexpr std::uint64_t synthetic_connection = 0;
 
+/// Profile uuid size in wire byte order.
+inline constexpr std::size_t profile_uuid_size = 16;
+
 /// The one authoritative record of a player. The simulation owns the table of
 /// these records; the session layer only projects a record onto the fields the
 /// protocol needs. Every mutable gameplay field lives here, so the console and
@@ -42,7 +45,7 @@ struct player_state {
     /// the player driven by the console and replay scripts.
     std::uint64_t connection{synthetic_connection};
     /// Profile uuid in wire byte order; zero for the synthetic player.
-    std::array<std::uint8_t, 16> profile_id{};
+    std::array<std::uint8_t, profile_uuid_size> profile_id{};
     std::string name{};
     std::string world{};
     double x{0.0};
@@ -114,6 +117,13 @@ class player_table {
     [[nodiscard]] auto first() noexcept -> player_state *;
     [[nodiscard]] auto first() const noexcept -> const player_state *;
 
+    /// Record at `index` in ascending entity id order, or nullptr past the
+    /// end. This is the indexed form of `records()` used by the contract's
+    /// player projection: the projection walks the table once per tick, so the
+    /// lookup is O(1) instead of advancing the map iterator per index.
+    [[nodiscard]] auto nth(std::size_t index) const noexcept
+        -> const player_state *;
+
     /// Records in ascending entity id order.
     [[nodiscard]] auto records() const noexcept
         -> const std::map<entity_id, player_state> & {
@@ -145,6 +155,10 @@ class player_table {
 
   private:
     std::map<entity_id, player_state> players_{};
+    /// Entity ids in ascending order, which is the order of the map. A new
+    /// player always receives the highest id, so an addition appends and a
+    /// removal erases; `nth()` indexes this vector.
+    std::vector<entity_id> order_{};
     /// Connection to entity id. A record's connection never changes, so the
     /// index only follows `add()` and `remove()`; no ordering decision reads
     /// it.

@@ -15,6 +15,7 @@
 #include <refrain/world/model.hpp>
 #include <refrain/world/store.hpp>
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <map>
@@ -72,6 +73,30 @@ enum class world_port_choice : std::uint8_t {
     /// Any other registered provider: every port call goes through the
     /// `refrain:world` / `refrain:sim` / `refrain:storage` ABI.
     contract = 1,
+};
+
+/// Read-only projection of one player record, as the sim provider hands it to
+/// the runtime. The provider owns the authoritative record; the port copies the
+/// fields out of the borrowed view, so the runtime never holds a pointer into
+/// the provider's table across calls. The projection has no inventory: item
+/// operations are a separate contract surface.
+struct player_projection {
+    /// Network connection that owns the player, or `sim::synthetic_connection`.
+    std::uint64_t connection{0};
+    /// Profile uuid in wire byte order; zero when the record has none.
+    std::array<std::uint8_t, sim::profile_uuid_size> profile_id{};
+    std::string name{};
+    std::string world{};
+    sim::entity_id entity_id{0};
+    double x{0.0};
+    double y{0.0};
+    double z{0.0};
+    float yaw{0.0F};
+    float pitch{0.0F};
+    bool on_ground{false};
+    std::uint32_t game_mode{0};
+    float health{20.0F};
+    std::int32_t view_distance{10};
 };
 
 /// The world operations the runtime performs while it boots and ticks.
@@ -184,14 +209,58 @@ class world_port {
 
     // --- players -----------------------------------------------------------
 
+    /// Number of player records. A port whose provider implements no player
+    /// projection reports `unsupported` naming this operation instead of
+    /// returning an empty table.
+    [[nodiscard]] virtual auto player_count() -> result<std::uint32_t> = 0;
+
+    /// One player record by index, in ascending entity id order. The order is
+    /// the order the state hash covers, so a caller that walks the whole
+    /// projection hashes every player in the same sequence.
+    [[nodiscard]] virtual auto player_at(std::uint32_t index)
+        -> result<player_projection> = 0;
+
+    /// One player record by connection. A packet names a connection, not a
+    /// table index, so this is the lookup a packet-driven path uses to refresh
+    /// a single record after a write.
+    [[nodiscard]] virtual auto player(std::uint64_t connection)
+        -> result<player_projection> = 0;
+
+    /// Register a player and allocate its entity id.
     [[nodiscard]] virtual auto
     add_player(sim::player_table::registration record)
         -> result<sim::entity_id> = 0;
-    virtual void set_player_position(sim::player_state &player, double x,
-                                     double y, double z) noexcept = 0;
-    [[nodiscard]] virtual auto move_player(sim::player_state &player, double dx,
-                                           double dy, double dz) -> bool = 0;
-    virtual void jump(sim::player_state &player) noexcept = 0;
+
+    /// Remove the player owned by `connection`; false when it owns none.
+    [[nodiscard]] virtual auto remove_player(std::uint64_t connection)
+        -> result<bool> = 0;
+
+    /// Set position and rotation in one call, leaving velocity untouched. This
+    /// is the session's movement update: a movement packet carries both.
+    [[nodiscard]] virtual auto set_player_transform(std::uint64_t connection,
+                                                    double x, double y,
+                                                    double z, float yaw,
+                                                    float pitch) -> status = 0;
+
+    /// Set position and clear velocity and the ground flag: the teleport
+    /// semantics the console move command uses.
+    [[nodiscard]] virtual auto set_player_position(std::uint64_t connection,
+                                                   double x, double y, double z)
+        -> status = 0;
+
+    /// Replace the view distance the provider keeps for the player.
+    [[nodiscard]] virtual auto
+    set_player_view_distance(std::uint64_t connection, std::int32_t distance)
+        -> status = 0;
+
+    /// Move by a relative offset with the provider's collision response; false
+    /// when the move was fully blocked.
+    [[nodiscard]] virtual auto move_player(std::uint64_t connection, double dx,
+                                           double dy, double dz)
+        -> result<bool> = 0;
+
+    /// Make the player jump when it stands on the ground.
+    [[nodiscard]] virtual auto jump(std::uint64_t connection) -> status = 0;
 
     // --- inventory ---------------------------------------------------------
 

@@ -94,6 +94,11 @@ suite player_table_tests = [] {
             order.push_back(id);
         }
         expect(order == std::vector<sim::entity_id>{*bob, *alice});
+        // The indexed accessor the contract's player projection uses walks
+        // the same ascending order and reports the end as null.
+        expect(table.nth(0) != nullptr && table.nth(0)->id == *bob);
+        expect(table.nth(1) != nullptr && table.nth(1)->id == *alice);
+        expect(table.nth(2) == nullptr);
         expect(table.find(*alice)->name == "Alice");
         expect(table.find_by_connection(2)->name == "Bob");
         expect(table.find_by_name("Alice")->id == *alice);
@@ -114,6 +119,9 @@ suite player_table_tests = [] {
         expect(table.size() == 1U);
         expect(table.find(*alice) == nullptr);
         expect(table.find_by_connection(1) == nullptr);
+        // A removal compacts the index instead of leaving a hole.
+        expect(table.nth(0) != nullptr && table.nth(0)->id == *bob);
+        expect(table.nth(1) == nullptr);
 
         // The connection index follows a leave: the same connection may
         // register again and resolves to the new record.

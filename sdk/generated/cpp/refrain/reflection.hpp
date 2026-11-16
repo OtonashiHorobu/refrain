@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 9acb7bb41c6b4563
+// Schema hash: 23c7796fb66be5e7
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
@@ -2984,6 +2984,41 @@ template <> struct custom_traits<::refrain::services::sim::sim_config> {
     static constexpr auto fields = std::make_tuple(
         refrain::reflect::custom_field{"storage", &::refrain::services::sim::sim_config::storage},
         refrain::reflect::custom_field{"seed", &::refrain::services::sim::sim_config::seed});
+};
+
+/// Generated RIDL struct 'refrain::services::sim::player_info'.
+template <> struct custom_traits<::refrain::services::sim::player_info> {
+    static constexpr std::string_view type_name = "refrain::services::sim::player_info";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"connection", &::refrain::services::sim::player_info::connection},
+        refrain::reflect::custom_field{"profile_id", &::refrain::services::sim::player_info::profile_id},
+        refrain::reflect::custom_field{"name", &::refrain::services::sim::player_info::name},
+        refrain::reflect::custom_field{"world", &::refrain::services::sim::player_info::world},
+        refrain::reflect::custom_field{"entity_id", &::refrain::services::sim::player_info::entity_id},
+        refrain::reflect::custom_field{"x", &::refrain::services::sim::player_info::x},
+        refrain::reflect::custom_field{"y", &::refrain::services::sim::player_info::y},
+        refrain::reflect::custom_field{"z", &::refrain::services::sim::player_info::z},
+        refrain::reflect::custom_field{"yaw", &::refrain::services::sim::player_info::yaw},
+        refrain::reflect::custom_field{"pitch", &::refrain::services::sim::player_info::pitch},
+        refrain::reflect::custom_field{"on_ground", &::refrain::services::sim::player_info::on_ground},
+        refrain::reflect::custom_field{"game_mode", &::refrain::services::sim::player_info::game_mode},
+        refrain::reflect::custom_field{"health", &::refrain::services::sim::player_info::health},
+        refrain::reflect::custom_field{"view_distance", &::refrain::services::sim::player_info::view_distance});
+};
+
+/// Generated RIDL struct 'refrain::services::sim::player_registration'.
+template <> struct custom_traits<::refrain::services::sim::player_registration> {
+    static constexpr std::string_view type_name = "refrain::services::sim::player_registration";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"connection", &::refrain::services::sim::player_registration::connection},
+        refrain::reflect::custom_field{"profile_id", &::refrain::services::sim::player_registration::profile_id},
+        refrain::reflect::custom_field{"name", &::refrain::services::sim::player_registration::name},
+        refrain::reflect::custom_field{"world", &::refrain::services::sim::player_registration::world},
+        refrain::reflect::custom_field{"x", &::refrain::services::sim::player_registration::x},
+        refrain::reflect::custom_field{"y", &::refrain::services::sim::player_registration::y},
+        refrain::reflect::custom_field{"z", &::refrain::services::sim::player_registration::z},
+        refrain::reflect::custom_field{"game_mode", &::refrain::services::sim::player_registration::game_mode},
+        refrain::reflect::custom_field{"inventory_slots", &::refrain::services::sim::player_registration::inventory_slots});
 };
 
 /// Generated RIDL struct 'refrain::services::storage::world_open_config'.

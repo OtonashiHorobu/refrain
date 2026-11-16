@@ -12,10 +12,11 @@
 // The port selection rule lives in `server/world_port.hpp`: a first-party
 // provider set keeps the runtime on the in-process world, while any other
 // composition is reached through the contract ABI. A contract composition
-// answers the boot projection through the ABI, but the contracts still expose
-// no player table, chunk payloads or store configuration; `run_server` fails
-// closed at the first operation a replaced provider cannot serve instead of
-// silently ignoring the replacement.
+// answers the boot projection and the player table through the ABI; chunk
+// payloads, tickets, the snapshot lifecycle and the store configuration still
+// have no contract surface, so `run_server` fails closed at the first
+// operation a replaced provider cannot serve instead of silently ignoring the
+// replacement.
 
 #include <refrain/contracts/abi.hpp>
 #include <refrain/contracts/services/net_protocol.hpp>

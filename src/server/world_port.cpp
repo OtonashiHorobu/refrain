@@ -93,6 +93,29 @@ auto world_port::controls_residency() const noexcept -> bool { return false; }
 
 namespace {
 
+/// Copy the fields of an in-process record into the value the port projects.
+/// The runtime owns the table on this path, so the copy is a plain value copy:
+/// a caller may keep the result after the next port call.
+[[nodiscard]] auto project_player(const sim::player_state &record)
+    -> player_projection {
+    return player_projection{
+        .connection = record.connection,
+        .profile_id = record.profile_id,
+        .name = record.name,
+        .world = record.world,
+        .entity_id = record.id,
+        .x = record.x,
+        .y = record.y,
+        .z = record.z,
+        .yaw = record.yaw,
+        .pitch = record.pitch,
+        .on_ground = record.on_ground,
+        .game_mode = record.game_mode,
+        .health = record.health,
+        .view_distance = record.view_distance,
+    };
+}
+
 /// The first-party path: the runtime owns the `sim::world` and every port call
 /// lands on it unchanged. Also usable as a borrowed wrapper around a world a
 /// test already opened.
@@ -212,18 +235,101 @@ class direct_world_port final : public world_port {
         return world().add_player(std::move(record));
     }
 
-    void set_player_position(sim::player_state &player, double x, double y,
-                             double z) noexcept override {
-        world().set_player_position(player, x, y, z);
+    auto remove_player(std::uint64_t connection) -> result<bool> override {
+        return world().remove_player(connection);
     }
 
-    auto move_player(sim::player_state &player, double dx, double dy, double dz)
-        -> bool override {
-        return world().move_player(player, dx, dy, dz);
+    auto player_count() -> result<std::uint32_t> override {
+        return static_cast<std::uint32_t>(world().players().size());
     }
 
-    void jump(sim::player_state &player) noexcept override {
-        world().jump(player);
+    auto player_at(std::uint32_t index) -> result<player_projection> override {
+        const auto *record{world().players().nth(index)};
+        if (record == nullptr) {
+            return std::unexpected{
+                make_error(error_code::not_found,
+                           fmt::format("no player is at index {}", index))};
+        }
+        return project_player(*record);
+    }
+
+    auto player(std::uint64_t connection)
+        -> result<player_projection> override {
+        const auto *record{world().players().find_by_connection(connection)};
+        if (record == nullptr) {
+            return std::unexpected{make_error(
+                error_code::not_found,
+                fmt::format("connection {} owns no player", connection))};
+        }
+        return project_player(*record);
+    }
+
+    auto set_player_transform(std::uint64_t connection, double x, double y,
+                              double z, float yaw, float pitch)
+        -> status override {
+        auto *record{world().players().find_by_connection(connection)};
+        if (record == nullptr) {
+            return std::unexpected{make_error(
+                error_code::not_found,
+                fmt::format("connection {} owns no player", connection))};
+        }
+        record->x = x;
+        record->y = y;
+        record->z = z;
+        record->yaw = yaw;
+        record->pitch = pitch;
+        return status_ok();
+    }
+
+    auto set_player_position(std::uint64_t connection, double x, double y,
+                             double z) -> status override {
+        auto *record{world().players().find_by_connection(connection)};
+        if (record == nullptr) {
+            return std::unexpected{make_error(
+                error_code::not_found,
+                fmt::format("connection {} owns no player", connection))};
+        }
+        world().set_player_position(*record, x, y, z);
+        return status_ok();
+    }
+
+    auto set_player_view_distance(std::uint64_t connection,
+                                  std::int32_t distance) -> status override {
+        if (distance < 0) {
+            return std::unexpected{make_error(
+                error_code::invalid_argument,
+                fmt::format("view distance {} is negative", distance))};
+        }
+        auto *record{world().players().find_by_connection(connection)};
+        if (record == nullptr) {
+            return std::unexpected{make_error(
+                error_code::not_found,
+                fmt::format("connection {} owns no player", connection))};
+        }
+        record->view_distance = distance;
+        return status_ok();
+    }
+
+    auto move_player(std::uint64_t connection, double dx, double dy, double dz)
+        -> result<bool> override {
+        auto *record{world().players().find_by_connection(connection)};
+        if (record == nullptr) {
+            return std::unexpected{make_error(
+                error_code::not_found,
+                fmt::format("connection {} owns no player", connection))};
+        }
+        return world().move_player(*record, dx, dy, dz);
+    }
+
+    auto jump(std::uint64_t connection) -> status override {
+        auto *record{world().players().find_by_connection(connection)};
+        if (record == nullptr) {
+            return std::unexpected{make_error(
+                error_code::not_found,
+                fmt::format("connection {} owns no player", connection))};
+        }
+        world().jump(*record);
+        return status_ok();
     }
 
     auto add_item(sim::player_state &player, std::string_view item,

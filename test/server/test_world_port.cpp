@@ -31,8 +31,10 @@
 #include <refrain/mod/discovery.hpp>
 #include <refrain/mod/gamepack.hpp>
 #include <refrain/mod/host.hpp>
+#include <refrain/server/player_store.hpp>
 #include <refrain/server/server_runtime.hpp>
 #include <refrain/server/world_port.hpp>
+#include <refrain/session/play_session.hpp>
 #include <refrain/sim/world.hpp>
 #include <refrain/world/create.hpp>
 #include <refrain/world/model.hpp>
@@ -40,6 +42,7 @@
 
 #include <boost/ut.hpp>
 
+#include <algorithm>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -113,6 +116,18 @@ struct recording_provider {
     int sim_set_blocks{0};
     int sim_ticks{0};
     int sim_spawns{0};
+    /// Player-call counters, one per operation the contract appends for the
+    /// player table.
+    int sim_player_counts{0};
+    int sim_player_reads{0};
+    int sim_player_lookups{0};
+    int sim_player_adds{0};
+    int sim_player_removals{0};
+    int sim_player_transforms{0};
+    int sim_player_positions{0};
+    int sim_player_view_distances{0};
+    int sim_player_moves{0};
+    int sim_player_jumps{0};
     int storage_opens{0};
     int storage_writes{0};
     int storage_syncs{0};
@@ -388,6 +403,197 @@ std::uint8_t record_sim_remove_entity(void *self,
     return provider != nullptr && provider->world->remove_entity(id) ? 1 : 0;
 }
 
+/// Copy one player record into the contract projection. The strings and the
+/// profile uuid are borrowed from the record, which the provider's table owns
+/// for the duration of the call.
+void fill_player_info(const sim::player_state &record,
+                      refrain_services_sim_player_info &out) {
+    out.struct_size = REFRAIN_SERVICES_SIM_PLAYER_INFO_SIZE;
+    out.connection = record.connection;
+    out.profile_id = abi::to_borrowed(std::span<const std::uint8_t>{
+        record.profile_id.data(), record.profile_id.size()});
+    out.name = abi::to_borrowed(std::string_view{record.name});
+    out.world = abi::to_borrowed(std::string_view{record.world});
+    out.entity_id = record.id;
+    out.x = record.x;
+    out.y = record.y;
+    out.z = record.z;
+    out.yaw = record.yaw;
+    out.pitch = record.pitch;
+    out.on_ground = record.on_ground ? 1 : 0;
+    out.game_mode = record.game_mode;
+    out.health = record.health;
+    out.view_distance = record.view_distance;
+}
+
+std::uint32_t record_sim_player_count(void *self,
+                                      refrain_services_sim_handle_sim_world) {
+    auto *provider{static_cast<recording_provider *>(self)};
+    ++provider->sim_player_counts;
+    return static_cast<std::uint32_t>(provider->world->players().size());
+}
+
+refrain_status record_sim_player_at(void *self,
+                                    refrain_services_sim_handle_sim_world,
+                                    std::uint32_t index,
+                                    refrain_services_sim_player_info *out) {
+    auto *provider{static_cast<recording_provider *>(self)};
+    ++provider->sim_player_reads;
+    if (provider == nullptr || out == nullptr) {
+        return REFRAIN_SERVICES_SIM_SIM_ERROR_INVALID_ARGUMENT;
+    }
+    const auto *record{provider->world->players().nth(index)};
+    if (record == nullptr) {
+        return REFRAIN_SERVICES_SIM_SIM_ERROR_OUT_OF_BOUNDS;
+    }
+    fill_player_info(*record, *out);
+    return REFRAIN_STATUS_OK;
+}
+
+refrain_status record_sim_player_by_connection(
+    void *self, refrain_services_sim_handle_sim_world, std::uint64_t connection,
+    refrain_services_sim_player_info *out) {
+    auto *provider{static_cast<recording_provider *>(self)};
+    ++provider->sim_player_lookups;
+    if (provider == nullptr || out == nullptr) {
+        return REFRAIN_SERVICES_SIM_SIM_ERROR_INVALID_ARGUMENT;
+    }
+    const auto *record{
+        provider->world->players().find_by_connection(connection)};
+    if (record == nullptr) {
+        return REFRAIN_SERVICES_SIM_SIM_ERROR_NOT_FOUND;
+    }
+    fill_player_info(*record, *out);
+    return REFRAIN_STATUS_OK;
+}
+
+refrain_status record_sim_add_player(
+    void *self, refrain_services_sim_handle_sim_world,
+    const refrain_services_sim_player_registration *registration,
+    std::uint64_t *out_value) {
+    auto *provider{static_cast<recording_provider *>(self)};
+    ++provider->sim_player_adds;
+    if (provider == nullptr || registration == nullptr ||
+        out_value == nullptr ||
+        registration->struct_size !=
+            REFRAIN_SERVICES_SIM_PLAYER_REGISTRATION_SIZE) {
+        return REFRAIN_SERVICES_SIM_SIM_ERROR_INVALID_ARGUMENT;
+    }
+    const auto profile{abi::as_bytes(registration->profile_id)};
+    sim::player_table::registration record{};
+    record.connection = registration->connection;
+    std::copy(profile.begin(), profile.end(), record.profile_id.begin());
+    record.name = std::string{abi::as_string_view(registration->name)};
+    record.world = std::string{abi::as_string_view(registration->world)};
+    record.x = registration->x;
+    record.y = registration->y;
+    record.z = registration->z;
+    record.game_mode = registration->game_mode;
+    record.inventory_slots = registration->inventory_slots;
+    auto added{provider->world->add_player(std::move(record))};
+    if (!added) {
+        return REFRAIN_SERVICES_SIM_SIM_ERROR_INVALID_ARGUMENT;
+    }
+    *out_value = *added;
+    return REFRAIN_STATUS_OK;
+}
+
+std::uint8_t record_sim_remove_player(void *self,
+                                      refrain_services_sim_handle_sim_world,
+                                      std::uint64_t connection) {
+    auto *provider{static_cast<recording_provider *>(self)};
+    ++provider->sim_player_removals;
+    return provider != nullptr && provider->world->remove_player(connection)
+               ? 1
+               : 0;
+}
+
+refrain_status record_sim_set_player_transform(
+    void *self, refrain_services_sim_handle_sim_world, std::uint64_t connection,
+    double x, double y, double z, float yaw, float pitch) {
+    auto *provider{static_cast<recording_provider *>(self)};
+    ++provider->sim_player_transforms;
+    if (provider == nullptr) {
+        return REFRAIN_SERVICES_SIM_SIM_ERROR_INVALID_HANDLE;
+    }
+    auto *record{provider->world->players().find_by_connection(connection)};
+    if (record == nullptr) {
+        return REFRAIN_SERVICES_SIM_SIM_ERROR_NOT_FOUND;
+    }
+    record->x = x;
+    record->y = y;
+    record->z = z;
+    record->yaw = yaw;
+    record->pitch = pitch;
+    return REFRAIN_STATUS_OK;
+}
+
+refrain_status record_sim_set_player_position(
+    void *self, refrain_services_sim_handle_sim_world, std::uint64_t connection,
+    double x, double y, double z) {
+    auto *provider{static_cast<recording_provider *>(self)};
+    ++provider->sim_player_positions;
+    if (provider == nullptr) {
+        return REFRAIN_SERVICES_SIM_SIM_ERROR_INVALID_HANDLE;
+    }
+    auto *record{provider->world->players().find_by_connection(connection)};
+    if (record == nullptr) {
+        return REFRAIN_SERVICES_SIM_SIM_ERROR_NOT_FOUND;
+    }
+    provider->world->set_player_position(*record, x, y, z);
+    return REFRAIN_STATUS_OK;
+}
+
+refrain_status record_sim_set_player_view_distance(
+    void *self, refrain_services_sim_handle_sim_world, std::uint64_t connection,
+    std::int32_t distance) {
+    auto *provider{static_cast<recording_provider *>(self)};
+    ++provider->sim_player_view_distances;
+    if (provider == nullptr || distance < 0) {
+        return REFRAIN_SERVICES_SIM_SIM_ERROR_INVALID_ARGUMENT;
+    }
+    auto *record{provider->world->players().find_by_connection(connection)};
+    if (record == nullptr) {
+        return REFRAIN_SERVICES_SIM_SIM_ERROR_NOT_FOUND;
+    }
+    record->view_distance = distance;
+    return REFRAIN_STATUS_OK;
+}
+
+refrain_status record_sim_move_player(void *self,
+                                      refrain_services_sim_handle_sim_world,
+                                      std::uint64_t connection, double dx,
+                                      double dy, double dz,
+                                      std::uint8_t *out_value) {
+    auto *provider{static_cast<recording_provider *>(self)};
+    ++provider->sim_player_moves;
+    if (provider == nullptr || out_value == nullptr) {
+        return REFRAIN_SERVICES_SIM_SIM_ERROR_INVALID_ARGUMENT;
+    }
+    auto *record{provider->world->players().find_by_connection(connection)};
+    if (record == nullptr) {
+        return REFRAIN_SERVICES_SIM_SIM_ERROR_NOT_FOUND;
+    }
+    *out_value = provider->world->move_player(*record, dx, dy, dz) ? 1 : 0;
+    return REFRAIN_STATUS_OK;
+}
+
+refrain_status record_sim_jump(void *self,
+                               refrain_services_sim_handle_sim_world,
+                               std::uint64_t connection) {
+    auto *provider{static_cast<recording_provider *>(self)};
+    ++provider->sim_player_jumps;
+    if (provider == nullptr) {
+        return REFRAIN_SERVICES_SIM_SIM_ERROR_INVALID_HANDLE;
+    }
+    auto *record{provider->world->players().find_by_connection(connection)};
+    if (record == nullptr) {
+        return REFRAIN_SERVICES_SIM_SIM_ERROR_NOT_FOUND;
+    }
+    provider->world->jump(*record);
+    return REFRAIN_STATUS_OK;
+}
+
 extern const refrain_services_storage_vtable recording_storage_vtable;
 
 refrain_status
@@ -491,6 +697,16 @@ const refrain_services_sim_vtable recording_sim_vtable{
     .set_blocks = &record_sim_set_blocks,
     .spawn_entity = &record_sim_spawn_entity,
     .remove_entity = &record_sim_remove_entity,
+    .player_count = &record_sim_player_count,
+    .player_at = &record_sim_player_at,
+    .player_by_connection = &record_sim_player_by_connection,
+    .add_player = &record_sim_add_player,
+    .remove_player = &record_sim_remove_player,
+    .set_player_transform = &record_sim_set_player_transform,
+    .set_player_position = &record_sim_set_player_position,
+    .set_player_view_distance = &record_sim_set_player_view_distance,
+    .move_player = &record_sim_move_player,
+    .jump = &record_sim_jump,
 };
 
 const refrain_services_storage_vtable recording_storage_vtable{
@@ -1149,9 +1365,9 @@ const refrain_services_storage_vtable recording_storage_vtable{
         options.zstd_near_radius = 3;
         options.zstd_mid_radius = 9;
         // The runtime boots past the projection, asks the provider for it
-        // again after configuring the store, and stops at the player
-        // registration the sim contract does not expose.
-        expect(server::run_server(options, handles, *port) == 1);
+        // again after configuring the store, registers the console player and
+        // reaches the tick loop over the player projection.
+        expect(server::run_server(options, handles, *port) == 0);
         expect(provider.storage_opens == 1);
         expect(provider.world_opens == 1);
         expect(provider.sim_opens == 1);
@@ -1165,7 +1381,13 @@ const refrain_services_storage_vtable recording_storage_vtable{
         expect(provider.zstd_policy_applied.far_level == 8);
         expect(provider.zstd_policy_applied.near_radius == 3);
         expect(provider.zstd_policy_applied.mid_radius == 9);
-        expect(provider.sim_ticks == 0);
+        // One tick ran; the console player was registered through the
+        // connection-addressed call and the whole table was read once at boot
+        // and once for the tick after it.
+        expect(provider.sim_ticks == 1);
+        expect(provider.sim_player_adds == 1);
+        expect(provider.sim_player_counts == 2);
+        expect(provider.sim_player_reads == 2);
     };
 
     "world port/contract hands the compression settings to the provider"_test =
@@ -1305,16 +1527,16 @@ const refrain_services_storage_vtable recording_storage_vtable{
         options.world_path = world_path.string();
         options.ticks = 1;
         options.world_zstd_level = 12;
-        expect(server::run_server(options, handles, *port) == 1);
+        expect(server::run_server(options, handles, *port) == 0);
         refrain::log::shutdown();
         const auto text{read_text(log_path)};
 
         // The runtime got past the configuration step (it projected the level
-        // a second time afterwards) and stopped at the player registration.
+        // a second time afterwards) and ran the tick loop.
         expect(provider.world_levels == 2);
         expect(provider.zstd_level_calls == 0);
         expect(provider.zstd_policy_calls == 0);
-        expect(provider.sim_ticks == 0);
+        expect(provider.sim_ticks == 1);
         expect(text.find("zstd level 12 is not applied") != std::string::npos)
             << text;
         expect(count_occurrences(text, "zstd level 12 is not applied") == 1U)
@@ -1323,7 +1545,7 @@ const refrain_services_storage_vtable recording_storage_vtable{
             << text;
         expect(count_occurrences(text, "zstd policy is not applied") == 1U)
             << text;
-        expect(text.find("add_player") != std::string::npos) << text;
+        expect(text.find("ran 1 ticks") != std::string::npos) << text;
     };
 
     "world port/run_server reports a provider that rejects the zstd "
@@ -1400,6 +1622,538 @@ const refrain_services_storage_vtable recording_storage_vtable{
         expect(provider.storage_opens == 1);
         expect(provider.world_levels == 0);
         expect(provider.sim_ticks == 0);
+    };
+
+    "world port/contract projects the player table and addresses writes by "
+    "connection"_test = [] {
+        test_support::scratch_directory directory{};
+        const auto direct_path{directory.path() / "direct"};
+        const auto contract_path{directory.path() / "contract"};
+        auto direct_world{open_flat_world(direct_path, 99)};
+        expect(direct_world.has_value());
+        if (!direct_world) {
+            return;
+        }
+        auto direct_port{server::make_borrowed_world_port(*direct_world)};
+        expect(direct_port != nullptr);
+        if (!direct_port) {
+            return;
+        }
+        auto contract_world{open_flat_world(contract_path, 99)};
+        expect(contract_world.has_value());
+        if (!contract_world) {
+            return;
+        }
+        recording_provider provider{.world = &*contract_world};
+        auto contract_port{
+            server::make_world_port(recording_contract_handles(provider))};
+        expect(contract_port != nullptr);
+        if (!contract_port) {
+            return;
+        }
+        expect(contract_port->open(contract_path.string()).has_value());
+
+        const auto same_registration =
+            [](server::world_port &port, std::uint64_t connection,
+               std::string name, std::uint32_t slots) {
+                return port.add_player(sim::player_table::registration{
+                    .connection = connection,
+                    .name = std::move(name),
+                    .world = "overworld",
+                    .x = 1.5,
+                    .y = 64.0,
+                    .z = -2.5,
+                    .game_mode = 1,
+                    .inventory_slots = slots,
+                });
+            };
+        const auto direct_console{
+            same_registration(*direct_port, 0, "@console", 0)};
+        const auto contract_console{
+            same_registration(*contract_port, 0, "@console", 0)};
+        expect(direct_console.has_value());
+        expect(contract_console.has_value());
+        if (!direct_console || !contract_console) {
+            contract_port->close();
+            return;
+        }
+        expect(*direct_console == *contract_console);
+        const auto direct_alice{
+            same_registration(*direct_port, 5, "Alice", 36)};
+        const auto contract_alice{
+            same_registration(*contract_port, 5, "Alice", 36)};
+        expect(direct_alice.has_value());
+        expect(contract_alice.has_value());
+        if (!direct_alice || !contract_alice) {
+            contract_port->close();
+            return;
+        }
+        expect(*direct_alice == *contract_alice);
+        expect(provider.sim_player_adds == 2);
+
+        // One bulk read per tick: the count plus the indexed accessor. The
+        // projection matches the direct port field for field.
+        const auto direct_count{direct_port->player_count()};
+        const auto contract_count{contract_port->player_count()};
+        expect(direct_count.has_value());
+        expect(contract_count.has_value());
+        if (direct_count && contract_count) {
+            expect(*direct_count == *contract_count);
+            expect(*contract_count == 2U);
+        }
+        for (std::uint32_t index{0}; index < 2; ++index) {
+            const auto direct_player{direct_port->player_at(index)};
+            const auto contract_player{contract_port->player_at(index)};
+            expect(direct_player.has_value());
+            expect(contract_player.has_value());
+            if (!direct_player || !contract_player) {
+                continue;
+            }
+            expect(contract_player->connection == direct_player->connection);
+            expect(contract_player->entity_id == direct_player->entity_id);
+            expect(contract_player->name == direct_player->name);
+            expect(contract_player->world == direct_player->world);
+            expect(contract_player->x == direct_player->x);
+            expect(contract_player->y == direct_player->y);
+            expect(contract_player->z == direct_player->z);
+            expect(contract_player->yaw == direct_player->yaw);
+            expect(contract_player->pitch == direct_player->pitch);
+            expect(contract_player->on_ground == direct_player->on_ground);
+            expect(contract_player->game_mode == direct_player->game_mode);
+            expect(contract_player->health == direct_player->health);
+            expect(contract_player->view_distance ==
+                   direct_player->view_distance);
+        }
+        expect(provider.sim_player_reads == 2);
+
+        // A packet names a connection, so the single-record lookup and the
+        // writes are addressed the same way.
+        const auto by_connection{contract_port->player(5)};
+        expect(by_connection.has_value());
+        if (by_connection) {
+            expect(by_connection->name == "Alice");
+            expect(by_connection->connection == 5U);
+        }
+        expect(provider.sim_player_lookups == 1);
+
+        expect(
+            contract_port->set_player_transform(5, 4.0, 65.0, 6.0, 90.0F, -5.0F)
+                .has_value());
+        expect(provider.sim_player_transforms == 1);
+        expect(
+            contract_port->set_player_position(5, 0.5, 70.0, 0.5).has_value());
+        expect(provider.sim_player_positions == 1);
+        expect(contract_port->set_player_view_distance(5, 6).has_value());
+        expect(provider.sim_player_view_distances == 1);
+        const auto moved{contract_port->move_player(5, 1.0, 0.0, 0.0)};
+        expect(moved.has_value());
+        if (moved) {
+            expect(*moved);
+        }
+        expect(provider.sim_player_moves == 1);
+        expect(contract_port->jump(5).has_value());
+        expect(provider.sim_player_jumps == 1);
+
+        const auto after{contract_port->player(5)};
+        expect(after.has_value());
+        if (after) {
+            expect(after->x == 1.5) << after->x;
+            expect(after->view_distance == 6);
+        }
+
+        const auto removed{contract_port->remove_player(5)};
+        expect(removed.has_value());
+        if (removed) {
+            expect(*removed);
+        }
+        expect(provider.sim_player_removals == 1);
+        expect(!contract_port->player(5).has_value());
+        contract_port->close();
+    };
+
+    "world port/a scripted session ticks to the same hashes through the "
+    "contract port"_test = [] {
+        test_support::scratch_directory directory{};
+        const auto direct_path{directory.path() / "direct"};
+        const auto contract_path{directory.path() / "contract"};
+        auto direct_world{open_flat_world(direct_path, 777)};
+        expect(direct_world.has_value());
+        if (!direct_world) {
+            return;
+        }
+        auto direct_port{server::make_borrowed_world_port(*direct_world)};
+        expect(direct_port != nullptr);
+        if (!direct_port) {
+            return;
+        }
+        auto contract_world{open_flat_world(contract_path, 777)};
+        expect(contract_world.has_value());
+        if (!contract_world) {
+            return;
+        }
+        recording_provider provider{.world = &*contract_world};
+        auto contract_port{
+            server::make_world_port(recording_contract_handles(provider))};
+        expect(contract_port != nullptr);
+        if (!contract_port) {
+            return;
+        }
+        expect(contract_port->open(contract_path.string()).has_value());
+
+        // Join, move, aim and leave: the calls a session makes, in the order a
+        // client would drive them. The synthetic console player is the one the
+        // runtime registers before the listener accepts joins.
+        const auto script = [](server::world_port &port) {
+            std::vector<data::digest32> hashes{};
+            hashes.reserve(6);
+            expect(port.add_player(sim::player_table::registration{
+                                       .connection = sim::synthetic_connection,
+                                       .name = "@console",
+                                       .world = "overworld",
+                                       .x = 0.5,
+                                       .y = 64.0,
+                                       .z = 0.5,
+                                       .game_mode = 1,
+                                       .inventory_slots = 0,
+                                   })
+                       .has_value());
+            expect(port.add_player(sim::player_table::registration{
+                                       .connection = 7,
+                                       .name = "Alice",
+                                       .world = "overworld",
+                                       .x = 2.5,
+                                       .y = 64.0,
+                                       .z = 2.5,
+                                       .game_mode = 0,
+                                       .inventory_slots = 36,
+                                   })
+                       .has_value());
+            port.tick();
+            hashes.push_back(port.state_hash());
+            // Walk and turn in one movement packet.
+            expect(port.set_player_transform(7, 4.5, 64.0, 3.5, 45.0F, 10.0F)
+                       .has_value());
+            port.tick();
+            hashes.push_back(port.state_hash());
+            // The console teleport, a blocked-aware relative move and a jump.
+            expect(port.set_player_position(sim::synthetic_connection, 1.5,
+                                            70.0, 1.5)
+                       .has_value());
+            static_cast<void>(port.move_player(7, 0.5, 0.0, -0.5));
+            expect(port.jump(7).has_value());
+            port.tick();
+            hashes.push_back(port.state_hash());
+            const auto removed{port.remove_player(7)};
+            expect(removed.has_value());
+            if (removed) {
+                expect(*removed);
+            }
+            port.tick();
+            hashes.push_back(port.state_hash());
+            return hashes;
+        };
+        const auto direct_hashes{script(*direct_port)};
+        const auto contract_hashes{script(*contract_port)};
+        expect(direct_hashes.size() == 4U);
+        expect(direct_hashes.size() == contract_hashes.size());
+        expect(provider.sim_ticks == 4);
+        for (std::size_t index{0}; index < direct_hashes.size(); ++index) {
+            expect(data::to_hex(direct_hashes[index]) ==
+                   data::to_hex(contract_hashes[index]));
+        }
+        contract_port->close();
+    };
+
+    "world port/a session over the contract store reads the per-tick "
+    "projection"_test = [] {
+        test_support::scratch_directory directory{};
+        const auto world_path{directory.path() / "world"};
+        auto opened{open_flat_world(world_path, 5)};
+        expect(opened.has_value());
+        if (!opened) {
+            return;
+        }
+        recording_provider provider{.world = &*opened};
+        auto port{
+            server::make_world_port(recording_contract_handles(provider))};
+        expect(port != nullptr);
+        if (!port) {
+            return;
+        }
+        expect(port->open(world_path.string()).has_value());
+        auto store{server::make_world_port_player_store(*port)};
+        expect(store != nullptr);
+        if (!store) {
+            port->close();
+            return;
+        }
+        refrain::session::play_session players{*store};
+
+        const auto added{players.add_player(5, refrain::net::uuid{}, "Alice",
+                                            "overworld", 1.5, 64.0, 2.5, 1)};
+        expect(added.has_value());
+        if (!added) {
+            port->close();
+            return;
+        }
+        expect(provider.sim_player_adds == 1);
+        // The store read the record back from the provider, so the session
+        // sees the authoritative defaults rather than the request.
+        const auto *alice{players.player_of(5)};
+        expect(alice != nullptr);
+        if (alice != nullptr) {
+            expect(alice->name == "Alice");
+            expect(alice->x == 1.5);
+            expect(alice->health == 20.0F);
+        }
+
+        // A provider-side change appears after the per-tick refresh, not
+        // before: the session reads the cached projection.
+        auto *record{opened->players().find_by_connection(5)};
+        expect(record != nullptr);
+        if (record != nullptr) {
+            record->x = 9.5;
+        }
+        expect(players.player_of(5) != nullptr);
+        if (players.player_of(5) != nullptr) {
+            expect(players.player_of(5)->x == 1.5);
+        }
+        expect(players.refresh().has_value());
+        const auto *refreshed{players.player_of(5)};
+        expect(refreshed != nullptr);
+        if (refreshed != nullptr) {
+            expect(refreshed->x == 9.5) << refreshed->x;
+        }
+
+        // A movement packet writes through to the provider.
+        expect(players.update_position(5, 3.0, 65.0, 4.0, 180.0F, 0.0F));
+        expect(provider.sim_player_transforms == 1);
+        expect(opened->players().find_by_connection(5)->x == 3.0);
+        expect(players.update_position(99, 0.0, 0.0, 0.0, 0.0F, 0.0F) == false);
+
+        // Item operations and health are not part of this contract slice; the
+        // store names the gap instead of writing the cached copy only.
+        expect(players.inventory_of(5) == nullptr);
+        expect(!players.set_health(5, 10.0F));
+        expect(players.remove_player(5));
+        expect(provider.sim_player_removals == 1);
+        port->close();
+    };
+
+    "world port/contract reports unsupported when the provider has no player "
+    "calls"_test = [] {
+        test_support::scratch_directory directory{};
+        const auto world_path{directory.path() / "world"};
+        auto opened{open_flat_world(world_path)};
+        expect(opened.has_value());
+        if (!opened) {
+            return;
+        }
+        recording_provider provider{.world = &*opened};
+        auto handles{recording_contract_handles(provider)};
+        auto without_players{recording_sim_vtable};
+        without_players.player_count = nullptr;
+        without_players.player_at = nullptr;
+        without_players.player_by_connection = nullptr;
+        without_players.add_player = nullptr;
+        without_players.remove_player = nullptr;
+        without_players.set_player_transform = nullptr;
+        without_players.set_player_position = nullptr;
+        without_players.set_player_view_distance = nullptr;
+        without_players.move_player = nullptr;
+        without_players.jump = nullptr;
+        handles.sim = &without_players;
+        auto port{server::make_world_port(handles)};
+        expect(port != nullptr);
+        if (!port) {
+            return;
+        }
+        expect(port->open(world_path.string()).has_value());
+
+        // Every call names the operation and fails; none of them reports an
+        // empty table or a silent success.
+        const auto count{port->player_count()};
+        expect(!count.has_value());
+        if (!count) {
+            expect(count.error().code == refrain::error_code::unsupported);
+            expect(count.error().message.find("player_count") !=
+                   std::string::npos);
+        }
+        const auto projected{port->player_at(0)};
+        expect(!projected.has_value());
+        if (!projected) {
+            expect(projected.error().code == refrain::error_code::unsupported);
+            expect(projected.error().message.find("player_at") !=
+                   std::string::npos);
+        }
+        const auto added{port->add_player(sim::player_table::registration{
+            .connection = 1, .name = "Alice", .world = "overworld"})};
+        expect(!added.has_value());
+        if (!added) {
+            expect(added.error().code == refrain::error_code::unsupported);
+            expect(added.error().message.find("add_player") !=
+                   std::string::npos);
+        }
+        const auto removed{port->remove_player(1)};
+        expect(!removed.has_value());
+        if (!removed) {
+            expect(removed.error().message.find("remove_player") !=
+                   std::string::npos);
+        }
+        const auto jumped{port->jump(1)};
+        expect(!jumped.has_value());
+        if (!jumped) {
+            expect(jumped.error().message.find("jump") != std::string::npos);
+        }
+        port->close();
+    };
+
+    "world port/run_server stops on a provider that implements no player "
+    "projection"_test = [] {
+        test_support::scratch_directory directory{};
+        const auto world_path{directory.path() / "world"};
+        auto opened{open_flat_world(world_path)};
+        expect(opened.has_value());
+        if (!opened) {
+            return;
+        }
+        recording_provider provider{.world = &*opened};
+        auto handles{recording_contract_handles(provider)};
+        // Registration works, so the runtime gets past the console player and
+        // stops at the projection read that the session needs to start.
+        auto without_projection{recording_sim_vtable};
+        without_projection.player_count = nullptr;
+        without_projection.player_at = nullptr;
+        without_projection.player_by_connection = nullptr;
+        handles.sim = &without_projection;
+        auto port{server::make_world_port(handles)};
+        expect(port != nullptr);
+        if (!port) {
+            return;
+        }
+        const auto log_path{directory.path() / "player-projection.log"};
+        refrain::log::shutdown();
+        refrain::log::config cfg{};
+        cfg.console_level = refrain::log::level::off;
+        cfg.file_path = log_path.string();
+        cfg.file_level = refrain::log::level::info;
+        cfg.enable_colors = false;
+        expect(static_cast<bool>(refrain::log::init(cfg)));
+
+        server::server_run_options options{};
+        options.world_path = world_path.string();
+        options.ticks = 1;
+        expect(server::run_server(options, handles, *port) == 1);
+        refrain::log::shutdown();
+        const auto text{read_text(log_path)};
+        expect(provider.sim_player_adds == 1);
+        expect(provider.sim_ticks == 0);
+        expect(text.find("player_count") != std::string::npos) << text;
+        expect(text.find("unsupported") != std::string::npos) << text;
+    };
+
+    "world port/contract refuses a sim provider table from an older "
+    "layout"_test = [] {
+        test_support::scratch_directory directory{};
+        const auto world_path{directory.path() / "world"};
+        auto opened{open_flat_world(world_path)};
+        expect(opened.has_value());
+        if (!opened) {
+            return;
+        }
+        recording_provider provider{.world = &*opened};
+        auto handles{recording_contract_handles(provider)};
+        // Before the player calls the sim table ended after `remove_entity`, so
+        // a provider built against it declares a shorter table.
+        auto previous{recording_sim_vtable};
+        previous.struct_size = static_cast<std::uint32_t>(
+            REFRAIN_SERVICES_SIM_VTABLE_SIZE - 10 * sizeof(void *));
+        handles.sim = &previous;
+        auto port{server::make_world_port(handles)};
+        expect(port != nullptr);
+        if (!port) {
+            return;
+        }
+        const auto result{port->open(world_path.string())};
+        expect(!result.has_value());
+        if (!result) {
+            expect(result.error().code ==
+                   refrain::error_code::version_mismatch);
+            expect(result.error().message.find("refrain:sim") !=
+                   std::string::npos);
+        }
+        expect(provider.storage_opens == 0);
+    };
+
+    "world port/run_server boots the first-party providers through the "
+    "contract port"_test = [] {
+        auto spec{refrain::mod::load_gamepack_spec(
+            std::string{REFRAIN_SOURCE_DIR} + "/gamepack/gamepack.toml",
+            "server")};
+        expect(static_cast<bool>(spec));
+        if (!spec) {
+            return;
+        }
+        auto plan{refrain::mod::preview_composition(*spec)};
+        expect(static_cast<bool>(plan));
+        if (!plan) {
+            return;
+        }
+        refrain::mod::host host{};
+        const std::span<const std::byte> image{refrain::builtin::image_data(),
+                                               refrain::builtin::image_size()};
+        expect(static_cast<bool>(host.load(*plan, image)));
+        const auto handles{real_contract_handles(host)};
+        expect(handles.has_value());
+        if (!handles) {
+            return;
+        }
+        // The active providers are the first-party ones, but their ids name
+        // another composition, so the runtime reaches them through the
+        // contract ABI: this is the fully contract-backed case.
+        expect(!server::is_first_party_world(*handles));
+        expect(server::select_world_port(*handles) ==
+               server::world_port_choice::contract);
+
+        test_support::scratch_directory directory{};
+        const auto world_path{directory.path() / "world"};
+        expect(static_cast<bool>(
+            world::create_world(world_path.string(), 42, "world")));
+        {
+            auto store{world::world_store::open(world_path.string())};
+            expect(store.has_value());
+            if (!store) {
+                return;
+            }
+            auto chunk{flat_chunk()};
+            expect(static_cast<bool>(store->write_chunk({0, 0}, chunk)));
+            expect(static_cast<bool>(store->commit()));
+        }
+        auto port{server::make_world_port(*handles)};
+        expect(port != nullptr);
+        if (!port) {
+            return;
+        }
+        // The runtime opens the port itself, so the test does not pre-open it.
+        server::server_run_options options{};
+        options.world_path = world_path.string();
+        options.ticks = 1;
+        expect(server::run_server(options, *handles, *port) == 0);
+        expect(port->ticks() == 1);
+        // The console player was registered through the provider's own table
+        // and the projection the runtime reads is the provider's answer.
+        const auto count{port->player_count()};
+        expect(count.has_value());
+        if (count) {
+            expect(*count == 1U);
+        }
+        const auto console{port->player_at(0)};
+        expect(console.has_value());
+        if (console) {
+            expect(console->name == "@console");
+            expect(console->connection == sim::synthetic_connection);
+        }
+        port->close();
     };
 };
 

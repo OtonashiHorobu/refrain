@@ -12,6 +12,11 @@
 // block/entity mutations a mod may perform. Every applied mutation is also
 // published as an event, so a subscriber observes the same state the provider
 // committed.
+//
+// The player table is the exception to the event-published mutation rule: a
+// packet names a connection, so the player calls are connection-addressed and
+// a consumer reads the whole table once per tick through the indexed
+// projection rather than subscribing to a change per player.
 
 module refrain::services::sim;
 version 1.0.0;
@@ -73,7 +78,64 @@ event entity_removed {
     u64 id;
 }
 
-service sim : 1.0.0 {
+/// Read-only projection of one player record. A provider fills it from the
+/// record it owns; the name and the profile uuid are borrowed for the duration
+/// of the call, like the level projection's level name.
+struct player_info {
+    /// Network connection that owns the player, or the reserved synthetic
+    /// connection for the player the console and replay scripts drive.
+    u64 connection;
+    /// Profile uuid in wire byte order, 16 bytes; empty when the record has
+    /// none.
+    bytes profile_id;
+    /// Player name.
+    string name;
+    /// World the player is in.
+    string world;
+    /// Process-local entity id, unique across players and spawned entities.
+    u64 entity_id;
+    /// Feet position in block coordinates.
+    f64 x;
+    f64 y;
+    f64 z;
+    /// View angles in degrees.
+    f32 yaw;
+    f32 pitch;
+    /// True when the player stands on a block.
+    bool on_ground;
+    /// Game mode: 0 survival, 1 creative, 2 adventure, 3 spectator.
+    u32 game_mode;
+    /// Health points.
+    f32 health;
+    /// View distance in chunks the provider keeps for the player.
+    i32 view_distance;
+}
+
+/// Everything needed to register one player. The provider allocates the
+/// entity id and keeps the record; the caller reads it back through the
+/// projection.
+struct player_registration {
+    /// Network connection that will own the player, or the reserved synthetic
+    /// connection.
+    u64 connection;
+    /// Profile uuid in wire byte order, 16 bytes; empty when the record has
+    /// none.
+    bytes profile_id;
+    string name;
+    string world;
+    /// Feet position in block coordinates.
+    f64 x;
+    f64 y;
+    f64 z;
+    /// Game mode: 0 survival, 1 creative, 2 adventure, 3 spectator.
+    u32 game_mode;
+    /// Preallocated empty inventory slots. The state hash covers their count,
+    /// so a registration carries it even though item operations stay out of
+    /// this contract.
+    u32 inventory_slots;
+}
+
+service sim : 1.1.0 {
     side = server;
     thread = sim;
     provides = [ "refrain:sim" ];
@@ -118,4 +180,72 @@ service sim : 1.0.0 {
     /// id is unknown.
     #[thread(sim)]
     fn remove_entity(sim_world world, u64 id) -> bool;
+
+    /// Number of player records. `player_at` enumerates them in ascending
+    /// entity id order, which is the order the state hash covers.
+    ///
+    /// A count plus an indexed accessor is the read shape because every field
+    /// but the name and the profile uuid is a fixed-size value: a packed
+    /// buffer would need either a per-call buffer whose size the consumer must
+    /// guess or an allocation the provider owns, and neither carries a
+    /// borrowed string without a second layout. A provider callback per player
+    /// would put provider code on the runtime's call stack for a read the
+    /// runtime already batches once per tick. The indexed form keeps one
+    /// dispatch per record, lets a caller stop at the count it read, and
+    /// leaves the string lifetime rule identical to the level projection.
+    #[thread(sim)]
+    fn player_count(sim_world world) -> u32;
+
+    /// One player record by index, in ascending entity id order. The name and
+    /// the profile uuid are borrowed for the duration of the call, like the
+    /// level projection's level name.
+    #[thread(sim)] #[can_fail]
+    fn player_at(sim_world world, u32 index) -> result<player_info, sim_error>;
+
+    /// One player record by connection. The write calls are connection
+    /// addressed because a packet names a connection, not a table index; this
+    /// is the read a caller uses to refresh one record after a write.
+    #[thread(sim)] #[can_fail] #[hot_path]
+    fn player_by_connection(sim_world world, u64 connection)
+        -> result<player_info, sim_error>;
+
+    /// Register a player record and allocate its entity id. Fails with
+    /// `invalid_argument` for an empty name or a connection that already owns
+    /// a player.
+    #[thread(sim)] #[can_fail]
+    fn add_player(sim_world world, in player_registration record)
+        -> result<u64, sim_error>;
+
+    /// Remove the player owned by `connection`. Returns false when the
+    /// connection owns no record.
+    #[thread(sim)]
+    fn remove_player(sim_world world, u64 connection) -> bool;
+
+    /// Set position and rotation in one call, the way a movement packet
+    /// updates both at once. Velocity is left untouched.
+    #[thread(sim)] #[can_fail] #[hot_path]
+    fn set_player_transform(sim_world world, u64 connection, f64 x, f64 y,
+                            f64 z, f32 yaw, f32 pitch)
+        -> result<void, sim_error>;
+
+    /// Set position and clear velocity and the ground flag, the teleport
+    /// semantics the console move command uses.
+    #[thread(sim)] #[can_fail]
+    fn set_player_position(sim_world world, u64 connection, f64 x, f64 y,
+                           f64 z) -> result<void, sim_error>;
+
+    /// Replace the view distance the provider keeps for the player.
+    #[thread(sim)] #[can_fail]
+    fn set_player_view_distance(sim_world world, u64 connection, i32 distance)
+        -> result<void, sim_error>;
+
+    /// Move by a relative offset with the provider's collision response.
+    /// Returns false when the move was fully blocked.
+    #[thread(sim)] #[can_fail]
+    fn move_player(sim_world world, u64 connection, f64 dx, f64 dy, f64 dz)
+        -> result<bool, sim_error>;
+
+    /// Make the player jump when it stands on the ground.
+    #[thread(sim)] #[can_fail]
+    fn jump(sim_world world, u64 connection) -> result<void, sim_error>;
 }

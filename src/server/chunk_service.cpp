@@ -96,6 +96,7 @@ void chunk_service::attach(play_gateway &gateway, chunk_packet_source source,
 }
 
 void chunk_service::tick(world_port &world,
+                         const refrain::session::play_session &players,
                          refrain::session::chunk_tracker &views,
                          std::uint64_t tick_start_ns) {
     if (generation_) {
@@ -121,14 +122,14 @@ void chunk_service::tick(world_port &world,
     }
     // Distance priority: the nearest player column wins the credits, so a
     // walking player's viewport fills before terrain nobody is looking at.
+    // Only connected players have a viewport, which is what the session's
+    // records are; the console player has none and needs no priority.
     std::vector<refrain::world::chunk_pos> centres{};
-    if (auto *players = world.players(); players != nullptr) {
-        centres.reserve(players->size());
-        players->for_each([&centres](const refrain::sim::player_state &player) {
-            centres.push_back(refrain::world::chunk_pos{chunk_of(player.x),
-                                                        chunk_of(player.z)});
-        });
-    }
+    centres.reserve(players.size());
+    players.for_each([&centres](const refrain::session::player &player) {
+        centres.push_back(
+            refrain::world::chunk_pos{chunk_of(player.x), chunk_of(player.z)});
+    });
     generation_->set_priority_centres(centres);
     // Hard pause: a client backlog above the bound means the stream cannot
     // drain what is already queued, so generating more would only grow it.

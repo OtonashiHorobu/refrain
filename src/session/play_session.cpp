@@ -8,26 +8,15 @@
 
 namespace refrain::session {
 
-play_session::play_session() : players_{&own_players_} {}
+play_session::play_session()
+    : owned_store_{std::make_unique<table_player_store>(own_players_)},
+      players_{owned_store_.get()} {}
 
-play_session::play_session(sim::player_table &players) : players_{&players} {}
+play_session::play_session(sim::player_table &players)
+    : owned_store_{std::make_unique<table_player_store>(players)},
+      players_{owned_store_.get()} {}
 
-play_session::play_session(play_session &&other) noexcept
-    : own_players_{std::move(other.own_players_)},
-      players_{other.players_ == &other.own_players_ ? &own_players_
-                                                     : other.players_},
-      views_{std::move(other.views_)} {}
-
-auto play_session::operator=(play_session &&other) noexcept -> play_session & {
-    if (this == &other) {
-        return *this;
-    }
-    own_players_ = std::move(other.own_players_);
-    players_ =
-        other.players_ == &other.own_players_ ? &own_players_ : other.players_;
-    views_ = std::move(other.views_);
-    return *this;
-}
+play_session::play_session(player_store &players) : players_{&players} {}
 
 auto play_session::add_player(std::uint64_t connection, net::uuid id,
                               std::string name, std::string world, double x,
@@ -78,7 +67,7 @@ auto play_session::player_of(std::uint64_t connection) const
 
 auto play_session::player_by_entity(std::uint32_t entity_id) const
     -> const session::player * {
-    const auto *record{players_->find(entity_id)};
+    const auto *record{players_->find_entity(entity_id)};
     if (record == nullptr || record->connection == sim::synthetic_connection) {
         return nullptr;
     }
@@ -88,70 +77,87 @@ auto play_session::player_by_entity(std::uint32_t entity_id) const
 
 auto play_session::inventory_of(std::uint64_t connection)
     -> std::vector<sim::item_stack> * {
-    auto *record{players_->find_by_connection(connection)};
+    auto *record{players_->find(connection)};
     if (record == nullptr || record->connection == sim::synthetic_connection) {
         return nullptr;
     }
-    return &record->inventory;
+    return players_->inventory_of(connection);
 }
 
 auto play_session::update_position(std::uint64_t connection, double x, double y,
                                    double z, float yaw, float pitch) -> bool {
-    auto *record{players_->find_by_connection(connection)};
-    if (record == nullptr || record->connection == sim::synthetic_connection) {
+    const auto *record{find_connected(connection)};
+    if (record == nullptr) {
         return false;
     }
-    record->x = x;
-    record->y = y;
-    record->z = z;
-    record->yaw = yaw;
-    record->pitch = pitch;
-    refresh_if_cached(*record);
+    if (!players_->update_position(connection, x, y, z, yaw, pitch)) {
+        return false;
+    }
+    if (const auto *updated{players_->find(connection)}; updated != nullptr) {
+        refresh_if_cached(*updated);
+    }
     return true;
 }
 
 auto play_session::set_on_ground(std::uint64_t connection, bool value) -> bool {
-    auto *record{players_->find_by_connection(connection)};
-    if (record == nullptr || record->connection == sim::synthetic_connection) {
+    const auto *record{find_connected(connection)};
+    if (record == nullptr) {
         return false;
     }
-    record->on_ground = value;
-    refresh_if_cached(*record);
+    if (!players_->set_on_ground(connection, value)) {
+        return false;
+    }
+    if (const auto *updated{players_->find(connection)}; updated != nullptr) {
+        refresh_if_cached(*updated);
+    }
     return true;
 }
 
 auto play_session::set_view_distance(std::uint64_t connection,
                                      std::int32_t distance) -> bool {
-    auto *record{players_->find_by_connection(connection)};
-    if (record == nullptr || record->connection == sim::synthetic_connection ||
-        distance < 0) {
+    const auto *record{find_connected(connection)};
+    if (record == nullptr || distance < 0) {
         return false;
     }
-    record->view_distance = distance;
-    refresh_if_cached(*record);
+    if (!players_->set_view_distance(connection, distance)) {
+        return false;
+    }
+    if (const auto *updated{players_->find(connection)}; updated != nullptr) {
+        refresh_if_cached(*updated);
+    }
     return true;
 }
 
 auto play_session::set_health(std::uint64_t connection, float health) -> bool {
-    auto *record{players_->find_by_connection(connection)};
-    if (record == nullptr || record->connection == sim::synthetic_connection) {
+    const auto *record{find_connected(connection)};
+    if (record == nullptr) {
         return false;
     }
-    record->health = health;
-    refresh_if_cached(*record);
+    if (!players_->set_health(connection, health)) {
+        return false;
+    }
+    if (const auto *updated{players_->find(connection)}; updated != nullptr) {
+        refresh_if_cached(*updated);
+    }
     return true;
 }
 
 auto play_session::set_game_mode(std::uint64_t connection, std::uint32_t mode)
     -> bool {
-    auto *record{players_->find_by_connection(connection)};
-    if (record == nullptr || record->connection == sim::synthetic_connection) {
+    const auto *record{find_connected(connection)};
+    if (record == nullptr) {
         return false;
     }
-    record->game_mode = mode;
-    refresh_if_cached(*record);
+    if (!players_->set_game_mode(connection, mode)) {
+        return false;
+    }
+    if (const auto *updated{players_->find(connection)}; updated != nullptr) {
+        refresh_if_cached(*updated);
+    }
     return true;
 }
+
+auto play_session::refresh() -> status { return players_->refresh(); }
 
 auto play_session::visible_to(std::uint64_t observer, double radius) const
     -> std::vector<visibility_entry> {
@@ -207,7 +213,7 @@ auto play_session::size() const -> std::size_t {
 
 auto play_session::find_connected(std::uint64_t connection) const noexcept
     -> const sim::player_state * {
-    const auto *record{players_->find_by_connection(connection)};
+    const auto *record{players_->find(connection)};
     if (record == nullptr || record->connection == sim::synthetic_connection) {
         return nullptr;
     }
@@ -255,7 +261,7 @@ void play_session::refresh_all() const {
         }
     }
     for (auto iterator{views_.begin()}; iterator != views_.end();) {
-        const auto *record{players_->find(iterator->first)};
+        const auto *record{players_->find_entity(iterator->first)};
         if (record == nullptr ||
             record->connection == sim::synthetic_connection) {
             iterator = views_.erase(iterator);
