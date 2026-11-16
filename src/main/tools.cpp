@@ -138,7 +138,6 @@ int main(int argc, char **argv) {
 
     auto *schema_cmd =
         app.add_subcommand("schema", "RSC/RIDL schema toolchain");
-    schema_cmd->alias("idl");
     std::string schema_out{"sdk/generated"};
     bool schema_check{false};
     std::vector<std::string> schema_roots;
@@ -351,11 +350,6 @@ int main(int argc, char **argv) {
     mods_install_cmd->add_flag(
         "--replace-same-version", mods_install.replace_same_version,
         "Accept the same (id, version) with a different archive digest");
-    mods_install_cmd->add_flag(
-        "--accept-unpinned-signer", mods_install.accept_unpinned,
-        "Confirm the signer of an older (unpinned) install so its update may "
-        "pin it");
-
     mods_installed_options mods_installed{};
     auto *mods_installed_cmd = mods_cmd->add_subcommand(
         "installed", "List per-mod install receipts under <store>/mods");
@@ -380,32 +374,6 @@ int main(int argc, char **argv) {
     mods_uninstall_cmd->add_flag(
         "--keep-signer-pin", mods_uninstall.keep_signer_pin,
         "Keep the signer pin after the last installed version is removed");
-
-    mods_pin_options mods_pin{};
-    auto *mods_pin_cmd = mods_cmd->add_subcommand(
-        "pin", "Pin the signer of an installed mod id (confirms a legacy "
-               "install or records an administrative pin)");
-    mods_pin_cmd->add_option("--store", mods_pin.store, "Content store root")
-        ->required();
-    mods_pin_cmd->add_option("id", mods_pin.id, "Mod id")->required();
-    mods_pin_cmd->add_option("--key-id", mods_pin.key_id,
-                             "Signer key id (requires --fingerprint)");
-    mods_pin_cmd->add_option("--fingerprint", mods_pin.fingerprint,
-                             "Signer public key fingerprint, 64 hex "
-                             "characters (requires --key-id)");
-    mods_pin_cmd->add_flag("--clear", mods_pin.clear,
-                           "Remove the pin instead of writing one");
-
-    mods_receipts_options mods_receipts{};
-    auto *mods_receipts_cmd = mods_cmd->add_subcommand(
-        "receipts", "Inspect or migrate install receipts to the current "
-                    "schema (v1 -> v2)");
-    mods_receipts_cmd
-        ->add_option("--store", mods_receipts.store, "Content store root")
-        ->required();
-    mods_receipts_cmd->add_flag(
-        "--apply", mods_receipts.apply,
-        "Rewrite receipt v1 documents in place (default: dry run)");
 
     data_options data_opts{};
     bool skip_structures{false};
@@ -867,12 +835,6 @@ int main(int argc, char **argv) {
     }
     if (mods_uninstall_cmd->parsed()) {
         return app_services::run_mods_uninstall(mods_uninstall);
-    }
-    if (mods_pin_cmd->parsed()) {
-        return app_services::run_mods_pin(mods_pin);
-    }
-    if (mods_receipts_cmd->parsed()) {
-        return app_services::run_mods_receipts(mods_receipts);
     }
     if (mods_installed_cmd->parsed()) {
         return app_services::run_mods_installed(mods_installed);

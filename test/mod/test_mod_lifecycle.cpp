@@ -232,7 +232,7 @@ struct clean_loader_state {
         const mod::provider_api api{
             .vtable = g_clean_vtable,
             .self = self.get(),
-            .abi_major = 0,
+            .abi_major = 1,
         };
         selves.push_back(std::move(self));
         auto registered{owner->register_provider(service, api)};
@@ -382,7 +382,7 @@ auto static_provider_factory(mod::host &owner) -> refrain::status {
     const mod::provider_api api{
         .vtable = g_clean_vtable,
         .self = &g_static_factory_calls,
-        .abi_major = 0,
+        .abi_major = 1,
     };
     return owner.register_provider("refrain:data.packs", api);
 }

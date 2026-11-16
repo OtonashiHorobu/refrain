@@ -1130,69 +1130,51 @@ const suite content_index_tests = [] {
         expect(message.find(" priority 5") != std::string::npos);
     };
 
-    "rfrx parser accepts a legacy same-priority tie in either order"_test = [] {
-        const std::vector<digest32> digests{digest_of("a"), digest_of("b")};
-        auto table{make_blob_table(digests)};
-        expect(table.entries.size() == 2U);
-        if (table.entries.size() != 2U) {
-            return;
-        }
-        // Build a valid index with distinct priorities, then equalize them.
-        // The builder rejects this input, but published indexes may still carry
-        // a same-source tie like this and must stay parseable in either record
-        // order.
-        const std::vector<resolution_input> entries{
-            make_resolution("data/a.json", "mod:a", 6, digest_of("a")),
-            make_resolution("data/a.json", "mod:a", 5, digest_of("b")),
+    "rfrx parser rejects two records for one location at one priority"_test =
+        [] {
+            const std::vector<digest32> digests{digest_of("a"), digest_of("b")};
+            auto table{make_blob_table(digests)};
+            expect(table.entries.size() == 2U);
+            if (table.entries.size() != 2U) {
+                return;
+            }
+            // Build a valid index with distinct priorities, then equalize
+            // them. The builder refuses this shape and there is no defined
+            // winner, so the parser must reject the pair in either record
+            // order instead of picking one by file position.
+            const std::vector<resolution_input> entries{
+                make_resolution("data/a.json", "mod:a", 6, digest_of("a")),
+                make_resolution("data/a.json", "mod:a", 5, digest_of("b")),
+            };
+            auto built = build_resolution_index(entries, table);
+            expect(built.has_value());
+            if (!built) {
+                return;
+            }
+            auto tied{*built};
+            write_u32_le(tied, rfrx_header_bytes + 8, 6U);
+            write_u32_le(tied, rfrx_header_bytes + rfrx_entry_bytes + 8, 6U);
+            // Swap the two records: same priority, now in reverse blob order.
+            const auto first{std::span<std::byte>{tied}.subspan(
+                rfrx_header_bytes, rfrx_entry_bytes)};
+            const auto second{std::span<std::byte>{tied}.subspan(
+                rfrx_header_bytes + rfrx_entry_bytes, rfrx_entry_bytes)};
+            std::vector<std::byte> saved(first.begin(), first.end());
+            std::copy(second.begin(), second.end(), first.begin());
+            std::copy(saved.begin(), saved.end(), second.begin());
+            refresh_rfrx(tied);
+
+            auto parsed = parse_resolution_index(tied, table);
+            expect(!parsed);
+            if (!parsed) {
+                expect(
+                    error_is(parsed.error(), refrain::error_code::parse_error));
+                expect(parsed.error().message.find("duplicates") !=
+                       std::string::npos);
+            }
         };
-        auto built = build_resolution_index(entries, table);
-        expect(built.has_value());
-        if (!built) {
-            return;
-        }
-        auto legacy{*built};
-        write_u32_le(legacy, rfrx_header_bytes + 8, 6U);
-        write_u32_le(legacy, rfrx_header_bytes + rfrx_entry_bytes + 8, 6U);
-        // Swap the two records: same priority, now in reverse blob order.
-        const auto first{std::span<std::byte>{legacy}.subspan(
-            rfrx_header_bytes, rfrx_entry_bytes)};
-        const auto second{std::span<std::byte>{legacy}.subspan(
-            rfrx_header_bytes + rfrx_entry_bytes, rfrx_entry_bytes)};
-        std::vector<std::byte> saved(first.begin(), first.end());
-        std::copy(second.begin(), second.end(), first.begin());
-        std::copy(saved.begin(), saved.end(), second.begin());
-        refresh_rfrx(legacy);
 
-        auto parsed = parse_resolution_index(legacy, table);
-        expect(parsed.has_value());
-        if (!parsed) {
-            return;
-        }
-        expect(parsed->entries.size() == 2U);
-        if (parsed->entries.size() != 2U) {
-            return;
-        }
-        expect(parsed->entries[0].source == "mod:a");
-        expect(parsed->entries[0].blob_index ==
-               table_index(table, digest_of("b")));
-        expect(parsed->entries[1].blob_index ==
-               table_index(table, digest_of("a")));
-
-        auto resolved = resolve(*parsed, "data/a.json");
-        expect(resolved.has_value());
-        if (!resolved) {
-            return;
-        }
-        expect(resolved->winner != nullptr);
-        if (resolved->winner != nullptr) {
-            const auto a_index{table_index(table, digest_of("a"))};
-            const auto b_index{table_index(table, digest_of("b"))};
-            expect(resolved->winner->blob_index == std::min(a_index, b_index));
-        }
-        expect(resolved->fallback.size() == 1U);
-    };
-
-    "rfrx rejects a duplicated record"_test = [] {
+    "rfrx rejects records that share a canonical key"_test = [] {
         const std::vector<digest32> digests{digest_of("a"), digest_of("b"),
                                             digest_of("c")};
         auto table{make_blob_table(digests)};
@@ -1200,10 +1182,9 @@ const suite content_index_tests = [] {
         if (table.entries.size() != 3U) {
             return;
         }
-        // Three distinct priorities keep the builder happy; then equalize the
-        // priorities to form a legacy tie group. Copy the first record over
-        // the last so the duplicate is separated by another blob (the whole
-        // group must be checked).
+        // Three distinct priorities keep the builder happy; equalizing them
+        // makes every record share the canonical sort key, which the parser
+        // rejects wherever the pair sits in the file.
         const std::vector<resolution_input> entries{
             make_resolution("data/a.json", "builtin", 3, digest_of("a")),
             make_resolution("data/a.json", "builtin", 2, digest_of("b")),
@@ -1218,10 +1199,6 @@ const suite content_index_tests = [] {
         write_u32_le(duplicated, rfrx_header_bytes + rfrx_entry_bytes + 8, 3U);
         write_u32_le(duplicated, rfrx_header_bytes + 2U * rfrx_entry_bytes + 8,
                      3U);
-        for (std::size_t index{0}; index < rfrx_entry_bytes; ++index) {
-            duplicated[rfrx_header_bytes + 2U * rfrx_entry_bytes + index] =
-                duplicated[rfrx_header_bytes + index];
-        }
         refresh_rfrx(duplicated);
         auto parsed = parse_resolution_index(duplicated, table);
         expect(!parsed);

@@ -2,7 +2,7 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 //
-// `refrain:mod.loader` service contract v1.
+// `refrain:mod.loader` service contract v1.1.
 //
 // A loader is the execution environment a mod is loaded through. The host
 // activates one provider instance per loader id it trusts (`builtin`,
@@ -12,7 +12,7 @@
 // register providers on behalf of its guest.
 
 module refrain::services::mod_loader;
-version 1.0.0;
+version 1.1.0;
 
 import refrain::core;
 
@@ -108,7 +108,7 @@ struct mod_load_request {
     mod_entry_manifest manifest;
 }
 
-service mod_loader : 1.0.0 {
+service mod_loader : 1.1.0 {
     side = server;
     thread = main;
     composition = instanced;

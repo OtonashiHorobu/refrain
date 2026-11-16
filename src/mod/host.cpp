@@ -362,8 +362,10 @@ struct vtable_header {
 static_assert(sizeof(vtable_header) == 16U);
 static_assert(alignof(vtable_header) == alignof(std::uint32_t));
 
-/// Validate the vtable ABI header claimed by `api.abi_major` (0 = skip, for
-/// factories written before the field existed).
+/// Validate the vtable ABI header claimed by `api.abi_major`. The declared
+/// major is mandatory: a provider must say which contract ABI its table was
+/// built against, so a mismatched or missing declaration fails before the
+/// table is ever dispatched.
 ///
 /// Safety: `provider_api::vtable` is a host-owned static table by contract
 /// ("must stay valid for the process lifetime") and every generated vtable
@@ -372,7 +374,10 @@ static_assert(alignof(vtable_header) == alignof(std::uint32_t));
 /// strict-aliasing assumptions about the opaque pointer.
 [[nodiscard]] auto check_abi_header(const provider_api &api) -> status {
     if (api.abi_major == 0) {
-        return status_ok();
+        return std::unexpected{
+            fail(error_code::invalid_argument,
+                 "provider does not declare its contract ABI major; a "
+                 "provider table must state which ABI it was built against")};
     }
     if (api.vtable == nullptr) {
         return std::unexpected{
@@ -1081,7 +1086,6 @@ auto host::load_one(const composition &plan, const package_source &package,
                       .required = manifest->required,
                       .optional = manifest->optional,
                       .loader = manifest->loader,
-                      .loader_inferred = manifest->loader_inferred,
                       .loader_unload = loader->record->unload,
                       .loader_sandboxed = loader->record->sandboxed,
                       .instance_handle = instance_handle,
@@ -1226,9 +1230,6 @@ auto host::register_mod_loader(std::string_view loader_id,
                         loader_id))};
     }
     provider_api copy{api};
-    if (copy.abi_major == 0) {
-        copy.abi_major = REFRAIN_SERVICES_MOD_LOADER_ABI_MAJOR;
-    }
     if (auto checked{check_abi_header(copy)}; !checked) {
         return std::unexpected{
             annotate(std::move(checked.error()),
@@ -1266,7 +1267,7 @@ auto host::register_mod_loader(std::string_view loader_id,
                                                  : std::string{version}};
     provider_apis_.push_back(std::make_unique<provider_api>(copy));
     provider_info info{};
-    info.service = std::string{mod_loader_service_id};
+    info.service = std::string{loader_abi::service_id};
     info.id = std::string{loader_id};
     info.version = effective_version;
     info.instance = provider_apis_.back().get();
@@ -1275,7 +1276,7 @@ auto host::register_mod_loader(std::string_view loader_id,
     if (!added) {
         return added;
     }
-    auto selected{services_.select_active(mod_loader_service_id, loader_id,
+    auto selected{services_.select_active(loader_abi::service_id, loader_id,
                                           effective_version, loader_id)};
     if (!selected) {
         return selected;
@@ -1306,10 +1307,10 @@ auto host::find_loader(std::string_view loader_id) const noexcept
 auto host::resolve_loader(std::string_view loader_id) const
     -> result<loader_binding> {
     const auto active{
-        services_.active_provider(mod_loader_service_id, loader_id)};
+        services_.active_provider(loader_abi::service_id, loader_id)};
     if (!active) {
         const auto available{join_instance_names(
-            services_.active_instances(mod_loader_service_id))};
+            services_.active_instances(loader_abi::service_id))};
         if (is_first_party_loader_id(loader_id)) {
             return std::unexpected{
                 fail(error_code::unsupported,
@@ -2093,7 +2094,7 @@ auto host::load(const composition &plan, const package_resolver &resolve)
                 return std::unexpected{std::move(sealed.error())};
             }
         }
-        if (auto sealed{services_.seal(mod_loader_service_id)}; !sealed) {
+        if (auto sealed{services_.seal(loader_abi::service_id)}; !sealed) {
             return std::unexpected{std::move(sealed.error())};
         }
         return status_ok();
@@ -3015,7 +3016,7 @@ auto host::register_provider(std::string_view service,
                         "through its imports",
                         current_loader_id_, service, current_mod_))};
     }
-    if (service == mod_loader_service_id) {
+    if (service == loader_abi::service_id) {
         return std::unexpected{fail(
             error_code::permission_denied,
             "the mod loader service is registered by the host bootstrap, not "
@@ -3173,13 +3174,12 @@ auto host::format() const -> std::string {
         // state, provides) and append the loader record, so log greps keep
         // matching while the loader stays visible.
         out += fmt::format(
-            "  {}@{} (abi {}, {}{}, loader {}{}{}, unload {}, generation {}, "
+            "  {}@{} (abi {}, {}{}, loader {}{}, unload {}, generation {}, "
             "state {})",
             mod.id, mod.version, mod.abi, mod.has_code ? "code" : "data-only",
             mod.provides_summary.empty() ? ""
                                          : ", provides " + mod.provides_summary,
-            mod.loader, mod.loader_inferred ? " inferred" : "",
-            mod.loader_sandboxed ? " sandboxed" : "",
+            mod.loader, mod.loader_sandboxed ? " sandboxed" : "",
             to_string(mod.loader_unload), mod.generation, to_string(mod.state));
         out += '\n';
     }

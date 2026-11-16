@@ -66,7 +66,7 @@ int g_guest_self{0};
 
 [[nodiscard]] auto guest_provider_api() -> mod::provider_api {
     return mod::provider_api{
-        .vtable = g_guest_vtable, .self = &g_guest_self, .abi_major = 0};
+        .vtable = g_guest_vtable, .self = &g_guest_self, .abi_major = 1};
 }
 
 [[nodiscard]] auto
@@ -415,7 +415,6 @@ const suite mod_loader_tests = [] {
         }
         for (const auto &loaded_mod : host.mods()) {
             expect(loaded_mod.loader == "builtin");
-            expect(!loaded_mod.loader_inferred);
             expect(loaded_mod.loader_unload ==
                    mod::mod_unload_semantics::restart_required);
             expect(!loaded_mod.loader_sandboxed);
@@ -497,10 +496,10 @@ const suite mod_loader_tests = [] {
             expect(!host.loaded());
         };
 
-    "mod_loader/parses legacy and explicit loader declarations"_test = [] {
+    "mod_loader/parses an explicit loader declaration"_test = [] {
         const auto parse{[&](std::string_view entry) {
             auto doc{config::document::parse_text(
-                fmt::format("[mod]\nid = \"refrain.test.legacy\"\n"
+                fmt::format("[mod]\nid = \"refrain.test.entry\"\n"
                             "version = \"1.0.0\"\n"
                             "abi = 1\n\n[entry]\n{}",
                             entry),
@@ -513,12 +512,15 @@ const suite mod_loader_tests = [] {
             return mod::parse_mod_manifest(*doc);
         }};
 
-        auto legacy{parse("native = \"lib/libold.so\"\n")};
-        expect(static_cast<bool>(legacy));
-        if (legacy) {
-            expect(legacy->loader == "native");
-            expect(legacy->loader_inferred);
-            expect(legacy->entry->loader.empty());
+        // An entry table without `[entry].loader` is not a manifest form any
+        // more: the load declares its execution environment or it is refused,
+        // and the diagnostic names the field.
+        auto missing_loader{parse("native = \"lib/libold.so\"\n")};
+        expect(!missing_loader);
+        if (!missing_loader) {
+            expect(missing_loader.error().code == error_code::parse_error);
+            expect(missing_loader.error().message.find("entry.loader") !=
+                   std::string::npos);
         }
         auto explicit_native{
             parse("loader = \"native\"\nnative = \"lib/libnew.so\"\n")};
@@ -812,7 +814,6 @@ const suite mod_loader_tests = [] {
         }
         const auto &loaded_mod{host.mods().front()};
         expect(loaded_mod.loader == "test.semantics");
-        expect(!loaded_mod.loader_inferred);
         expect(loaded_mod.loader_unload == mod::mod_unload_semantics::clean);
         const auto *record{host.find_loader("test.semantics")};
         expect(record != nullptr);
@@ -889,7 +890,6 @@ const suite mod_loader_installed_tests = [] {
         expect(loaded_mod.external);
         expect(loaded_mod.has_code);
         expect(loaded_mod.loader == "native");
-        expect(!loaded_mod.loader_inferred);
         expect(loaded_mod.loader_unload == mod::mod_unload_semantics::retire);
         expect(loaded_mod.instance_handle != 0U);
         const auto provider{

@@ -382,6 +382,13 @@ namespace config = core::config;
     } else {
         return std::unexpected{loader.error()};
     }
+    if (entry.loader.empty()) {
+        return std::unexpected{fail(
+            error_code::parse_error,
+            "mod: missing required field 'entry.loader' (the loader that "
+            "executes the package: native, wasm, lua, bukkit or a namespaced "
+            "third-party loader id)")};
+    }
     if (auto native{read_path("native")}; native) {
         entry.native = std::move(*native);
     } else {
@@ -398,8 +405,7 @@ namespace config = core::config;
         return std::unexpected{symbol.error()};
     }
 
-    const bool declared_loader{!entry.loader.empty()};
-    if (declared_loader && !is_valid_loader_id(entry.loader)) {
+    if (!is_valid_loader_id(entry.loader)) {
         return std::unexpected{fail(
             error_code::invalid_argument,
             fmt::format("mod: invalid [entry].loader '{}': loader ids are 1 to "
@@ -408,7 +414,7 @@ namespace config = core::config;
                         "com.example.loader",
                         entry.loader))};
     }
-    if (declared_loader && !is_reserved_loader_id(entry.loader) &&
+    if (!is_reserved_loader_id(entry.loader) &&
         entry.loader.find('.') == std::string::npos) {
         return std::unexpected{
             fail(error_code::invalid_argument,
@@ -417,14 +423,14 @@ namespace config = core::config;
                              "com.example.loader",
                              entry.loader))};
     }
-    if (declared_loader && entry.loader == builtin_loader_id) {
+    if (entry.loader == builtin_loader_id) {
         return std::unexpected{fail(
             error_code::invalid_argument,
             "mod: [entry].loader 'builtin' is reserved: a package without an "
             "[entry] table is loaded by the builtin loader")};
     }
 
-    if (declared_loader && entry.loader == native_loader_id) {
+    if (entry.loader == native_loader_id) {
         if (entry.native.empty()) {
             return std::unexpected{
                 fail(error_code::invalid_argument,
@@ -437,7 +443,7 @@ namespace config = core::config;
                      "mod: the native loader does not accept [entry].wasm; the "
                      "wasm loader owns script modules")};
         }
-    } else if (declared_loader && entry.loader == wasm_loader_id) {
+    } else if (entry.loader == wasm_loader_id) {
         if (entry.wasm.empty()) {
             return std::unexpected{fail(
                 error_code::invalid_argument,
@@ -450,23 +456,11 @@ namespace config = core::config;
                      "mod: the wasm loader does not accept [entry].native; the "
                      "native loader owns shared libraries")};
         }
-    } else if (!declared_loader) {
-        // Legacy entry shape: keep loading, and let the parser infer the
-        // loader the same way the host used to branch on it.
-        if (entry.native.empty() == entry.wasm.empty()) {
-            return std::unexpected{fail(
-                error_code::invalid_argument,
-                "mod: [entry] must define '[entry].loader' or exactly one of "
-                "'native' or 'wasm'")};
-        }
     }
 
     // `symbol` is the native loader's shared entry key; no other loader owns
-    // it. The inferred native entry of a legacy manifest keeps the key too.
-    const bool effective_native{declared_loader
-                                    ? entry.loader == native_loader_id
-                                    : !entry.native.empty()};
-    if (!entry.symbol.empty() && !effective_native) {
+    // it.
+    if (!entry.symbol.empty() && entry.loader != native_loader_id) {
         return std::unexpected{
             fail(error_code::invalid_argument,
                  "mod: [entry].symbol is only valid with the native loader")};
@@ -486,8 +480,7 @@ namespace config = core::config;
     // A first-party loader owns the shared entry keys, so a typo there is a
     // manifest bug. A third-party loader defines its own payload keys; this
     // parser only knows the shared ones, and the loader validates the rest.
-    const bool third_party_loader{declared_loader &&
-                                  !is_first_party_loader_id(entry.loader)};
+    const bool third_party_loader{!is_first_party_loader_id(entry.loader)};
     constexpr std::array<std::string_view, 4> allowed{"loader", "native",
                                                       "wasm", "symbol"};
     for (const auto &key : doc.keys("entry")) {
@@ -815,22 +808,12 @@ auto parse_mod_manifest(const core::config::document &doc,
     }
 
     // Effective loader: an internal package has no entry table and is loaded
-    // by the builtin loader; an external package declares its loader or keeps
-    // the legacy shape-inferred one. `entry.loader` stays empty for an
-    // inferred loader so discovery/audit can keep mirroring the manifest.
+    // by the builtin loader; an external package declares its loader in
+    // `[entry].loader`, which `parse_entry` has already required.
     if (!manifest.entry.has_value()) {
-        // An internal package has no entry table to declare a loader in: the
-        // builtin loader is canonical for it, not a deprecated inference.
         manifest.loader = std::string{builtin_loader_id};
-        manifest.loader_inferred = false;
-    } else if (!manifest.entry->loader.empty()) {
-        manifest.loader = manifest.entry->loader;
-        manifest.loader_inferred = false;
     } else {
-        manifest.loader = manifest.entry->native.empty()
-                              ? std::string{wasm_loader_id}
-                              : std::string{native_loader_id};
-        manifest.loader_inferred = true;
+        manifest.loader = manifest.entry->loader;
     }
 
     const std::array<std::string_view, 2> host_api_path{"mod", "host_api"};
@@ -967,11 +950,13 @@ auto format_mod_manifest(const mod_manifest &manifest) -> std::string {
         out += '\n';
     }
     if (manifest.entry) {
-        out +=
-            fmt::format("entry: {}\n",
-                        manifest.entry->native.empty()
-                            ? fmt::format("wasm {}", manifest.entry->wasm)
-                            : fmt::format("native {}", manifest.entry->native));
+        // The loader is what the package names; the payload path is the
+        // loader's own member and is shown when this parser knows it.
+        const std::string &payload{!manifest.entry->native.empty()
+                                       ? manifest.entry->native
+                                       : manifest.entry->wasm};
+        out += fmt::format("entry: {}{}{}\n", manifest.entry->loader,
+                           payload.empty() ? "" : " ", payload);
     }
     return out;
 }

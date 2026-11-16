@@ -592,10 +592,12 @@ auto format_candidate(const candidate &mod) -> std::string {
         out += '\n';
     }
     if (mod.entry) {
-        out += fmt::format("entry: {}\n",
-                           mod.entry->native.empty()
-                               ? fmt::format("wasm {}", mod.entry->wasm)
-                               : fmt::format("native {}", mod.entry->native));
+        // Mirrors `format_mod_manifest()`: the loader id leads, followed by
+        // the payload path this parser knows.
+        const std::string &payload{
+            !mod.entry->native.empty() ? mod.entry->native : mod.entry->wasm};
+        out += fmt::format("entry: {}{}{}\n", mod.entry->loader,
+                           payload.empty() ? "" : " ", payload);
     }
     return out;
 }

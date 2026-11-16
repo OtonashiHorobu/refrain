@@ -338,6 +338,10 @@ format_receipt(std::string_view id, std::string_view version, std::uint32_t abi,
     receipt.emplace("signed", json_value{false});
     receipt.emplace("trusted", json_value{false});
     receipt.emplace("key_id", json_value{std::string{}});
+    receipt.emplace("public_key_fingerprint", json_value{std::string{}});
+    receipt.emplace("policy", json_value{"unsigned"});
+    receipt.emplace("installed_at", json_value{std::string{}});
+    receipt.emplace("installer_version", json_value{std::string{}});
     receipt.emplace("origin", json_value{origin});
     receipt.emplace("files", json_value{std::move(list)});
     return json_value{std::move(receipt)}.dump();

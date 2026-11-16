@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 9a07f1b76869dfa9
+// Schema hash: c735c6db25ca24c9
 
 #ifndef REFRAIN_GENERATED_C_REFRAIN_CONTRACTS_SERVICES_MOD_LOADER_ABI_H
 #define REFRAIN_GENERATED_C_REFRAIN_CONTRACTS_SERVICES_MOD_LOADER_ABI_H
@@ -113,7 +113,7 @@ struct refrain_services_mod_loader_mod_load_request {
 
 #define REFRAIN_SERVICES_MOD_LOADER_SERVICE_ID "refrain:mod.loader"
 #define REFRAIN_SERVICES_MOD_LOADER_ABI_MAJOR 1u
-#define REFRAIN_SERVICES_MOD_LOADER_ABI_MINOR 0u
+#define REFRAIN_SERVICES_MOD_LOADER_ABI_MINOR 1u
 #define REFRAIN_SERVICES_MOD_LOADER_ABI_PATCH 0u
 #define REFRAIN_SERVICES_MOD_LOADER_SIDE REFRAIN_SIDE_SERVER
 #define REFRAIN_SERVICES_MOD_LOADER_THREAD REFRAIN_THREAD_MAIN

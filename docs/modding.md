@@ -99,10 +99,9 @@ requires `[entry].native`, `wasm` requires `[entry].wasm`. A third-party loader
 defines its own payload keys; this parser only knows the shared ones and the
 loader validates the rest.
 
-A legacy external manifest without `[entry].loader` keeps loading, with the
-loader inferred from the payload (`native` for `[entry].native`, `wasm` for
-`[entry].wasm`). `refrain-tools mods check` reports the inference as
-deprecated, and new manifests always declare the loader explicitly.
+An external manifest must declare `[entry].loader`; a manifest with an
+`[entry]` table but no loader is rejected and the error names the missing
+field. There is no second way to express an entry point.
 
 ### Dispatch and fail-closed rules
 
@@ -264,9 +263,10 @@ composition also includes every mod installed in the server's content store
 gamepack is the only source of truth and every required version must be listed.
 
 A resolved composition is written to `mods.lock` next to the gamepack. The lock
-records the selected versions, the provider for each service and a fingerprint
-of the resolution. Loading fails when a pinned mod is missing or the
-composition drifts; `refrain-server --update-lock` rewrites the lock for an
+records the selected versions, the provider for each service, a fingerprint of
+the resolution and the build profile and build id that wrote it. Loading fails
+when a pinned mod is missing, the composition drifts or the lock was written by
+a different build; `refrain-server --update-lock` rewrites the lock for an
 intentional change.
 
 Validate and inspect a composition:
@@ -424,6 +424,20 @@ untouched and the next install prunes a staging directory whose owner process is
 gone. Reinstalling the exact archive digest of an installed `(id, version)` is a
 no-op.
 
+The receipt is one schema, `refrain.mod-receipt/1`. It records the package
+identity and digests, the signer identity (`key_id` and the BLAKE3
+`public_key_fingerprint` of the verifying key), the policy that accepted the
+install, the audit fields `installed_at` and `installer_version`, the
+host-observed `origin` and one `path`/`size`/`blake3`/`mode` record per installed
+file.
+
+A store written by an older development build carries receipts with the retired
+`refrain.mod-receipt/2` schema. They are not migrated: parsing fails closed, so
+the runtime refuses the store and names the unsupported schema. Reinstall the
+packages to recover it: remove the old `mods/` receipt tree and run
+`mods install` for each package, which recreates the receipts with the current
+schema and reuses the content blobs already in the store.
+
 ## Hot lifecycle
 
 A running server can install, uninstall and reload a mod while the composition
@@ -559,7 +573,7 @@ and still install unsigned packages.
 Update semantics are Android-style:
 
 - **Signer continuity.** The first signed install pins the signer for the mod
-  id: the receipt v2 records the key id and the BLAKE3 fingerprint of the
+  id: the receipt records the key id and the BLAKE3 fingerprint of the
   verifying public key, and `mods/pins/<id>.json` records the pin. A later
   version must carry the same key id and fingerprint. A different signer is
   rejected unless a `[rotation."<id>"]` allowlist entry names the exact
@@ -574,11 +588,6 @@ Update semantics are Android-style:
   is rejected; `--allow-downgrade` accepts it for one run (audited).
 - **Same-version content identity.** The same `(id, version)` with a different
   archive digest is rejected; `--replace-same-version` accepts it (audited).
-- **Legacy installs.** A store installed before signer pinning (receipt v1)
-  counts as unpinned. Updating such a mod is rejected until an administrator
-  confirms the signer with `refrain-tools mods pin <id> --store <dir>` or passes
-  `--accept-unpinned-signer` to the update.
-
 Every override prints an audit line naming what was accepted.
 
 ## Updating and uninstalling
@@ -609,11 +618,6 @@ CAS is append-only: the blobs stay until the next mark-sweep GC runs with no
 root pointing at them. `--allow-empty-roots` is required when nothing is
 installed any more, because an empty root set by accident would otherwise look
 like a request to wipe the store.
-
-Receipts written by older builds are schema v1. The runtime keeps reading them,
-and `refrain-tools mods receipts --store <dir>` reports the migration;
-`--apply` rewrites them as v2 without confirming the signer (that stays an
-explicit administrator decision).
 
 ## Managing mods on a running server
 

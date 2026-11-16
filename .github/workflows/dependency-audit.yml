@@ -1,0 +1,125 @@
+name: dependency-audit
+
+on:
+  schedule:
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+env:
+  CONAN_VERSION: "2.31.2"
+  CMAKE_VERSION: "4.4.4"
+  REFRAIN_CONAN_PROFILE: gcc-release
+
+concurrency:
+  group: dependency-audit
+  cancel-in-progress: true
+
+jobs:
+  conan-audit:
+    runs-on: ubuntu-24.04
+    container:
+      image: gcc:16
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Mark the workspace as safe for git
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Install the toolchain
+        run: |
+          set -euo pipefail
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ninja-build python3 python3-pip git ca-certificates
+          python3 -m pip install --break-system-packages \
+            "conan==${CONAN_VERSION}" "cmake==${CMAKE_VERSION}"
+          conan --version
+          cmake --version | head -1
+
+      - name: Create the Conan profiles
+        run: bash scripts/bootstrap.sh --profile-only
+
+      - name: Export the vendored recipes
+        run: python3 tools/vendor_export.py --profile "${REFRAIN_CONAN_PROFILE}"
+
+      - name: Authenticate the audit provider
+        env:
+          CONAN_AUDIT_TOKEN: ${{ secrets.CONAN_AUDIT_TOKEN }}
+        run: |
+          if [ -z "${CONAN_AUDIT_TOKEN}" ]; then
+            echo "::error::CONAN_AUDIT_TOKEN is not configured; add the ConanCenter audit token as a repository secret"
+            exit 1
+          fi
+          conan audit provider auth conancenter --token "${CONAN_AUDIT_TOKEN}"
+
+      - name: Scan the dependency graph
+        run: |
+          conan audit scan . -pr "${REFRAIN_CONAN_PROFILE}" \
+            --lockfile=conan/locks/vendor.lock \
+            --format json --out-file conan-audit.json \
+            --severity-level 100
+
+      - name: Convert the report to SARIF
+        run: |
+          python3 tools/conan_audit_sarif.py \
+            --input conan-audit.json \
+            --output conan-audit.sarif \
+            --lockfile conan/locks/vendor.lock
+
+      - name: Summarise the findings
+        run: |
+          python3 - <<'PY'
+          import json
+          import pathlib
+
+          report = json.loads(pathlib.Path("conan-audit.json").read_text())
+          counts = {"Critical": 0, "High": 0, "Medium": 0, "Low": 0}
+          packages = set()
+          for ref, package in report.get("data", {}).items():
+              if not isinstance(package, dict):
+                  continue
+              for edge in package.get("vulnerabilities", {}).get("edges", []):
+                  node = edge.get("node", {})
+                  counts[node.get("severity", "Unknown")] = counts.get(
+                      node.get("severity", "Unknown"), 0) + 1
+                  packages.add(ref)
+          lines = ["### ConanCenter vulnerability audit", ""]
+          lines.append(
+              f"{sum(counts.values())} finding(s) in {len(packages)} package(s): "
+              + ", ".join(f"{name} {value}" for name, value in counts.items() if value)
+          )
+          pathlib.Path("conan-audit-summary.md").write_text("\n".join(lines) + "\n")
+          PY
+          cat conan-audit-summary.md >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo
+            echo "### Vendored recipes"
+            echo
+            echo "These in-repo recipes are not covered by the ConanCenter audit and need a manual upstream review:"
+            for recipe in conan/recipes/*/; do
+              echo "- $(basename "${recipe}")"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the SARIF report
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          sarif_file: conan-audit.sarif
+          category: conan-audit
+
+      - name: Keep the audit report
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: conan-audit
+          path: |
+            conan-audit.json
+            conan-audit.sarif
+          retention-days: 30

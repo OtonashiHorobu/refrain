@@ -325,7 +325,6 @@ void reject_package(const startup_content_options &options,
     install.write_pin = true;
     install.origin = options.install_origin;
     install.installer_version = refrain::version::release_version;
-    install.accept_unpinned = options.accept_unpinned;
     // The startup bootstrap already holds `<store>/content/.lock`; taking it
     // again inside install_rfmod would wait on ourselves.
     install.lock_store = false;
@@ -359,10 +358,6 @@ void reject_package(const startup_content_options &options,
     if (installed->same_version_override) {
         emit(log, fmt::format("replaced the same version of {} {} under "
                               "--replace-same-version",
-                              identity->id, identity->version));
-    }
-    if (installed->unpinned_confirmed) {
-        emit(log, fmt::format("confirmed the legacy signer of {} {}",
                               identity->id, identity->version));
     }
     if (installed->signer_rotated) {

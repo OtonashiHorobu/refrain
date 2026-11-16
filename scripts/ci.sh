@@ -86,6 +86,21 @@ if [[ -n "$SKIP_BUILD" ]]; then
 else
     cmake --build --preset conan-release -j "$JOBS"
 fi
+# The pre-release cleanup removed the deprecated monolithic build alias. A
+# configure line that still passes REFRAIN_MONOLITHIC must not select a link
+# mode: the option is not consumed, so CMake lists it as an unused variable
+# instead of applying the old mapping. `-U` clears a value cached by an earlier
+# run so the check stays repeatable in a reused build directory.
+REMOVED_ALIAS_LOG="$(mktemp)"
+cmake --preset conan-release -U REFRAIN_MONOLITHIC \
+    -DREFRAIN_MONOLITHIC=OFF >"$REMOVED_ALIAS_LOG" 2>&1 \
+    || { rm -f "$REMOVED_ALIAS_LOG"; die "configure with the removed REFRAIN_MONOLITHIC alias failed"; }
+if ! grep -q 'REFRAIN_MONOLITHIC' "$REMOVED_ALIAS_LOG"; then
+    rm -f "$REMOVED_ALIAS_LOG"
+    die "REFRAIN_MONOLITHIC is still consumed by the build (the removed alias must be unknown)"
+fi
+rm -f "$REMOVED_ALIAS_LOG"
+echo "  removed build alias: REFRAIN_MONOLITHIC is not a cache option"
 
 # Locate the build outputs (conan cmake_layout -> build/Release/{bin,generators}).
 BIN_DIR="$(find "$ROOT/build" -maxdepth 3 -type d -path '*/bin' 2>/dev/null | head -1)"
@@ -950,7 +965,9 @@ if "$BIN_DIR/refrain-tools" content gc --store "$GC_BAD_STORE" --apply \
 fi
 grep -Fq "$GC_BAD_RECEIPT" "$EXTRACT_DIR/gc-bad-json.txt" \
     || die "content gc: corrupt-receipt error does not name the receipt"
-printf '{"schema":"refrain.mod-receipt/3"}' >"$GC_BAD_RECEIPT"
+# A receipt from an older development store (the retired `/2` schema) and a
+# wholly foreign schema are both rejected; neither is migrated.
+printf '{"schema":"refrain.mod-receipt/2"}' >"$GC_BAD_RECEIPT"
 if "$BIN_DIR/refrain-tools" content gc --store "$GC_BAD_STORE" --apply \
     >"$EXTRACT_DIR/gc-bad-schema.txt" 2>&1; then
     die "content gc: foreign receipt schema was accepted"

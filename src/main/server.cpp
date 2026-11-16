@@ -639,11 +639,6 @@ int main(int argc, char **argv) {
         app.add_flag("--keep-signer-pin", keep_signer_pin,
                      "Keep a mod's signer pin after uninstalling its last "
                      "version");
-    bool accept_unpinned{false};
-    auto *accept_unpinned_option =
-        app.add_flag("--accept-unpinned-signer", accept_unpinned,
-                     "Confirm the signer of an older (unpinned) install so it "
-                     "may be updated");
     std::string signature_policy{};
     auto *signature_policy_option =
         app.add_option("--signature-policy", signature_policy,
@@ -715,7 +710,6 @@ int main(int argc, char **argv) {
         allow_downgrade_option->count() > 0 ||
         replace_same_version_option->count() > 0 ||
         keep_signer_pin_option->count() > 0 ||
-        accept_unpinned_option->count() > 0 ||
         signature_policy_option->count() > 0};
     if (content_store.empty() && explicit_content_inputs) {
         fmt::println(stderr, "refrain-server: --content-* / --gc-keep-days / "
@@ -1032,7 +1026,6 @@ int main(int argc, char **argv) {
                                (gamepack_spec->auto_scan && !no_auto_install);
         content.keep_installed = true;
         content.policy = install_policy;
-        content.accept_unpinned = accept_unpinned;
         content.gc = *content_gc_mode;
         content.gc_keep_days = gc_keep_days;
         content.gc_budget_ms = gc_budget_ms;

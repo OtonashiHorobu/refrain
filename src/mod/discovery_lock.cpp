@@ -188,16 +188,14 @@ using detail::toml_string;
     if (!gamepack_version) {
         return std::unexpected{std::move(gamepack_version.error())};
     }
-    // Optional build identity: set by servers built with build-time profiles;
-    // absent in older locks, where it simply means "no identity to compare".
+    // Build identity: both fields are required. A lock that cannot say which
+    // build wrote it cannot be compared against the running binary, so a
+    // missing field is a parse error instead of "no identity to check".
     for (auto [key, target] :
          {std::pair<std::string_view, std::string *>{"profile", &lock.profile},
           std::pair<std::string_view, std::string *>{"build_id",
                                                      &lock.build_id}}) {
         const std::array<std::string_view, 2> key_path{"lock", key};
-        if (!doc->contains_at(key_path)) {
-            continue;
-        }
         auto value{require_string(*doc, key_path, path)};
         if (!value) {
             return std::unexpected{std::move(value.error())};
@@ -474,12 +472,8 @@ auto mod_lock::to_toml() const -> std::string {
     out += "format_version = " + std::to_string(format_version) + "\n";
     out += "gamepack_id = " + toml_string(gamepack_id) + "\n";
     out += "gamepack_version = " + toml_string(gamepack_version) + "\n";
-    if (!profile.empty()) {
-        out += "profile = " + toml_string(profile) + "\n";
-    }
-    if (!build_id.empty()) {
-        out += "build_id = " + toml_string(build_id) + "\n";
-    }
+    out += "profile = " + toml_string(profile) + "\n";
+    out += "build_id = " + toml_string(build_id) + "\n";
     out += "fingerprint = " + toml_string(fingerprint()) + "\n";
     for (const auto &mod : ordered) {
         out += "\n[mods." + toml_string(mod.id) + "]\n";

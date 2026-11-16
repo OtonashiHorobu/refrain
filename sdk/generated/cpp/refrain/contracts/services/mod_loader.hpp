@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 9a07f1b76869dfa9
+// Schema hash: c735c6db25ca24c9
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_CONTRACTS_SERVICES_MOD_LOADER_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_CONTRACTS_SERVICES_MOD_LOADER_HPP
@@ -129,7 +129,7 @@ static_assert(offsetof(mod_load_request, manifest) == 8);
 
 inline constexpr std::string_view service_id = "refrain:mod.loader";
 inline constexpr std::uint32_t abi_major = 1;
-inline constexpr std::uint32_t abi_minor = 0;
+inline constexpr std::uint32_t abi_minor = 1;
 inline constexpr std::uint32_t abi_patch = 0;
 inline constexpr ::refrain::contracts::side_kind side = ::refrain::contracts::side_kind::server;
 inline constexpr ::refrain::contracts::thread_kind thread = ::refrain::contracts::thread_kind::main;

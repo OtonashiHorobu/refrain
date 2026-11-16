@@ -1,22 +1,24 @@
-# Schema compiler
+#Schema compiler
 
-Refrain describes its data and contracts in two schema languages. RSC describes
-data layouts and registry content; RIDL describes service contracts. The
-`refrain-tools schema gen` command compiles both into headers under
-`sdk/generated/`.
+Refrain describes its data and contracts in two schema languages.RSC describes
+    data layouts and registry content;
+RIDL describes service contracts.The
+`refrain - tools schema gen` command compiles both into headers under
+`sdk / generated /`.
 
-## Sources
+                   ##Sources
 
-| Language | Location | Purpose |
-|---|---|---|
-| RSC | `schema/` | data structs, enums, packets, records, handles |
-| RIDL | `sdk/idl/` | service contracts, events, method metadata |
+    | Language | Location | Purpose | | -- -| -- -| -- -| | RSC | `schema /` |
+    data structs,
+    enums, packets, records,
+    handles | | RIDL | `sdk / idl /` | service contracts, events,
+    method metadata |
 
-Both dialects share a parser and a semantic analyzer. A file starts with a
-module, a version and imports:
+        Both dialects share a parser and a semantic analyzer.A file starts with
+            a module,
+    a version and imports :
 
-```ridl
-module refrain::services::world;
+```ridl module refrain::services::world;
 version 1.0.0;
 
 import refrain::core;
@@ -63,18 +65,19 @@ registers its only provider, and a gamepack or mod cannot select or replace it
 service world : 1.0.0 {
     side = server;
     thread = sim;
-    provides = [ "refrain:world" ];
-    requires = [ "refrain:core>=1.0.0" ];
-    capabilities = [ "block-access" ];
+    provides = ["refrain:world"];
+    requires = ["refrain:core>=1.0.0"];
+    capabilities = ["block-access"];
 
-    #[thread(sim)] #[can_fail]
+#[thread(sim)] #[can_fail]
     fn block_at(in block_pos pos) -> u32;
 }
 ```
 
-A `callback` declaration defines a C function pointer type
-(`callback job_callback = fn(opaque_ptr userdata) -> void;`). Callbacks are
-method parameters only; their parameters are limited to numeric primitives and
+    A `callback` declaration defines a C function pointer
+    type(`callback job_callback = fn(opaque_ptr userdata)->void;`)
+        .Callbacks are method parameters only;
+their parameters are limited to numeric primitives and
 `opaque_ptr`, and they return `void`, so the C and C++ function pointer
 spellings stay ABI-identical.
 
@@ -107,48 +110,56 @@ extension chunk_codec : 1.0.0 {
     extends = "refrain:net.protocol";
     capability = "chunk-codec";
 
-    #[thread(worker)] #[can_fail]
+#[thread(worker)] #[can_fail]
     fn encode_chunk(in chunk_view chunk, out chunk_buffer encoded)
         -> result<void, protocol_error>;
 }
 
 service net_protocol : 1.1.0 {
-    extensions = [ chunk_codec ];
+    extensions = [chunk_codec];
     // existing methods remain unchanged
 }
 ```
 
 `extends` names the parent service by one of its `provides` entries;
-`capability` is a lowercase label (`[a-z0-9]` followed by `[a-z0-9._-]`, at
-most 64 characters). An extension body accepts `fn` methods with the same
-parameter, return and `result<T, E>` rules as service methods. `#[schedule]`
-is rejected on extension methods: extension vtables have no tick table.
+`capability` is a lowercase
+    label(`[a - z0 - 9]` followed by `[a - z0 - 9._ - ]`, at most 64 characters)
+        .An extension body accepts `fn` methods with the same parameter,
+    return and `result<T, E>` rules as service methods
+                   . `#[schedule]` is rejected on extension methods
+    : extension vtables have no tick table.
 
-The stable extension id is derived deterministically as
-`<extends>/<name>`; the example above is
-`refrain:net.protocol/chunk_codec`. The id is emitted as a C macro, a C++
-constant and reflection metadata. Extension declarations must be listed by
-their parent service's `extensions` list; a service may list an extension from
-an imported module. Duplicate extension ids and duplicate entries in one
-service's list are errors.
+      The stable extension id is derived deterministically as
+`<extends> /
+           <name>`;
+the example above is
+`refrain : net.protocol / chunk_codec`.The id is emitted as a C macro,
+    a C++ constant and reflection metadata
+            .Extension declarations must be listed by their parent
+                service's `extensions` list; a service may list an extension from an
+                    imported module
+            .Duplicate extension ids and duplicate entries in one service's list are errors.
 
-Extension versions are full SemVer 2.0.0 release versions (like service
-versions). Their major and minor components must fit 16 bits because the query
-slot packs the requested minimum as `(major << 16) | minor`. A provider is
-compatible when its major equals the requested major and its minor is at least
-the requested minor; patch is informational. A newer provider minor is
-accepted, a different major or an older minor returns
+        Extension versions are full SemVer 2.0.0 release
+        versions(like service versions)
+            .Their major and minor components must fit
+        16 bits because the query slot packs the requested minimum as `(major
+                                                                        << 16) |
+        minor`.A provider is compatible when its major equals the requested
+        major and its minor is at least the requested minor;
+patch is informational.A newer provider minor is accepted,
+    a different major or
+        an older minor returns
 `REFRAIN_EXTENSION_VERSION_MISMATCH`.
 
-### Generated ABI
+        ## #Generated ABI
 
-A service that declares `extensions` appends one slot to its vtable, after the
-contract method slots:
+            A service that declares `extensions` appends one slot to its vtable,
+    after the contract method slots :
 
-```c
-refrain_status (*query_extension)(void *self, refrain_str id,
-                                  uint32_t min_version,
-                                  refrain_extension_ref *out);
+```c refrain_status (*query_extension)(void *self, refrain_str id,
+                                        uint32_t min_version,
+                                        refrain_extension_ref *out);
 ```
 
 The same header defines `refrain_extension_ref` (a `struct_size` prologue,
@@ -158,19 +169,21 @@ together with `REFRAIN_EXTENSION_VERSION(major, minor)` and the status codes
 `REFRAIN_EXTENSION_INVALID`. Each declared extension also gets a C vtable
 (`<prefix>_vtable` with a leading `uint32_t struct_size`) and metadata macros
 for its id, version, capability and parent. The host initialises
-`ref->struct_size` before calling `query_extension`; a producer that returns a
-different reference size, a mismatched id, an incompatible version or an
-undersized extension vtable is rejected as malformed.
+`ref->struct_size` before calling `query_extension`;
+a producer that returns a different reference size, a mismatched id,
+    an incompatible version or
+        an undersized extension vtable is rejected as malformed.
 
-### Provider registration
+            ## #Provider registration
 
-The generated C++ header contains id-keyed registration helpers. A provider
-builds one binding per extension and forwards the query slot; dispatch,
-version comparison and struct-size validation are generated:
+                The generated C++ header contains id -
+            keyed registration helpers.A provider builds one binding
+                per extension and forwards the query slot;
+dispatch, version comparison and struct - size validation are generated
+    :
 
-```cpp
-const net_protocol::chunk_codec::vtable codec_table{
-    REFRAIN_SERVICES_NET_PROTOCOL_CHUNK_CODEC_VTABLE_SIZE, &encode_chunk};
+```cpp const net_protocol::chunk_codec::vtable codec_table{
+        REFRAIN_SERVICES_NET_PROTOCOL_CHUNK_CODEC_VTABLE_SIZE, &encode_chunk};
 
 const net_protocol::extension_binding bindings[] = {
     net_protocol::make_extension_binding<net_protocol::chunk_codec>(
@@ -185,20 +198,19 @@ struct my_provider {
 my_provider state;
 refrain_services_net_protocol_vtable vtable{};
 // fill struct_size, the ABI version words and the service method slots
-vtable.query_extension =
-    &net_protocol::query_extension<my_provider>;
+vtable.query_extension = &net_protocol::query_extension<my_provider>;
 const net_protocol::provider service{vtable, &state};
 ```
 
 Extensions are owned by the base provider: their bindings, vtables and
 `self` pointers must stay valid for the provider's lifetime, and there is no
-independent unload. A missing extension returns `not_found`; a version that
-cannot satisfy the request returns `version_mismatch`; a malformed or
-undersized reference fails closed with `invalid_argument`. The typed binding
-performs these checks once:
+independent unload. A missing extension returns `not_found`;
+a version that cannot satisfy the request returns `version_mismatch`;
+a malformed or
+    undersized reference fails closed with `invalid_argument`.The typed binding
+        performs these checks once :
 
-```cpp
-const auto codec = service.extension<net_protocol::chunk_codec>();
+```cpp const auto codec = service.extension<net_protocol::chunk_codec>();
 if (codec) {
     refrain::core::chunk_buffer buffer{};
     const auto encoded = codec->encode_chunk(view, buffer);
@@ -206,8 +218,8 @@ if (codec) {
 }
 ```
 
-`extension<T>()` checks the id, version, reference size and vtable size at
-binding time; subsequent calls dispatch directly through the extension vtable.
+`extension<T>()` checks the id, version,
+    reference size and vtable size at binding time; subsequent calls dispatch directly through the extension vtable.
 The wrapper works with `-fno-rtti`.
 
 ### Compatibility
@@ -245,9 +257,11 @@ patch. A version never decreases, and a released number is never reused for
 different content.
 
 New services also start at `1.0.0`. The emitted ABI major is the contract
-major, and the mod loader treats a declared ABI major of zero as a legacy
-provider that predates the vtable header check, so a new contract starting at
-`0.x` would silently disable that check for its provider.
+major. Every provider table starts with the 4 x `uint32_t` ABI header
+(`struct_size`, `abi_major`, `abi_minor`, `abi_patch`), and a provider must
+declare the major it was built against: the host verifies the declaration
+against the header before it dispatches the table, and an undeclared (zero)
+major or a mismatch is refused. There is no unchecked provider table.
 
 An additive method appends one slot to the vtable and bumps the service minor
 version: `refrain:world` moved from `1.0.0` to `1.1.0` when it gained the
@@ -283,38 +297,39 @@ setting and continues. An error returned through a non-empty slot is a real
 failure, never a way to say the operation does not apply.
 
 The ABI major version must match between a provider and its consumer and only
-changes for an incompatible layout or calling change; the minor and patch carry
-additive and compatible evolution.
+changes for an incompatible layout or calling change;
+the minor and patch carry additive and compatible evolution.
 
-On-disk formats keep a monotonic integer format version. A breaking layout
-change bumps it and either migrates older data or refuses it with the supported
-versions named. The schema hash identifies the build; it is not a version.
+        On -
+        disk formats keep a monotonic integer format version.A breaking layout
+            change bumps it and either migrates older data or
+    refuses it with the supported versions named.The schema hash identifies the
+        build;
+it is not a version.
 
-### Version record
+    ## #Version record
 
-| Contract | Version | Composition |
-|---|---|---|
-| `refrain:data.packs` | 1.0.0 | exclusive |
-| `refrain:mod.loader` | 1.0.0 | instanced |
-| `refrain:net.protocol` | 2.1.0 | instanced |
-| `refrain:net.session` | 1.0.0 | exclusive |
-| `refrain:net.translator` | 1.0.0 | exclusive |
-| `refrain:runtime` | 2.1.0 | exclusive |
-| `refrain:session.lifecycle` | 1.0.0 | instanced |
-| `refrain:session.status` | 1.0.0 | instanced |
-| `refrain:session.tab` | 1.0.0 | instanced |
-| `refrain:sim` | 1.1.0 | exclusive |
-| `refrain:storage` | 1.0.0 | exclusive |
-| `refrain:transport` | 1.0.0 | instanced |
-| `refrain:worldgen` | 1.0.0 | exclusive |
-| `refrain:world.migration` | 1.0.0 | exclusive |
-| `refrain:world` | 1.2.0 | exclusive |
-| `refrain:host.core` | 1.0.0 | sealed |
-| `refrain:host.kernel` | 1.0.0 | sealed |
-| `refrain:host.metadata` | 1.0.0 | sealed |
-| `refrain:host.platform` | 1.0.0 | sealed |
+    | Contract | Version | Composition | | -- -| -- -| -- -|
+    | `refrain : data.packs` | 1.0.0 | exclusive | | `refrain : mod.loader` |
+    1.0.0 | instanced | | `refrain : net.protocol` | 2.1.0 | instanced |
+    | `refrain : net.session` | 1.0.0 | exclusive |
+    | `refrain : net.translator` | 1.0.0 | exclusive | | `refrain
+    : runtime` |
+      2.1.0 | exclusive | | `refrain : session.lifecycle` | 1.0.0 | instanced |
+      | `refrain : session.status` | 1.0.0 | instanced |
+      | `refrain : session.tab` | 1.0.0 | instanced | | `refrain
+    : sim` |
+      1.1.0 | exclusive | | `refrain : storage` | 1.0.0 | exclusive | | `refrain
+    : transport` |
+      1.0.0 | instanced | | `refrain
+    : worldgen` |
+      1.0.0 | exclusive | | `refrain : world.migration` | 1.0.0 | exclusive |
+      | `refrain : world` | 1.2.0 | exclusive | | `refrain : host.core` |
+                   1.0.0 | sealed | | `refrain : host.kernel` | 1.0.0 | sealed |
+                   | `refrain : host.metadata` | 1.0.0 | sealed |
+                   | `refrain : host.platform` | 1.0.0 | sealed |
 
-The shared primitives module `refrain:core` is at 1.0.0; it declares no
+                   The shared primitives module `refrain : core` is at 1.0.0; it declares no
 service, so it has no composition mode.
 
 `refrain:mod.loader` is the loader contract: one provider instance per loader

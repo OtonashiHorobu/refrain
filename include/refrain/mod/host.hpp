@@ -91,11 +91,11 @@ namespace kernel = refrain::kernel;
 struct provider_api {
     const void *vtable{nullptr};
     void *self{nullptr};
-    /// ABI major the vtable was built against. `0` skips the header check
-    /// (factories written before the field existed); any other value makes
-    /// `register_provider()` verify that `vtable` starts with the generated
-    /// 4 x `uint32_t` header (`struct_size`, `abi_major`, `abi_minor`,
-    /// `abi_patch`) and that the header's major equals this value.
+    /// ABI major the vtable was built against. `register_provider()`,
+    /// `register_sealed_provider()` and `register_mod_loader()` verify that
+    /// `vtable` starts with the generated 4 x `uint32_t` header
+    /// (`struct_size`, `abi_major`, `abi_minor`, `abi_patch`) and that the
+    /// header's major equals this value; zero is refused.
     std::uint32_t abi_major{0};
 };
 
@@ -115,9 +115,9 @@ struct provided_slot {
 /// One successfully loaded mod.
 ///
 /// Besides the identity/gate results, this carries the manifest metadata the
-/// `auto_scan` runtime wiring needs to build a `mod::discovered_mod`
-/// for the builtin composition without the mod headers depending on the
-/// data layer: the manifest bytes are hashed at load time and exposed as hex.
+/// `auto_scan` runtime wiring needs to build a `mod::candidate` for the builtin
+/// composition without the mod headers depending on the data layer: the
+/// manifest bytes are hashed at load time and exposed as hex.
 struct loaded_mod {
     std::string id{};
     std::string version{};
@@ -127,8 +127,8 @@ struct loaded_mod {
     std::string provides_summary{};
     /// Lowercase BLAKE3 hex (64 chars) of the raw `manifest.toml` bytes read
     /// from the builtin image. Discovery re-hashes the on-disk manifests, so
-    /// this is the reference value for `discovered_mod.manifest_hash`; parse
-    /// it with `refrain::data::parse_digest()`.
+    /// this is the reference value for `candidate.manifest_hash`; parse it
+    /// with `refrain::data::parse_digest()`.
     std::string manifest_hash_hex{};
     /// Manifest `[requires]` hard dependencies (actual composition inputs,
     /// not just diagnostics; copied by the `auto_scan` wiring).
@@ -137,9 +137,6 @@ struct loaded_mod {
     std::vector<mod::mod_requirement> optional{};
     /// Effective loader id that loaded this package (`builtin`, `native`, ...).
     std::string loader{};
-    /// True when the manifest omitted `[entry].loader` and the parser inferred
-    /// the loader from the entry shape or from the absence of an entry table.
-    bool loader_inferred{false};
     /// Removal guarantee the active loader declared when the mod was loaded.
     /// The lifecycle layer must not assume a stronger one.
     mod_unload_semantics loader_unload{mod_unload_semantics::restart_required};

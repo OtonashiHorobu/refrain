@@ -137,8 +137,7 @@ module that references a runtime function no host code pulls in fails to load
 with an undefined-symbol diagnostic; a shared runtime library that removes that
 restriction is not built yet. `REFRAIN_MOD_LINK=dynamic` (build every mod as a
 module) therefore fails at configure time; select the modules explicitly with a
-profile's `dynamic` list instead. The deprecated `REFRAIN_MONOLITHIC` option
-maps to that unsupported all-module mode.
+profile's `dynamic` list instead.
 
 The resolved profile is written to `<build>/generated/mod_profile.toml` with the
 profile name, link mode, mod list and a build id. The build id and the profile
@@ -278,6 +277,21 @@ different machines cannot be compared.
 dependency requires updating the lock and the matching in-repo recipe under
 `conan/recipes/`. The vendor check in CI rejects a lock that does not match the
 recipes.
+
+GitHub Actions versions are updated by Dependabot from
+`.github/dependabot.yml`. Conan is not one of Dependabot's supported ecosystems,
+so its dependencies are not updated by Dependabot: run
+`python3 tools/dep_audit.py` to compare the pinned versions with the upstream
+ones, or enable Renovate if an automated pull request per update is wanted
+(Renovate reads `conanfile.py` and `conan.lock`).
+
+Vulnerability alerts for Conan packages come from the ConanCenter audit and
+appear under Security -> Code scanning, not under Dependabot alerts. The
+`dependency-audit` workflow runs weekly: it authenticates with the repository
+secret `CONAN_AUDIT_TOKEN` (register at <https://conan.io/audit/register>),
+scans the lockfile, and uploads a SARIF report. In-repo recipes under
+`conan/recipes/` are not in ConanCenter and are therefore not covered by that
+audit; review their upstream advisories manually when bumping them.
 
 ## Troubleshooting
 
