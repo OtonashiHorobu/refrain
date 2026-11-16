@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 629b46053b1e88ca
+// Schema hash: 27adb7195e7523ba
 
 // Rust bindings for the sealed Refrain host contracts.
 // C ABI layout is authoritative; this file mirrors it.

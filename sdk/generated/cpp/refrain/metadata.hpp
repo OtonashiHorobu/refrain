@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 629b46053b1e88ca
+// Schema hash: 27adb7195e7523ba
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_METADATA_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_METADATA_HPP
@@ -544,6 +544,39 @@ inline constexpr std::array<field_entry, 5> refrain_services_world_zstd_policy_f
     field_entry{"near_radius" , "i32", 16, 4, 0},
     field_entry{"mid_radius" , "i32", 20, 4, 0},
 };
+inline constexpr std::array<enum_value_entry, 5> refrain_services_world_migration_world_migration_error_values{
+    enum_value_entry{"unsupported_version" , 1},
+    enum_value_entry{"invalid_request" , 2},
+    enum_value_entry{"io_error" , 3},
+    enum_value_entry{"corrupt_world" , 4},
+    enum_value_entry{"migration_failed" , 5},
+};
+inline constexpr std::array<field_entry, 2> refrain_services_world_migration_world_migration_capabilities_fields{
+    field_entry{"min_version" , "i32", 4, 4, 0},
+    field_entry{"target_version" , "i32", 8, 4, 0},
+};
+inline constexpr std::array<field_entry, 3> refrain_services_world_migration_world_migration_plan_fields{
+    field_entry{"from_version" , "i32", 4, 4, 0},
+    field_entry{"to_version" , "i32", 8, 4, 0},
+    field_entry{"steps" , "u32", 12, 4, 0},
+};
+inline constexpr std::array<field_entry, 4> refrain_services_world_migration_world_migration_request_fields{
+    field_entry{"world_path" , "string", 8, 16, 0},
+    field_entry{"from_version" , "i32", 24, 4, 0},
+    field_entry{"to_version" , "i32", 28, 4, 0},
+    field_entry{"dry_run" , "bool", 32, 1, 0},
+};
+inline constexpr std::array<field_entry, 9> refrain_services_world_migration_world_migration_report_fields{
+    field_entry{"from_version" , "i32", 4, 4, 0},
+    field_entry{"to_version" , "i32", 8, 4, 0},
+    field_entry{"steps" , "u32", 12, 4, 0},
+    field_entry{"chunks_scanned" , "u64", 16, 8, 0},
+    field_entry{"chunks_migrated" , "u64", 24, 8, 0},
+    field_entry{"player_records_scanned" , "u64", 32, 8, 0},
+    field_entry{"player_records_migrated" , "u64", 40, 8, 0},
+    field_entry{"no_op" , "bool", 48, 1, 0},
+    field_entry{"dry_run" , "bool", 49, 1, 0},
+};
 inline constexpr std::array<enum_value_entry, 4> refrain_services_worldgen_worldgen_error_values{
     enum_value_entry{"invalid_config" , 1},
     enum_value_entry{"cancelled" , 2},
@@ -571,7 +604,7 @@ inline constexpr std::array<field_entry, 3> refrain_services_worldgen_generate_o
 };
 } // namespace detail
 
-inline constexpr std::array<type_entry, 75> types{
+inline constexpr std::array<type_entry, 80> types{
     type_entry{"refrain::core::core_error", 1, 4, 4, std::span<const field_entry>{}, std::span<const enum_value_entry>{detail::refrain_core_core_error_values}},
     type_entry{"refrain::core::chunk_status", 1, 4, 4, std::span<const field_entry>{}, std::span<const enum_value_entry>{detail::refrain_core_chunk_status_values}},
     type_entry{"refrain::core::block_face", 1, 1, 1, std::span<const field_entry>{}, std::span<const enum_value_entry>{detail::refrain_core_block_face_values}},
@@ -643,33 +676,39 @@ inline constexpr std::array<type_entry, 75> types{
     type_entry{"refrain::services::world::level_info", 0, 72, 8, std::span<const field_entry>{detail::refrain_services_world_level_info_fields}, std::span<const enum_value_entry>{}},
     type_entry{"refrain::services::world::level_projection", 0, 88, 8, std::span<const field_entry>{detail::refrain_services_world_level_projection_fields}, std::span<const enum_value_entry>{}},
     type_entry{"refrain::services::world::zstd_policy", 0, 24, 4, std::span<const field_entry>{detail::refrain_services_world_zstd_policy_fields}, std::span<const enum_value_entry>{}},
+    type_entry{"refrain::services::world_migration::world_migration_error", 1, 4, 4, std::span<const field_entry>{}, std::span<const enum_value_entry>{detail::refrain_services_world_migration_world_migration_error_values}},
+    type_entry{"refrain::services::world_migration::world_migration_capabilities", 0, 12, 4, std::span<const field_entry>{detail::refrain_services_world_migration_world_migration_capabilities_fields}, std::span<const enum_value_entry>{}},
+    type_entry{"refrain::services::world_migration::world_migration_plan", 0, 16, 4, std::span<const field_entry>{detail::refrain_services_world_migration_world_migration_plan_fields}, std::span<const enum_value_entry>{}},
+    type_entry{"refrain::services::world_migration::world_migration_request", 0, 40, 8, std::span<const field_entry>{detail::refrain_services_world_migration_world_migration_request_fields}, std::span<const enum_value_entry>{}},
+    type_entry{"refrain::services::world_migration::world_migration_report", 0, 56, 8, std::span<const field_entry>{detail::refrain_services_world_migration_world_migration_report_fields}, std::span<const enum_value_entry>{}},
     type_entry{"refrain::services::worldgen::worldgen_error", 1, 4, 4, std::span<const field_entry>{}, std::span<const enum_value_entry>{detail::refrain_services_worldgen_worldgen_error_values}},
     type_entry{"refrain::services::worldgen::gen_stage", 1, 4, 4, std::span<const field_entry>{}, std::span<const enum_value_entry>{detail::refrain_services_worldgen_gen_stage_values}},
     type_entry{"refrain::services::worldgen::worldgen_config", 0, 40, 8, std::span<const field_entry>{detail::refrain_services_worldgen_worldgen_config_fields}, std::span<const enum_value_entry>{}},
     type_entry{"refrain::services::worldgen::generate_outcome", 0, 24, 8, std::span<const field_entry>{detail::refrain_services_worldgen_generate_outcome_fields}, std::span<const enum_value_entry>{}},
 };
 
-inline constexpr std::array<contract_entry, 17> contracts{
-    contract_entry{"refrain:host.core", 1, 0, 0, "629b46053b1e88ca", 12},
-    contract_entry{"refrain:host.kernel", 1, 0, 0, "629b46053b1e88ca", 6},
-    contract_entry{"refrain:host.metadata", 1, 0, 0, "629b46053b1e88ca", 8},
-    contract_entry{"refrain:host.platform", 1, 0, 0, "629b46053b1e88ca", 12},
-    contract_entry{"refrain:data.packs", 1, 0, 0, "629b46053b1e88ca", 4},
-    contract_entry{"refrain:net.protocol", 2, 1, 0, "629b46053b1e88ca", 14},
-    contract_entry{"refrain:net.session", 1, 0, 0, "629b46053b1e88ca", 6},
-    contract_entry{"refrain:net.translator", 1, 0, 0, "629b46053b1e88ca", 2},
-    contract_entry{"refrain:runtime", 2, 0, 0, "629b46053b1e88ca", 1},
-    contract_entry{"refrain:session.lifecycle", 1, 0, 0, "629b46053b1e88ca", 3},
-    contract_entry{"refrain:session.status", 1, 0, 0, "629b46053b1e88ca", 1},
-    contract_entry{"refrain:session.tab", 1, 0, 0, "629b46053b1e88ca", 1},
-    contract_entry{"refrain:sim", 1, 1, 0, "629b46053b1e88ca", 18},
-    contract_entry{"refrain:storage", 1, 0, 0, "629b46053b1e88ca", 6},
-    contract_entry{"refrain:transport", 1, 0, 0, "629b46053b1e88ca", 9},
-    contract_entry{"refrain:world", 1, 2, 0, "629b46053b1e88ca", 12},
-    contract_entry{"refrain:worldgen", 1, 0, 0, "629b46053b1e88ca", 4},
+inline constexpr std::array<contract_entry, 18> contracts{
+    contract_entry{"refrain:host.core", 1, 0, 0, "27adb7195e7523ba", 12},
+    contract_entry{"refrain:host.kernel", 1, 0, 0, "27adb7195e7523ba", 6},
+    contract_entry{"refrain:host.metadata", 1, 0, 0, "27adb7195e7523ba", 8},
+    contract_entry{"refrain:host.platform", 1, 0, 0, "27adb7195e7523ba", 12},
+    contract_entry{"refrain:data.packs", 1, 0, 0, "27adb7195e7523ba", 4},
+    contract_entry{"refrain:net.protocol", 2, 1, 0, "27adb7195e7523ba", 14},
+    contract_entry{"refrain:net.session", 1, 0, 0, "27adb7195e7523ba", 6},
+    contract_entry{"refrain:net.translator", 1, 0, 0, "27adb7195e7523ba", 2},
+    contract_entry{"refrain:runtime", 2, 0, 0, "27adb7195e7523ba", 1},
+    contract_entry{"refrain:session.lifecycle", 1, 0, 0, "27adb7195e7523ba", 3},
+    contract_entry{"refrain:session.status", 1, 0, 0, "27adb7195e7523ba", 1},
+    contract_entry{"refrain:session.tab", 1, 0, 0, "27adb7195e7523ba", 1},
+    contract_entry{"refrain:sim", 1, 1, 0, "27adb7195e7523ba", 18},
+    contract_entry{"refrain:storage", 1, 0, 0, "27adb7195e7523ba", 6},
+    contract_entry{"refrain:transport", 1, 0, 0, "27adb7195e7523ba", 9},
+    contract_entry{"refrain:world", 1, 2, 0, "27adb7195e7523ba", 12},
+    contract_entry{"refrain:world.migration", 1, 0, 0, "27adb7195e7523ba", 3},
+    contract_entry{"refrain:worldgen", 1, 0, 0, "27adb7195e7523ba", 4},
 };
 
-inline constexpr std::string_view schema_hash = "629b46053b1e88ca";
+inline constexpr std::string_view schema_hash = "27adb7195e7523ba";
 
 } // namespace refrain::metadata
 

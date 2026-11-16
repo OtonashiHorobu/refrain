@@ -403,6 +403,39 @@ DataVersion.
 compacted palette and swaps it in; the source world is left untouched if the
 rebuild fails.
 
+## World data version migration
+
+A world directory records the game data version its records were written with.
+This build reads one data version: a world saved by an older build is upgraded
+before it is opened, and a world from a version outside the supported window is
+refused with the recorded version and the window named in the error.
+
+The upgrade runs automatically at startup through the built-in
+`refrain.world.datafix` mod. It rewrites the version-sensitive records, then
+stamps the new data version into the level record and the saved-data headers. A
+world already at the current version is opened unchanged, and a second start
+does no work. `refrain-tools world info` prints the recorded `data_version`, so
+an operator can check a world before and after an upgrade.
+
+The supported source window is data version 5013 through 5023: the two
+reference schema changes registered after 5013 (the removed block-transformer
+item component and the renamed buried-treasure map item name) are applied, and
+no reference schema change exists between 5016 and 5023.
+
+- **Back up the world directory before the first start of a build that
+  upgrades it.** The upgrade rewrites records in place and there is no
+  automatic rollback to the older version; a directory copy or a filesystem
+  snapshot is the rollback path.
+- The version stamp is written last. If the upgrade fails, the world stays
+  recorded at its old version and the next start refuses it instead of serving
+  half-upgraded records; the start that failed can simply be retried, because
+  every record rewrite is idempotent.
+- Upgrading from a version older than the supported window is refused. Open
+  the world once in Minecraft 26.3 (or a newer build) to bring it forward, then
+  start Refrain again.
+- The migration is a mod. A custom gamepack that does not load it refuses an
+  older world and leaves it untouched; only the current data version opens.
+
 ## Crash reporting
 
 `--crash-dir <dir>` enables local minidump capture. Crash dumps are written to

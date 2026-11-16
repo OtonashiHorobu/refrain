@@ -232,6 +232,13 @@ class value {
     [[nodiscard]] auto as_list() const noexcept -> const list_value *;
     [[nodiscard]] auto as_compound() const noexcept -> const compound *;
 
+    /// Mutable container views for in-place edits (a data upgrade step that
+    /// removes or renames keys). The pointer stays valid until the value is
+    /// assigned to; child values are edited through it. `nullptr` when the
+    /// type does not match.
+    [[nodiscard]] auto as_list() noexcept -> list_value *;
+    [[nodiscard]] auto as_compound() noexcept -> compound *;
+
     /// Declared element type of a list value (`std::nullopt` if not a list).
     [[nodiscard]] auto list_element_type() const noexcept
         -> std::optional<tag_type>;

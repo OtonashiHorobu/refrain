@@ -133,6 +133,16 @@ Anvil import and export convert between RWF and the vanilla region layout,
 including zstd and LZ4 compressed regions, block palette keys, block entities,
 biomes and light. The conversion is lossless for the fields the format carries.
 
+A world records the game data version its records were written with. The
+storage layer reads and writes one version only; upgrading a world recorded
+with an older version is a separate provider over the
+`refrain:world.migration` contract, implemented by the bundled migration mod
+and run by the runtime before the store opens. The migration rewrites the
+version-sensitive records and stamps the new version last, so an interrupted
+upgrade leaves the old version recorded and is retried by the next start. A
+composition that omits the provider refuses an older world instead of reading
+it with the wrong schema.
+
 ## Simulation
 
 The simulation owns the loaded chunks, tickets, block registry, entity table and
