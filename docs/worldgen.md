@@ -111,6 +111,55 @@ the simple-block feature places the second half of a double plant, and shape
 families read the default properties a state key omits. Without the report the
 generator keeps the spelling-only behaviour, so an older datapack still loads.
 
+## Block light report
+
+Light behaviour is block code, not a datapack document: which level a state
+emits, how much a path loses when it enters the state, and which face shapes
+the lighting engine uses for shape-based occlusion. The repository ships the
+derived report under `content/vanilla/<version>/reports/block_light/` and
+compiles it into the tracked table container:
+
+```text
+reports/block_light/
+  light.json      per-state emission, dampening and occlusion shape references
+  MANIFEST.json   game/data version, counts, report digest, server jar digest
+```
+
+`light.json` lists one record per block state - the game's dense state id, the
+emitted light level, the light levels a path loses when it enters the state,
+the two occlusion flags, and an index into the six face shapes - plus the face
+box lists of every occlusion shape. A face is the shape the reference
+lighting engine slices at the cell boundary for one direction, so the engine
+can test whether two face shapes together cover a cell without modelling a
+voxel shape.
+
+Regenerate the report from the server jar you own, after the data generator
+wrote its reports:
+
+```bash
+tools/light/extract.sh /path/to/server.jar generated/reports
+```
+
+The script unpacks the bundler jar, runs `tools/light/BlockLightProbe.java`
+against the game's block registry and packs the result with
+`tools/light/pack_report.py`; `pack_report.py --check
+content/vanilla/<version>/reports/block_light` verifies the tracked copy
+against its manifest without a jar. Import the tracked tables with the report
+next to the data generator output:
+
+```bash
+build/Release/bin/refrain-tools vanilla import \
+    -r generated/reports -o /tmp/refrain-tables --force
+cp /tmp/refrain-tables/tables.rvtb content/vanilla/<version>/
+cp -r generated/reports/block_light content/vanilla/<version>/reports/
+```
+
+The runtime reads the per-state records from the table container. A state the
+table does not carry - a modded state, or a container imported without the
+report - falls back to the documented default of opaque and emitting nothing;
+it is never guessed from a block name. The report and the container are covered
+by the notice in `content/vanilla/`.
+
 ## Dimensions
 
 `dimension_profile_for(dimension_kind)` supplies the fixed parameters of the

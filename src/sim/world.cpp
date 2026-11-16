@@ -135,6 +135,7 @@ world::world(world &&other) noexcept
     : store_{std::move(other.store_)}, borrowed_{other.borrowed_},
       registry_{std::move(other.registry_)}, chunks_{std::move(other.chunks_)},
       tickets_{std::move(other.tickets_)}, players_{std::move(other.players_)},
+      light_table_{std::move(other.light_table_)},
       entities_{std::move(other.entities_)}, rng_{other.rng_},
       tick_{other.tick_}, pending_edits_{std::move(other.pending_edits_)},
       light_{*this}, clock_{other.clock_} {
@@ -151,6 +152,7 @@ auto world::operator=(world &&other) noexcept -> world & {
         chunks_ = std::move(other.chunks_);
         tickets_ = std::move(other.tickets_);
         players_ = std::move(other.players_);
+        light_table_ = std::move(other.light_table_);
         entities_ = std::move(other.entities_);
         rng_ = other.rng_;
         tick_ = other.tick_;
@@ -1194,6 +1196,19 @@ auto world::damage_item(player_state &player, std::size_t index,
 }
 
 void world::set_item_table(item_table items) { items_ = std::move(items); }
+
+void world::set_block_light_table(block_light_table table) {
+    light_table_ = std::move(table);
+    light_.reload_properties();
+    // Recompute every loaded column under the new table: the stored light
+    // arrays were computed with the table that was installed before.
+    for (const auto &pos : chunk_positions()) {
+        auto *column{find_chunk(pos)};
+        if (column != nullptr) {
+            light_.column_loaded(*column);
+        }
+    }
+}
 
 auto world::remove_item(player_state &player, std::string_view item,
                         std::uint32_t count) -> bool {

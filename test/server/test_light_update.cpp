@@ -81,6 +81,13 @@ namespace world = refrain::world;
 [[nodiscard]] auto make_tables() -> std::vector<std::byte> {
     refrain::data::vanilla_spec spec{};
     spec.data_version = 5023;
+    refrain::data::block_spec air{};
+    air.name = "minecraft:air";
+    refrain::data::state_spec air_state{};
+    air_state.vanilla_id = 0;
+    air_state.is_default = true;
+    air.states.push_back(std::move(air_state));
+    spec.blocks.push_back(std::move(air));
     refrain::data::block_spec stone{};
     stone.name = "minecraft:stone";
     refrain::data::state_spec state{};
@@ -88,6 +95,21 @@ namespace world = refrain::world;
     state.is_default = true;
     stone.states.push_back(std::move(state));
     spec.blocks.push_back(std::move(stone));
+    // Light behaviour of the two states: air is transparent, stone opaque.
+    spec.block_lights = {
+        refrain::data::block_light_spec{.vanilla_id = 0,
+                                        .emission = 0,
+                                        .dampening = 0,
+                                        .can_occlude = false,
+                                        .use_shape_for_light_occlusion = false,
+                                        .shape = refrain::data::no_light_shape},
+        refrain::data::block_light_spec{.vanilla_id = 1,
+                                        .emission = 0,
+                                        .dampening = 15,
+                                        .can_occlude = true,
+                                        .use_shape_for_light_occlusion = false,
+                                        .shape = refrain::data::no_light_shape},
+    };
     auto bytes{refrain::data::build_vanilla_tables(spec)};
     expect(bytes.has_value());
     return bytes ? std::move(*bytes) : std::vector<std::byte>{};
@@ -145,6 +167,8 @@ suite<"server/light-update"> light_update_tests = [] {
             if (!tables) {
                 return;
             }
+            runtime->set_block_light_table(
+                sim::block_light_table::from_tables(*tables));
             const server::chunk_packet_source source{
                 .world = port.get(),
                 .tables = &*tables,

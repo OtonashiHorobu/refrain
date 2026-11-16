@@ -101,6 +101,45 @@ struct item_spec {
     std::uint32_t max_damage{0};
 };
 
+/// Highest light level a state can emit or dampen.
+inline constexpr std::uint8_t max_light_level = 15;
+
+/// Index that means "this state has no light occlusion shape".
+inline constexpr std::uint32_t no_light_shape = 0xFFFFFFFFU;
+
+/// Face order of a light shape: down, up, north, south, west, east.
+inline constexpr std::size_t light_shape_faces = 6;
+
+/// Upper bound on the boxes one face of a light shape may carry. The report
+/// importer rejects anything larger instead of truncating.
+inline constexpr std::size_t max_light_boxes_per_face = 16;
+
+/// The six face shapes the lighting engine uses for shape-based occlusion.
+///
+/// Each face is a list of boxes `{min_x, min_y, min_z, max_x, max_y, max_z}`
+/// in block units. A shape may extend beyond its block cell (a piston head's
+/// arm does), so the bounds are not clamped to the unit block; the lighting
+/// engine clips a face to the block when it tests coverage.
+struct light_shape_spec {
+    std::array<std::vector<std::array<double, 6>>, light_shape_faces> faces{};
+};
+
+/// Light behaviour of one block state.
+struct block_light_spec {
+    /// The game's own state id, the same id the block list report carries.
+    std::uint16_t vanilla_id{0};
+    /// Block light level the state emits, 0..15.
+    std::uint8_t emission{0};
+    /// Light levels a path loses when it enters the state, 0..15.
+    std::uint8_t dampening{15};
+    /// Whether the state occludes light with a shape.
+    bool can_occlude{true};
+    /// Whether the lighting engine uses the state's shape for occlusion.
+    bool use_shape_for_light_occlusion{false};
+    /// Index into `vanilla_spec::light_shapes` or `no_light_shape`.
+    std::uint32_t shape{no_light_shape};
+};
+
 /// Everything the container stores.
 struct vanilla_spec {
     std::int32_t data_version{0};
@@ -108,6 +147,11 @@ struct vanilla_spec {
     std::vector<biome_preset_spec> biome_presets{};
     std::vector<registry_spec> registries{};
     std::vector<item_spec> items{};
+    /// Per-state light records and their occlusion shapes. Both are empty when
+    /// the source reports carry no light data; the container then omits the
+    /// light sections and the runtime falls back to the documented defaults.
+    std::vector<light_shape_spec> light_shapes{};
+    std::vector<block_light_spec> block_lights{};
 };
 
 /// Serializes `spec` into an RVTB v1 file.
@@ -134,6 +178,7 @@ struct vanilla_table_info {
     std::uint32_t presets{0};
     std::uint32_t registries{0};
     std::uint32_t items{0};
+    std::uint32_t light_shapes{0};
 };
 
 /// One block record.
@@ -172,6 +217,26 @@ struct item_view {
     std::string_view name{};
     std::uint16_t max_stack_size{0};
     std::uint32_t max_damage{0};
+};
+
+/// One occlusion box of a light face shape, in block units.
+struct light_box_view {
+    std::array<double, 6> bounds{};
+};
+
+/// The box counts of one light shape's six faces.
+struct light_shape_view {
+    std::array<std::uint16_t, light_shape_faces> face_boxes{};
+};
+
+/// Light behaviour of one state as stored in the container.
+struct block_light_view {
+    std::uint8_t emission{0};
+    std::uint8_t dampening{15};
+    bool can_occlude{true};
+    bool use_shape_for_light_occlusion{false};
+    /// Index into the light shape table, or `no_light_shape`.
+    std::uint32_t shape{no_light_shape};
 };
 
 /// Read-only view over an RVTB v1 container.
@@ -267,6 +332,24 @@ class vanilla_tables {
     [[nodiscard]] auto find_item(std::string_view name) const
         -> std::optional<std::uint32_t>;
 
+    /// Whether the container carries per-state light records. A container
+    /// imported without the block light report does not, and the runtime falls
+    /// back to its documented defaults for every state.
+    [[nodiscard]] auto has_light() const noexcept -> bool {
+        return have_light_;
+    }
+    /// Light record of one state, in the container's dense state order.
+    [[nodiscard]] auto light_at(std::uint32_t state) const -> block_light_view;
+    [[nodiscard]] auto light_shape_count() const noexcept -> std::uint32_t {
+        return light_shapes_;
+    }
+    [[nodiscard]] auto light_shape_at(std::uint32_t shape) const
+        -> light_shape_view;
+    /// One box of one face of a light shape; the caller has bounds-checked the
+    /// shape and index through `light_shape_at`.
+    [[nodiscard]] auto light_box(std::uint32_t shape, std::uint8_t face,
+                                 std::uint16_t index) const -> light_box_view;
+
   private:
     struct section {
         std::uint32_t offset{0};
@@ -288,8 +371,13 @@ class vanilla_tables {
     section biomes_{};
     section registries_{};
     section items_{};
+    section light_states_{};
+    section light_shapes_section_{};
     section section_table_{};
     vanilla_table_info info_{};
+    bool have_light_{false};
+    std::uint32_t light_shapes_{0};
+    std::uint32_t light_boxes_{0};
 
     std::vector<std::uint32_t> block_index_{};
     std::vector<std::uint32_t> state_index_{};
@@ -305,6 +393,9 @@ struct vanilla_reports {
     /// Item name and the `components/item/<name>.json` document that holds the
     /// item's default data components.
     std::vector<std::pair<std::string, std::string>> item_components{};
+    /// The `block_light/light.json` report, empty when the reports directory
+    /// carries none. A container imported without it has no light sections.
+    std::string block_light_json{};
 };
 
 /// Converts the report documents into a container. Ordering and validation
@@ -331,6 +422,7 @@ struct vanilla_import_result {
     std::uint32_t presets{0};
     std::uint32_t registries{0};
     std::uint32_t items{0};
+    std::uint32_t light_shapes{0};
 };
 
 /// Reads `blocks.json`, `biome_parameters/minecraft/*.json`,

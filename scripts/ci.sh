@@ -1271,6 +1271,12 @@ echo "  manifest + data extraction OK"
 python3 tools/worldgen/test_extract_templates.py \
     || die "worldgen: template extractor accepted an unsafe path"
 echo "  template extractor: traversal and absolute paths rejected"
+python3 tools/light/test_pack_report.py \
+    || die "light: block light report packer accepted inconsistent data"
+python3 tools/light/pack_report.py \
+    --check "$ROOT/content/vanilla/26.3/reports/block_light" \
+    || die "light: tracked block light report does not match its manifest"
+echo "  block light report packer and tracked report OK"
 
 say "[10/11] Crashpad minidump smoke"
 HANDLER="$(find "$CONAN_HOME_DIR" -type f -name crashpad_handler \

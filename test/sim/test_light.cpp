@@ -200,6 +200,42 @@ void write_columns(
     fixture.store.emplace(std::move(*created));
 }
 
+/// Light table of the synthetic fixture. The values are the behaviour the
+/// tests describe, not a copy of the game tables: they are installed before a
+/// column loads, exactly like the runtime installs the content table.
+[[nodiscard]] auto make_light_table() -> sim::block_light_table {
+    sim::block_light_table table{};
+    const auto add = [&table](std::string_view key, std::uint8_t emission,
+                              std::uint8_t dampening) {
+        table.insert(std::string{key},
+                     sim::block_light_property{.emission = emission,
+                                               .dampening = dampening});
+    };
+    add("minecraft:air", 0, 0);
+    add("minecraft:cave_air", 0, 0);
+    add("minecraft:void_air", 0, 0);
+    add("minecraft:stone", 0, 15);
+    add("minecraft:torch", 14, 0);
+    add("minecraft:glass", 0, 0);
+    add("minecraft:oak_leaves", 0, 1);
+    add("minecraft:water", 0, 1);
+
+    // A bottom slab: not solid enough to be opaque, with a full bottom face
+    // shape. The reference shape has an empty top face (the open upper half),
+    // so the slab cell itself still sees the sky while the edge below it is
+    // closed.
+    sim::block_light_shape slab{};
+    sim::block_light_box full{};
+    full.bounds = {0.0, 0.0, 0.0, 1.0, 1.0, 1.0};
+    slab.faces[static_cast<std::size_t>(sim::light_face::down)].push_back(full);
+    const auto *slab_shape = table.append_shape(std::move(slab));
+    table.insert("minecraft:smooth_stone_slab[type=bottom,waterlogged=false]",
+                 sim::block_light_property{
+                     .emission = 0, .dampening = 0, .shape = slab_shape});
+    add("minecraft:smooth_stone_slab[type=double,waterlogged=false]", 0, 15);
+    return table;
+}
+
 [[nodiscard]] auto open_world(world_fixture &fixture)
     -> std::optional<sim::world> {
     auto opened{sim::world::open(fixture.directory.string())};
@@ -207,6 +243,9 @@ void write_columns(
     if (!opened) {
         return std::nullopt;
     }
+    // A world without a light table runs on the fallback: every state opaque
+    // and emitting nothing. Install one before the first column loads.
+    opened->set_block_light_table(make_light_table());
     return std::optional<sim::world>{std::move(*opened)};
 }
 
@@ -515,4 +554,150 @@ suite<"sim/light"> light_tests = [] {
             const auto after{light_bytes_of(*world, world::chunk_pos{0, 0})};
             expect(before == after);
         };
+
+    "glass lets the sky source reach the cells around and inside it"_test = [] {
+        world_fixture fixture{};
+        std::vector<block_override> overrides{};
+        overrides.push_back(
+            block_override{.x = 8, .y = 64, .z = 8, .key = "minecraft:glass"});
+        std::vector<std::pair<world::chunk_pos, storage::chunk>> columns{};
+        columns.emplace_back(world::chunk_pos{0, 0}, make_column(overrides));
+        write_columns(fixture, columns);
+        auto world{open_world(fixture)};
+        expect(world.has_value());
+        if (!world) {
+            return;
+        }
+        expect(world->ensure_chunk(world::chunk_pos{0, 0}).has_value());
+        expect(eq(static_cast<int>(sky(*world, 8, 65, 8)), 15));
+        expect(eq(static_cast<int>(sky(*world, 8, 64, 8)), 15));
+        expect(eq(static_cast<int>(sky(*world, 8, 63, 8)), 0));
+    };
+
+    "leaves lose one sky level per block in a shaft closed to the sides"_test =
+        [] {
+            world_fixture fixture{};
+            std::vector<block_override> overrides{};
+            constexpr std::string_view leaves{"minecraft:oak_leaves"};
+            for (auto y{64}; y <= 66; ++y) {
+                overrides.push_back(
+                    block_override{.x = 8, .y = y, .z = 8, .key = leaves});
+            }
+            // Stone walls close the shaft so only the vertical path carries
+            // sky light; the surrounding columns are opaque down to the floor.
+            for (auto y{64}; y <= 66; ++y) {
+                overrides.push_back(stone_at(7, y, 8));
+                overrides.push_back(stone_at(9, y, 8));
+                overrides.push_back(stone_at(8, y, 7));
+                overrides.push_back(stone_at(8, y, 9));
+            }
+            std::vector<std::pair<world::chunk_pos, storage::chunk>> columns{};
+            columns.emplace_back(world::chunk_pos{0, 0},
+                                 make_column(overrides));
+            write_columns(fixture, columns);
+            auto world{open_world(fixture)};
+            expect(world.has_value());
+            if (!world) {
+                return;
+            }
+            expect(world->ensure_chunk(world::chunk_pos{0, 0}).has_value());
+            expect(eq(static_cast<int>(sky(*world, 8, 67, 8)), 15));
+            expect(eq(static_cast<int>(sky(*world, 8, 66, 8)), 14));
+            expect(eq(static_cast<int>(sky(*world, 8, 65, 8)), 13));
+            expect(eq(static_cast<int>(sky(*world, 8, 64, 8)), 12));
+        };
+
+    "a bottom slab closes the light step below its solid face"_test = [] {
+        world_fixture fixture{};
+        std::vector<block_override> overrides{};
+        constexpr std::string_view slab{
+            "minecraft:smooth_stone_slab[type=bottom,waterlogged=false]"};
+        overrides.push_back(
+            block_override{.x = 8, .y = 66, .z = 8, .key = slab});
+        // A one-cell stone shaft from the torch up past the slab keeps both
+        // kinds of light on the vertical path.
+        for (auto y{64}; y <= 68; ++y) {
+            for (const auto &[x, z] :
+                 std::array<std::pair<std::int32_t, std::int32_t>, 4>{
+                     std::pair{7, 8}, std::pair{9, 8}, std::pair{8, 7},
+                     std::pair{8, 9}}) {
+                overrides.push_back(stone_at(x, y, z));
+            }
+        }
+        overrides.push_back(torch_at(8, 64, 8));
+        std::vector<std::pair<world::chunk_pos, storage::chunk>> columns{};
+        columns.emplace_back(world::chunk_pos{0, 0}, make_column(overrides));
+        write_columns(fixture, columns);
+        auto world{open_world(fixture)};
+        expect(world.has_value());
+        if (!world) {
+            return;
+        }
+        expect(world->ensure_chunk(world::chunk_pos{0, 0}).has_value());
+        // The slab's empty top face keeps its cell a sky source, and its full
+        // bottom face shape closes the edge below: the cell under the slab is
+        // dark even though the cell above the slab is full.
+        expect(eq(static_cast<int>(sky(*world, 8, 67, 8)), 15));
+        expect(eq(static_cast<int>(sky(*world, 8, 66, 8)), 15));
+        expect(eq(static_cast<int>(sky(*world, 8, 65, 8)), 0));
+        // The torch below the slab lights the cells up to the slab and stops:
+        // the face shape blocks the step into the slab cell.
+        expect(eq(static_cast<int>(block_light(*world, 8, 64, 8)), 14));
+        expect(eq(static_cast<int>(block_light(*world, 8, 65, 8)), 13));
+        expect(eq(static_cast<int>(block_light(*world, 8, 66, 8)), 0));
+        expect(eq(static_cast<int>(block_light(*world, 8, 67, 8)), 0));
+        // Removing the slab opens the path: both the sky and the torch light
+        // reach the cells above.
+        const auto air{world->registry().find("minecraft:air")};
+        expect(air.has_value());
+        if (!air) {
+            return;
+        }
+        expect(world->set_block(sim::block_pos{8, 66, 8}, *air).has_value());
+        expect(eq(static_cast<int>(sky(*world, 8, 66, 8)), 15));
+        expect(eq(static_cast<int>(block_light(*world, 8, 66, 8)), 12));
+        expect(eq(static_cast<int>(block_light(*world, 8, 67, 8)), 11));
+    };
+
+    "a state the table does not carry is opaque and emits nothing"_test = [] {
+        world_fixture fixture{};
+        std::vector<block_override> overrides{};
+        overrides.push_back(block_override{
+            .x = 8, .y = 64, .z = 8, .key = "minecraft:mystery_block"});
+        std::vector<std::pair<world::chunk_pos, storage::chunk>> columns{};
+        columns.emplace_back(world::chunk_pos{0, 0}, make_column(overrides));
+        write_columns(fixture, columns);
+        auto world{open_world(fixture)};
+        expect(world.has_value());
+        if (!world) {
+            return;
+        }
+        expect(world->ensure_chunk(world::chunk_pos{0, 0}).has_value());
+        expect(eq(static_cast<int>(world->block_light().size()), 10));
+        // The fallback is opaque: the cell above the unknown block is still a
+        // sky source, but no sky light passes into the block, and the state
+        // emits nothing.
+        expect(eq(static_cast<int>(sky(*world, 8, 65, 8)), 15));
+        expect(eq(static_cast<int>(sky(*world, 8, 64, 8)), 0));
+        expect(eq(static_cast<int>(block_light(*world, 8, 64, 8)), 0));
+    };
+
+    "a world without a content table falls back to opaque states"_test = [] {
+        world_fixture fixture{};
+        std::vector<std::pair<world::chunk_pos, storage::chunk>> columns{};
+        const std::array<block_override, 0> empty{};
+        columns.emplace_back(world::chunk_pos{0, 0}, make_column(empty));
+        write_columns(fixture, columns);
+        auto opened{sim::world::open(fixture.directory.string())};
+        expect(opened.has_value());
+        if (!opened) {
+            return;
+        }
+        expect(opened->block_light().empty());
+        expect(opened->ensure_chunk(world::chunk_pos{0, 0}).has_value());
+        // No state of the fallback emits or lets light through, so the whole
+        // column is dark: this is the documented degraded mode, not a guess.
+        expect(eq(static_cast<int>(sky(*opened, 8, 319, 8)), 0));
+        expect(eq(static_cast<int>(sky(*opened, 8, 64, 8)), 0));
+    };
 };

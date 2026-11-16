@@ -135,6 +135,31 @@ auto sample_spec() -> vanilla_spec {
                   .max_stack_size = 1,
                   .max_damage = 1561},
     };
+    // Light records for the same states: air is transparent, the log states
+    // are opaque except the y-axis one which emits, and water damps by one
+    // and carries an occlusion shape on its default state.
+    light_shape_spec shape{};
+    shape.faces[0].push_back({0.0, 0.0, 0.0, 1.0, 0.5, 1.0});
+    shape.faces[1].push_back({0.0, 0.0, 0.0, 1.0, 0.5, 1.0});
+    spec.light_shapes = {shape};
+    for (const auto &block : spec.blocks) {
+        for (const auto &state : block.states) {
+            block_light_spec light{};
+            light.vanilla_id = state.vanilla_id;
+            if (block.name == "minecraft:air") {
+                light.dampening = 0;
+                light.can_occlude = false;
+            } else if (block.name == "minecraft:oak_log") {
+                light.emission = state.values.front() == "y" ? 15 : 0;
+                light.dampening = 15;
+            } else {
+                light.dampening = 1;
+                light.use_shape_for_light_occlusion = true;
+                light.shape = state.vanilla_id == 100 ? 0 : no_light_shape;
+            }
+            spec.block_lights.push_back(light);
+        }
+    }
     return spec;
 }
 
@@ -142,15 +167,15 @@ auto reports() -> vanilla_reports {
     vanilla_reports value;
     value.blocks_json = R"({
         "minecraft:stone": {
-            "states": [{"id": 1, "default": true}]
+            "states": [{"id": 0, "default": true}]
         },
         "minecraft:oak_stairs": {
             "properties": {"facing": ["north", "south"], "half": ["top", "bottom"]},
             "states": [
-                {"id": 20, "properties": {"facing": "north", "half": "bottom"}, "default": true},
-                {"id": 21, "properties": {"facing": "south", "half": "bottom"}},
-                {"id": 22, "properties": {"facing": "north", "half": "top"}},
-                {"id": 23, "properties": {"facing": "south", "half": "top"}}
+                {"id": 1, "properties": {"facing": "north", "half": "bottom"}, "default": true},
+                {"id": 2, "properties": {"facing": "south", "half": "bottom"}},
+                {"id": 3, "properties": {"facing": "north", "half": "top"}},
+                {"id": 4, "properties": {"facing": "south", "half": "top"}}
             ]
         }
     })";
@@ -177,6 +202,24 @@ auto reports() -> vanilla_reports {
             "minecraft:plains": {"protocol_id": 0}
         }}
     })";
+    value.block_light_json = R"({
+        "format": "refrain.block-light/1",
+        "game_version": "26.3",
+        "data_version": 5023,
+        "block_count": 2,
+        "state_count": 5,
+        "shape_count": 1,
+        "states": [
+            [0, 0, 15, 1, -1],
+            [1, 0, 0, 3, 0],
+            [2, 0, 0, 1, -1],
+            [3, 14, 1, 1, -1],
+            [4, 0, 1, 1, -1]
+        ],
+        "shapes": [
+            [[], [[0.0, 0.0, 0.0, 1.0, 0.5, 1.0]], [], [], [], []]
+        ]
+    })";
     value.item_components.emplace_back("minecraft:stone", R"({
         "components": {"minecraft:max_stack_size": 64}
     })");
@@ -188,6 +231,18 @@ auto reports() -> vanilla_reports {
         }
     })");
     return value;
+}
+
+auto build_sample_without_light() -> std::vector<std::byte> {
+    auto spec = sample_spec();
+    spec.light_shapes.clear();
+    spec.block_lights.clear();
+    auto bytes = build_vanilla_tables(spec);
+    expect(bytes.has_value());
+    if (!bytes.has_value()) {
+        return {};
+    }
+    return std::move(*bytes);
 }
 
 auto build_sample() -> std::vector<std::byte> {
@@ -374,7 +429,7 @@ suite<"data/vanilla-tables"> vanilla_tables_tests = [] {
         const auto state =
             tables->find_state("minecraft:oak_stairs[facing=north,half=top]");
         expect(state.has_value());
-        expect(tables->state_at(*state).vanilla_id == 22);
+        expect(tables->state_at(*state).vanilla_id == 3);
         const auto preset = tables->find_preset("minecraft:overworld");
         expect(preset.has_value());
         expect(tables->biome_parameter_count(*preset) == 2U);
@@ -430,7 +485,9 @@ suite<"data/vanilla-tables"> vanilla_tables_tests = [] {
     };
 
     "corrupted containers are rejected"_test = [] {
-        auto bytes = build_sample();
+        // The digest-only case needs trailing padding after the last section,
+        // so the fixture here carries no light sections.
+        auto bytes = build_sample_without_light();
         auto wrong_magic = bytes;
         wrong_magic[0] = std::byte{'X'};
         expect(!vanilla_tables::open(wrong_magic).has_value());
@@ -449,6 +506,98 @@ suite<"data/vanilla-tables"> vanilla_tables_tests = [] {
         expect(vanilla_tables::open(flipped, false).has_value());
     };
 
+    "round trip exposes per-state light records and occlusion shapes"_test =
+        [] {
+            auto bytes = build_sample();
+            auto tables = vanilla_tables::open(bytes);
+            expect(tables.has_value());
+            if (!tables.has_value()) {
+                return;
+            }
+            expect(tables->has_light());
+            expect(tables->light_shape_count() == 1U);
+            const auto air{tables->find_state("minecraft:air")};
+            const auto log{tables->find_state("minecraft:oak_log[axis=y]")};
+            const auto water{tables->find_state("minecraft:water[level=0]")};
+            expect(air.has_value());
+            expect(log.has_value());
+            expect(water.has_value());
+            if (air.has_value()) {
+                const auto light{tables->light_at(*air)};
+                expect(light.dampening == 0);
+                expect(!light.can_occlude);
+            }
+            if (log.has_value()) {
+                const auto light{tables->light_at(*log)};
+                expect(light.emission == 15);
+                expect(light.dampening == 15);
+            }
+            if (water.has_value()) {
+                const auto light{tables->light_at(*water)};
+                expect(light.dampening == 1);
+                expect(light.use_shape_for_light_occlusion);
+                expect(light.shape != no_light_shape);
+                const auto shape{tables->light_shape_at(light.shape)};
+                expect(shape.face_boxes[0] == 1U);
+                expect(shape.face_boxes[2] == 0U);
+                const auto box{tables->light_box(light.shape, 0, 0)};
+                expect(box.bounds[0] == 0.0);
+                expect(box.bounds[4] == 0.5);
+            }
+        };
+
+    "a container without light sections opens and reports no light data"_test =
+        [] {
+            auto spec = sample_spec();
+            spec.light_shapes.clear();
+            spec.block_lights.clear();
+            auto bytes = build_vanilla_tables(spec);
+            expect(bytes.has_value());
+            if (!bytes.has_value()) {
+                return;
+            }
+            auto tables = vanilla_tables::open(*bytes);
+            expect(tables.has_value());
+            if (!tables.has_value()) {
+                return;
+            }
+            expect(!tables->has_light());
+            expect(tables->light_shape_count() == 0U);
+            const auto state{tables->find_state("minecraft:air")};
+            expect(state.has_value());
+            if (state.has_value()) {
+                // The view answers the documented fallback for a container
+                // that does not carry light data.
+                const auto light{tables->light_at(*state)};
+                expect(light.dampening == 15);
+                expect(light.emission == 0);
+                expect(light.shape == no_light_shape);
+            }
+        };
+
+    "light records must cover every state exactly once"_test = [] {
+        auto duplicate = sample_spec();
+        duplicate.block_lights.pop_back();
+        duplicate.block_lights.push_back(duplicate.block_lights.front());
+        expect(!build_vanilla_tables(duplicate).has_value());
+
+        auto missing = sample_spec();
+        missing.block_lights.pop_back();
+        expect(!build_vanilla_tables(missing).has_value());
+
+        auto out_of_range = sample_spec();
+        out_of_range.block_lights.front().emission = 16;
+        expect(!build_vanilla_tables(out_of_range).has_value());
+
+        auto bad_shape = sample_spec();
+        bad_shape.block_lights.front().shape = 7;
+        expect(!build_vanilla_tables(bad_shape).has_value());
+
+        auto bad_box = sample_spec();
+        bad_box.light_shapes.front().faces[0].front()[0] = 2.0;
+        expect(!build_vanilla_tables(bad_box).has_value());
+    };
+
     "filesystem import writes tables and a manifest"_test = [] {
         const scratch_directory scratch;
         const auto reports_dir = scratch.path / "reports";
@@ -461,6 +610,8 @@ suite<"data/vanilla-tables"> vanilla_tables_tests = [] {
         expect(write_text_file(reports_dir / "biome_parameters" / "minecraft" /
                                    "overworld.json",
                                fixture.biome_presets.at(0).second));
+        expect(write_text_file(reports_dir / "block_light" / "light.json",
+                               fixture.block_light_json));
         for (const auto &[name, json] : fixture.item_components) {
             const auto short_name{name.substr(
                 name.find(':') == std::string::npos ? 0 : name.find(':') + 1)};
@@ -484,6 +635,7 @@ suite<"data/vanilla-tables"> vanilla_tables_tests = [] {
         expect(imported->presets == 1U);
         expect(imported->registries == 2U);
         expect(imported->items == 2U);
+        expect(imported->light_shapes == 1U);
 
         auto tables_bytes =
             refrain::core::io::read_file((out_dir / "tables.rvtb").string());
@@ -497,6 +649,28 @@ suite<"data/vanilla-tables"> vanilla_tables_tests = [] {
             if (tables.has_value()) {
                 expect(tables->block_count() == 2U);
                 expect(tables->item_count() == 2U);
+                expect(tables->has_light());
+                expect(tables->light_shape_count() == 1U);
+                const auto stairs{tables->find_state(
+                    "minecraft:oak_stairs[facing=south,half=top]")};
+                expect(stairs.has_value());
+                if (stairs.has_value()) {
+                    const auto light{tables->light_at(*stairs)};
+                    expect(light.emission == 0);
+                    expect(light.dampening == 1);
+                    expect(light.shape == no_light_shape);
+                }
+                const auto default_stairs{tables->find_state(
+                    "minecraft:oak_stairs[facing=north,half=bottom]")};
+                expect(default_stairs.has_value());
+                if (default_stairs.has_value()) {
+                    const auto light{tables->light_at(*default_stairs)};
+                    expect(light.shape != no_light_shape);
+                    const auto shape{tables->light_shape_at(light.shape)};
+                    expect(shape.face_boxes[1] == 1U);
+                    const auto box{tables->light_box(light.shape, 1, 0)};
+                    expect(box.bounds[4] == 0.5);
+                }
                 expect(tables
                            ->find_state(
                                "minecraft:oak_stairs[facing=south,half=top]")

@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <map>
@@ -70,6 +71,10 @@ void put_i32(std::vector<std::byte> &out, std::int32_t value) {
 
 void put_bytes(std::vector<std::byte> &out, std::span<const std::byte> bytes) {
     out.append_range(bytes);
+}
+
+void put_f64(std::vector<std::byte> &out, double value) {
+    append_le(out, std::bit_cast<std::uint64_t>(value));
 }
 
 using core::byte_order::load_le;
@@ -177,6 +182,29 @@ struct built_item {
     std::uint16_t max_stack_size{0};
     std::uint32_t max_damage{0};
 };
+
+struct built_light {
+    std::uint8_t emission{0};
+    std::uint8_t dampening{15};
+    std::uint8_t flags{0};
+    std::uint32_t shape{no_light_shape};
+};
+
+/// Flag bits of one stored light record.
+inline constexpr std::uint8_t light_flag_can_occlude = 1U;
+inline constexpr std::uint8_t light_flag_use_shape = 2U;
+
+/// Sentinel that stores "no occlusion shape" in the fixed-width record.
+inline constexpr std::uint16_t no_light_shape_u16 = 0xFFFFU;
+
+/// Number of bytes of one stored light record.
+constexpr std::size_t light_record_size = 8;
+
+/// Number of bytes of one stored light shape record.
+constexpr std::size_t light_shape_record_size = 16;
+
+/// Number of bytes of one stored light shape box.
+constexpr std::size_t light_box_size = 48;
 
 /// Canonical state key: `name` or `name[k=v,...]` with sorted property names.
 auto canonical_key(std::string_view block, std::span<const std::string> names,
@@ -604,6 +632,131 @@ auto build_vanilla_tables(const vanilla_spec &spec)
         put_u32(items_section, 0);
     }
 
+    std::vector<std::byte> light_states_section;
+    std::vector<std::byte> light_shapes_section;
+    if (!spec.block_lights.empty()) {
+        // One light record per dense state, in the same order as the state
+        // section. The report addresses records by the game's state id, while
+        // the container's state order is canonical (block name, then state
+        // key), so the records are reordered once here.
+        const auto shape_count = spec.light_shapes.size();
+        if (shape_count > 0xFFFFU) {
+            return std::unexpected{
+                fail("more than 65535 light occlusion shapes")};
+        }
+        std::uint64_t box_count = 0;
+        for (const auto &shape : spec.light_shapes) {
+            for (const auto &face : shape.faces) {
+                if (face.size() > max_light_boxes_per_face) {
+                    return std::unexpected{fail(
+                        "light shape face with more than " +
+                        std::to_string(max_light_boxes_per_face) + " boxes")};
+                }
+                for (const auto &box : face) {
+                    for (const auto value : box) {
+                        if (!std::isfinite(value)) {
+                            return std::unexpected{
+                                fail("non-finite light shape coordinate")};
+                        }
+                    }
+                    if (box[0] > box[3] || box[1] > box[4] || box[2] > box[5]) {
+                        return std::unexpected{
+                            fail("light shape box with min above max")};
+                    }
+                    ++box_count;
+                }
+            }
+        }
+        if (box_count > 0xFFFFFFFFULL) {
+            return std::unexpected{fail("too many light shape boxes")};
+        }
+        std::unordered_map<std::uint32_t, const block_light_spec *> by_id;
+        by_id.reserve(spec.block_lights.size());
+        for (const auto &light : spec.block_lights) {
+            if (light.emission > max_light_level ||
+                light.dampening > max_light_level) {
+                return std::unexpected{
+                    fail("light level out of range for a block state")};
+            }
+            if (light.shape != no_light_shape && light.shape >= shape_count) {
+                return std::unexpected{
+                    fail("light shape index out of range for a block state")};
+            }
+            if (!by_id.emplace(light.vanilla_id, &light).second) {
+                return std::unexpected{
+                    fail("duplicate light record for a block state")};
+            }
+        }
+        if (by_id.size() != out_states.size()) {
+            return std::unexpected{
+                fail("block light records do not cover every block state")};
+        }
+        std::vector<built_light> out_lights;
+        out_lights.reserve(out_states.size());
+        for (const auto &state : out_states) {
+            const auto found = by_id.find(state.vanilla_id);
+            if (found == by_id.end()) {
+                return std::unexpected{
+                    fail("block light records do not cover every block state")};
+            }
+            const auto &light = *found->second;
+            built_light built{};
+            built.emission = light.emission;
+            built.dampening = light.dampening;
+            built.flags = static_cast<std::uint8_t>(
+                (light.can_occlude ? light_flag_can_occlude : 0U) |
+                (light.use_shape_for_light_occlusion ? light_flag_use_shape
+                                                     : 0U));
+            built.shape = light.shape;
+            out_lights.push_back(built);
+        }
+
+        put_u32(light_states_section,
+                static_cast<std::uint32_t>(out_lights.size()));
+        for (const auto &light : out_lights) {
+            light_states_section.push_back(
+                static_cast<std::byte>(light.emission));
+            light_states_section.push_back(
+                static_cast<std::byte>(light.dampening));
+            light_states_section.push_back(static_cast<std::byte>(light.flags));
+            light_states_section.push_back(std::byte{0});
+            put_u16(light_states_section,
+                    light.shape == no_light_shape
+                        ? no_light_shape_u16
+                        : static_cast<std::uint16_t>(light.shape));
+            put_u16(light_states_section, 0);
+        }
+
+        put_u32(light_shapes_section, static_cast<std::uint32_t>(shape_count));
+        put_u32(light_shapes_section, static_cast<std::uint32_t>(box_count));
+        std::uint32_t first_box = 0;
+        std::vector<std::byte> shape_boxes;
+        for (const auto &shape : spec.light_shapes) {
+            put_u32(light_shapes_section, first_box);
+            std::size_t shape_boxes_count = 0;
+            for (std::size_t face = 0; face < light_shape_faces; ++face) {
+                const auto count = shape.faces[face].size();
+                light_shapes_section.push_back(static_cast<std::byte>(count));
+                shape_boxes_count += count;
+            }
+            for (std::size_t pad = 0; pad < 2; ++pad) {
+                light_shapes_section.push_back(std::byte{0});
+            }
+            for (std::size_t pad = 0; pad < 4; ++pad) {
+                light_shapes_section.push_back(std::byte{0});
+            }
+            first_box += static_cast<std::uint32_t>(shape_boxes_count);
+            for (const auto &face : shape.faces) {
+                for (const auto &box : face) {
+                    for (const auto value : box) {
+                        put_f64(shape_boxes, value);
+                    }
+                }
+            }
+        }
+        light_shapes_section.append_range(shape_boxes);
+    }
+
     std::vector<std::byte> block_properties_section;
     block_properties_section.reserve(block_property_ids.size());
     for (const auto id : block_property_ids) {
@@ -626,6 +779,12 @@ auto build_vanilla_tables(const vanilla_spec &spec)
         {.tag = {'S', 'T', 'A', 'T'}, .bytes = std::move(states_section)},
         {.tag = {'S', 'T', 'R', 'S'}, .bytes = std::move(strings)},
     };
+    if (!light_states_section.empty()) {
+        sections.push_back({.tag = {'L', 'G', 'H', 'T'},
+                            .bytes = std::move(light_states_section)});
+        sections.push_back({.tag = {'L', 'S', 'H', 'P'},
+                            .bytes = std::move(light_shapes_section)});
+    }
 
     std::size_t cursor = header_size + sections.size() * section_record_size;
     std::vector<std::uint32_t> offsets;
@@ -743,6 +902,8 @@ auto vanilla_tables::open(std::span<const std::byte> bytes, bool verify)
     bool have_biomes = false;
     bool have_registries = false;
     bool have_items = false;
+    bool have_light_states = false;
+    bool have_light_shapes = false;
 
     for (std::uint32_t i = 0; i < section_count; ++i) {
         const auto base =
@@ -794,6 +955,12 @@ auto vanilla_tables::open(std::span<const std::byte> bytes, bool verify)
         } else if (name == "ITMS") {
             table.items_ = record;
             have_items = true;
+        } else if (name == "LGHT") {
+            table.light_states_ = record;
+            have_light_states = true;
+        } else if (name == "LSHP") {
+            table.light_shapes_section_ = record;
+            have_light_shapes = true;
         }
     }
     if (!have_strings || !have_blocks || !have_block_properties ||
@@ -860,6 +1027,88 @@ auto vanilla_tables::open(std::span<const std::byte> bytes, bool verify)
     table.info_.items = load_le32(bytes, table.items_.offset);
     if (table.items_.size < 4U + table.info_.items * item_record_size) {
         return std::unexpected{fail("item section truncated")};
+    }
+    if (have_light_states != have_light_shapes) {
+        return std::unexpected{fail("incomplete light sections")};
+    }
+    if (have_light_states) {
+        const auto count = load_le32(bytes, table.light_states_.offset);
+        if (count != table.info_.states) {
+            return std::unexpected{
+                fail("light record count does not match the state count")};
+        }
+        if (table.light_states_.size <
+            4U + static_cast<std::uint64_t>(count) * light_record_size) {
+            return std::unexpected{fail("light state section truncated")};
+        }
+        const auto shape_count =
+            load_le32(bytes, table.light_shapes_section_.offset);
+        const auto box_count =
+            load_le32(bytes, table.light_shapes_section_.offset + 4U);
+        if (shape_count > 0xFFFFU) {
+            return std::unexpected{fail("too many light shapes")};
+        }
+        const auto required =
+            8U +
+            static_cast<std::uint64_t>(shape_count) * light_shape_record_size +
+            static_cast<std::uint64_t>(box_count) * light_box_size;
+        if (table.light_shapes_section_.size < required) {
+            return std::unexpected{fail("light shape section truncated")};
+        }
+        table.info_.light_shapes = shape_count;
+        table.light_shapes_ = shape_count;
+        table.light_boxes_ = box_count;
+        table.have_light_ = true;
+        const auto light_base = table.light_states_.offset + 4U;
+        for (std::uint32_t i = 0; i < count; ++i) {
+            const auto base = light_base + i * light_record_size;
+            const auto emission = std::to_integer<std::uint8_t>(bytes[base]);
+            const auto dampening =
+                std::to_integer<std::uint8_t>(bytes[base + 1U]);
+            const auto flags = std::to_integer<std::uint8_t>(bytes[base + 2U]);
+            const auto shape = load_le16(bytes, base + 4U);
+            if (emission > max_light_level || dampening > max_light_level ||
+                (flags & ~(light_flag_can_occlude | light_flag_use_shape)) !=
+                    0U) {
+                return std::unexpected{fail("light state record invalid")};
+            }
+            if (shape != no_light_shape_u16 && shape >= shape_count) {
+                return std::unexpected{fail("light state shape out of range")};
+            }
+        }
+        const auto shape_base = table.light_shapes_section_.offset + 8U;
+        const auto box_base =
+            shape_base +
+            static_cast<std::size_t>(shape_count) * light_shape_record_size;
+        for (std::uint32_t i = 0; i < shape_count; ++i) {
+            const auto base = shape_base + i * light_shape_record_size;
+            std::uint64_t boxes = 0;
+            for (std::size_t face = 0; face < light_shape_faces; ++face) {
+                const auto face_boxes =
+                    std::to_integer<std::uint8_t>(bytes[base + 4U + face]);
+                if (face_boxes > max_light_boxes_per_face) {
+                    return std::unexpected{
+                        fail("light shape face has too many boxes")};
+                }
+                boxes += face_boxes;
+            }
+            const auto first_box = load_le32(bytes, base);
+            if (static_cast<std::uint64_t>(first_box) + boxes > box_count) {
+                return std::unexpected{fail("light shape boxes out of range")};
+            }
+        }
+        for (std::uint32_t i = 0; i < box_count; ++i) {
+            const auto base =
+                box_base + static_cast<std::size_t>(i) * light_box_size;
+            for (std::size_t coordinate = 0; coordinate < 6; ++coordinate) {
+                const auto value = std::bit_cast<double>(load_le64(
+                    bytes, base + coordinate * sizeof(std::uint64_t)));
+                if (!std::isfinite(value)) {
+                    return std::unexpected{
+                        fail("non-finite light shape coordinate")};
+                }
+            }
+        }
     }
 
     const auto block_base = table.blocks_.offset + 4U;
@@ -1001,6 +1250,70 @@ auto vanilla_tables::open(std::span<const std::byte> bytes, bool verify)
     std::ranges::sort(table.vanilla_index_);
 
     return table;
+}
+
+auto vanilla_tables::light_at(std::uint32_t state) const -> block_light_view {
+    block_light_view view{};
+    if (!have_light_ || state >= info_.states) {
+        return view;
+    }
+    const auto base = light_states_.offset + 4U +
+                      static_cast<std::size_t>(state) * light_record_size;
+    view.emission = std::to_integer<std::uint8_t>(bytes_[base]);
+    view.dampening = std::to_integer<std::uint8_t>(bytes_[base + 1U]);
+    const auto flags = std::to_integer<std::uint8_t>(bytes_[base + 2U]);
+    view.can_occlude = (flags & light_flag_can_occlude) != 0U;
+    view.use_shape_for_light_occlusion = (flags & light_flag_use_shape) != 0U;
+    const auto shape = load_le16(bytes_, base + 4U);
+    view.shape = shape == no_light_shape_u16
+                     ? no_light_shape
+                     : static_cast<std::uint32_t>(shape);
+    return view;
+}
+
+auto vanilla_tables::light_shape_at(std::uint32_t shape) const
+    -> light_shape_view {
+    light_shape_view view{};
+    if (!have_light_ || shape >= light_shapes_) {
+        return view;
+    }
+    const auto base = light_shapes_section_.offset + 8U +
+                      static_cast<std::size_t>(shape) * light_shape_record_size;
+    for (std::size_t face = 0; face < light_shape_faces; ++face) {
+        view.face_boxes[face] =
+            std::to_integer<std::uint8_t>(bytes_[base + 4U + face]);
+    }
+    return view;
+}
+
+auto vanilla_tables::light_box(std::uint32_t shape, std::uint8_t face,
+                               std::uint16_t index) const -> light_box_view {
+    light_box_view view{};
+    if (!have_light_ || shape >= light_shapes_ || face >= light_shape_faces) {
+        return view;
+    }
+    const auto shape_base =
+        light_shapes_section_.offset + 8U +
+        static_cast<std::size_t>(shape) * light_shape_record_size;
+    const auto first_box = load_le32(bytes_, shape_base);
+    std::uint64_t offset = first_box;
+    for (std::size_t before = 0; before < face; ++before) {
+        offset +=
+            std::to_integer<std::uint8_t>(bytes_[shape_base + 4U + before]);
+    }
+    offset += index;
+    if (offset >= light_boxes_) {
+        return view;
+    }
+    const auto box_base =
+        light_shapes_section_.offset + 8U +
+        static_cast<std::size_t>(light_shapes_) * light_shape_record_size +
+        static_cast<std::size_t>(offset) * light_box_size;
+    for (std::size_t coordinate = 0; coordinate < 6; ++coordinate) {
+        view.bounds[coordinate] = std::bit_cast<double>(
+            load_le64(bytes_, box_base + coordinate * sizeof(std::uint64_t)));
+    }
+    return view;
 }
 
 auto vanilla_tables::string_at(std::uint32_t index) const -> std::string_view {
