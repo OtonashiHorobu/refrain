@@ -270,7 +270,7 @@ const suite mod_host_tests = [] {
         }
     };
 
-    "mod_host/rejects a missing external library"_test = [] {
+    "mod_host/rejects a native entry missing from the package"_test = [] {
         mod::static_mod_registry registry{};
         auto plan{make_gamepack("\"refrain.test.external@1.0.0\"")};
         expect(static_cast<bool>(plan));
@@ -278,16 +278,23 @@ const suite mod_host_tests = [] {
             return;
         }
         auto manifest{make_manifest("refrain.test.external")};
-        manifest += "\n[entry]\nnative = \"lib/libexternal.so\"\n";
+        manifest += "\n[entry]\nloader = \"native\"\n"
+                    "native = \"lib/libexternal.so\"\n";
         image_builder builder{};
         builder.add("refrain.test.external", std::move(manifest));
         refrain::mod::host host{registry};
         auto loaded{host.load(*plan, builder.build())};
         expect(!loaded);
         if (!loaded) {
-            expect(loaded.error().code == error_code::io_error);
-            expect(loaded.error().message.find("cannot load native entry") !=
+            // The native loader reads the entry from the package source, so a
+            // declared member that was never packed fails closed before any
+            // library is opened.
+            expect(loaded.error().code == error_code::not_found);
+            expect(loaded.error().message.find("native entry") !=
                    std::string::npos);
+            expect(loaded.error().message.find("refrain.test.external") !=
+                   std::string::npos);
+            expect(loaded.error().message.find("native") != std::string::npos);
         }
     };
 
@@ -299,15 +306,19 @@ const suite mod_host_tests = [] {
             return;
         }
         auto manifest{make_manifest("refrain.test.external")};
-        manifest += "\n[entry]\nwasm = \"script.wasm\"\n";
+        manifest += "\n[entry]\nloader = \"wasm\"\nwasm = \"script.wasm\"\n";
         image_builder builder{};
         builder.add("refrain.test.external", std::move(manifest));
         refrain::mod::host host{registry};
         auto loaded{host.load(*plan, builder.build())};
         expect(!loaded);
         if (!loaded) {
+            // The wasm loader is not built into this host yet: the load fails
+            // closed and names the loader and the active ones.
             expect(loaded.error().code == error_code::unsupported);
-            expect(loaded.error().message.find("WASM") != std::string::npos);
+            expect(loaded.error().message.find("wasm") != std::string::npos);
+            expect(loaded.error().message.find("active mod loaders") !=
+                   std::string::npos);
         }
     };
 

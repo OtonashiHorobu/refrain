@@ -1,0 +1,144 @@
+// SPDX-License-Identifier: MIT
+//
+// SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
+//
+// `refrain:mod.loader` service contract v1.
+//
+// A loader is the execution environment a mod is loaded through. The host
+// activates one provider instance per loader id it trusts (`builtin`,
+// `native`, ...) and dispatches every manifest that names that loader through
+// `validate` and `load`. A loader provider is host bootstrap code: it is not a
+// mod, it cannot be selected by a gamepack, and a sandboxed loader cannot
+// register providers on behalf of its guest.
+
+module refrain::services::mod_loader;
+version 1.0.0;
+
+import refrain::core;
+
+/// Opaque handle for one mod instance a loader owns. Zero is invalid.
+handle<mod_instance>;
+
+/// How a loaded mod can be removed. The host records the declaration and the
+/// lifecycle layer never assumes a stronger guarantee than this.
+enum mod_loader_unload : u8 {
+    /// Guest state and host registrations are released; the mod can be
+    /// unloaded and loaded again in place.
+    clean = 0,
+    /// No new calls are dispatched, but resources stay allocated until the
+    /// process exits.
+    retire = 1,
+    /// The process must restart; nothing is released while it runs.
+    restart_required = 2,
+}
+
+/// Loader failures. Zero is success, so entries start at 1.
+enum mod_loader_error : u32 {
+    invalid_argument = 1,
+    not_found = 2,
+    already_exists = 3,
+    permission_denied = 4,
+    io_error = 5,
+    unsupported = 6,
+    version_mismatch = 7,
+    /// The loader refused an operation its sandbox policy forbids, for example
+    /// a guest asking to register a provider.
+    sandbox_violation = 8,
+    internal = 9,
+}
+
+/// Why the host is asking a loader to unload one instance.
+enum mod_unload_reason : u32 {
+    /// The host is shutting down.
+    shutdown = 0,
+    /// An explicit administrative request.
+    explicit_request = 1,
+    /// The instance is being replaced by a reload.
+    reload = 2,
+}
+
+/// What a loader can do. The host validates the declarations before it
+/// dispatches anything through the loader, and a provider that changes them
+/// while running fails the next load instead of silently reconfiguring.
+struct mod_loader_capabilities {
+    /// Loader id this provider implements; must equal the instance name the
+    /// host registered it on.
+    string loader_id;
+    /// Loader ABI major the provider implements, compared with the contract
+    /// ABI major the host was built against.
+    u32 abi_major;
+    /// Removal guarantee for every instance this loader owns.
+    mod_loader_unload unload;
+    /// Guest code runs in a sandbox: it may not register providers, claim
+    /// services or receive a raw provider table.
+    bool sandboxed;
+    /// The loader can load new instances while the host is running.
+    bool supports_hot_install;
+}
+
+/// Manifest subset the host hands to a loader. Strings are borrowed for the
+/// duration of the call.
+struct mod_entry_manifest {
+    string mod_id;
+    string version;
+    /// Manifest ABI major the mod was built against.
+    u32 abi;
+    /// Manifest side: 1 server, 2 client, 3 both.
+    u32 side;
+    /// Effective loader id the manifest resolves to.
+    string loader;
+    /// Package root, empty for manifests read from the built-in image.
+    string package_root;
+    /// Native shared library declared by `[entry].native`; empty when absent.
+    string native_path;
+    /// Script module declared by `[entry].wasm`; empty when absent.
+    string wasm_path;
+    /// Optional native entry symbol.
+    string symbol;
+    /// The composition plan selected this mod for provider code. A loader may
+    /// skip code execution when false and keep the package as data only.
+    bool activate_code;
+}
+
+/// One load attempt for an already validated manifest. The loader owns the
+/// instance from `load` until `unload` or process exit.
+struct mod_load_request {
+    mod_entry_manifest manifest;
+}
+
+service mod_loader : 1.0.0 {
+    side = server;
+    thread = main;
+    composition = instanced;
+    provides = [ "refrain:mod.loader" ];
+    requires = [ "refrain:core>=1.0.0" ];
+    capabilities = [ "builtin", "native", "sandboxed", "hot-install" ];
+
+    /// Fill in this loader's capabilities. The host calls it once at
+    /// registration and again before every dispatch to detect drift.
+    #[thread(main)]
+    fn capabilities(out mod_loader_capabilities caps) -> void;
+
+    /// Check the manifest before any mod code runs. A loader rejects the entry
+    /// shape it does not own; the host has already validated identity,
+    /// version, side and host requirements.
+    #[thread(main)] #[can_fail]
+    fn validate(in mod_entry_manifest entry) -> result<void, mod_loader_error>;
+
+    /// Load one validated manifest and return the handle the host records.
+    #[thread(main)] #[can_fail]
+    fn load(in mod_load_request request)
+        -> result<mod_instance, mod_loader_error>;
+
+    /// Release one instance. The loader's declared unload semantics bound what
+    /// it may actually release.
+    #[thread(main)] #[can_fail]
+    fn unload(mod_instance instance, mod_unload_reason reason)
+        -> result<void, mod_loader_error>;
+
+    /// Replace one instance with a freshly loaded one. Returns the new handle;
+    /// the old handle is invalid afterwards.
+    #[thread(main)] #[can_fail]
+    fn reload(mod_instance instance, in mod_load_request request)
+        -> result<mod_instance, mod_loader_error>;
+}

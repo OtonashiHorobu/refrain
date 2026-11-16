@@ -12,6 +12,7 @@ mods/<id>/
     data/       optional datapack resources
     assets/     optional client assets
     scripts/    optional scripts
+    lib/        optional native entry libraries, by platform triple
     src/        optional C++ sources linked into the server
 ```
 
@@ -46,7 +47,8 @@ services = ["example:content"]
 "refrain.core" = "^1.0.0"
 
 [entry]
-native = "libexample.so"
+loader = "native"
+native = "lib/x86_64-linux/libexample.so"
 ```
 
 `[mod]` carries the identity, a SemVer 2.0.0 version, the integer ABI major and
@@ -61,19 +63,97 @@ conjunction and `||` for alternation. `[optional_requires]` marks dependencies
 that may be absent.
 
 Static mods bundled with the server omit `[entry]`; their code is linked into
-the binary and paired with the manifest through the static registry. External
-packages are installed into a content store and read back through their install
-receipt: the runtime catalog is built from receipts, so an installed package's
-manifest and data are exactly the installed bytes.
+the binary, paired with the manifest through the static registry and executed
+by the implicit `builtin` loader. External packages are installed into a
+content store and read back through their install receipt: the runtime catalog
+is built from receipts, so an installed package's manifest and data are exactly
+the installed bytes.
 
-External native mods declare `[entry].native` and implement the C entry ABI in
-`include/refrain/mod/entry.h`; the loader calls `refrain_mod_main`, validates
-the descriptor ABI, and invokes `on_load` with the sealed host core table.
-Native code loading through an installed package depends on the loader contract
-that materialises the entry library from the content store; until it lands, a
-receipt-based native mod fails startup with the loader's diagnostic instead of
-loading from an uninstalled directory. External WASM mods (`[entry].wasm`) are
-rejected until the script runtime lands.
+Every external manifest declares `[entry].loader`, the loader that executes the
+package, and carries that loader's payload. External native mods use
+`loader = "native"` with `[entry].native` and implement the C entry ABI in
+`include/refrain/mod/entry.h`; the native loader reads the member from the
+installed package, calls `refrain_mod_main`, validates the descriptor ABI, and
+invokes `on_load` with the sealed host core table. External WASM mods
+(`loader = "wasm"` with `[entry].wasm`) are rejected until the script runtime
+lands. [Mod loaders](#mod-loaders) describes the contract and the dispatch
+rules.
+
+## Mod loaders
+
+A loader is the execution environment a mod package is loaded through. It is
+not a mod itself: the host bootstraps one provider instance of the instanced
+`refrain:mod.loader` service per loader id it trusts, and every package is
+dispatched through the instance named by its manifest.
+
+### Declaring a loader
+
+`[entry].loader` names the loader. A reserved first-party id (`native`,
+`wasm`, `lua`, `bukkit`) is unqualified; a third-party loader uses a namespaced
+id such as `com.example.loader`. `builtin` is reserved for the host itself and
+cannot be declared: a package without an `[entry]` table is internal and is
+loaded by the builtin loader.
+
+The loader id must match the payload shape of a first-party loader: `native`
+requires `[entry].native`, `wasm` requires `[entry].wasm`. A third-party loader
+defines its own payload keys; this parser only knows the shared ones and the
+loader validates the rest.
+
+A legacy external manifest without `[entry].loader` keeps loading, with the
+loader inferred from the payload (`native` for `[entry].native`, `wasm` for
+`[entry].wasm`). `refrain-tools mods check` reports the inference as
+deprecated, and new manifests always declare the loader explicitly.
+
+### Dispatch and fail-closed rules
+
+The host resolves a manifest's loader id to the active `refrain:mod.loader`
+provider instance with that name before any mod code runs. The provider
+declares its capabilities first; the host validates the loader id, the loader
+ABI major, the unload semantics and the sandbox flag, re-checks them before
+every dispatch and records the declared unload semantics on the loaded mod.
+
+The dispatch refuses to guess:
+
+- a loader id with no active instance fails the load, naming the id and the
+  active loader ids; an unknown namespaced id is `not_found`, a first-party
+  loader that is not built into this host (`wasm`, `lua`, ...) is
+  `unsupported`;
+- a loader whose capabilities change after registration fails the next load
+  instead of silently reconfiguring;
+- a sandboxed loader cannot register providers on behalf of its guest: the
+  registration is refused and the load fails with the sandbox diagnostic;
+- a loader cannot be selected or replaced by a gamepack, and a mod cannot
+  provide `refrain:mod.loader`.
+
+### Loader boundaries
+
+| Loader | Execution | Unload semantics | Status |
+|---|---|---|---|
+| `builtin` | host-owned: pairs the built-in image manifests with the statically linked code and calls the factory of every selected provider | `restart_required` | shipped |
+| `native` | host-owned: materialises the installed `[entry].native` member out of the content store, checks the entry ABI, opens the shared library and calls the entry point | `retire` | shipped |
+| `wasm` | script runtime with sandboxing and budgets | `clean` | reserved |
+| `lua` | script runtime with sandboxing and budgets | `clean` | reserved |
+| `bukkit` | optional standalone mod that embeds a JVM and manages its own plugin directory | declared by that mod | future ecosystem |
+
+The `builtin` and `native` loaders are host bootstrap code: they wrap the
+static mod registry and the dynamic-library entry ABI the host already owns, so
+they are registered by the host itself instead of shipping as a mod. A
+third-party loader ships as a mod that provides its own instance; until that
+mechanism lands, a manifest naming one fails closed.
+
+The native loader copies the entry library into a private host-owned directory
+before opening it: an installed package keeps its members in the content store,
+so the manifest path is a package member and never a filesystem path next to a
+manifest. The copy is named after the member digest and removed with the host;
+the bytes are the installed, receipt-checked bytes.
+
+The loader's unload semantics are recorded for the lifecycle layer: the host
+never assumes a stronger guarantee than the loader declared. Actual instance
+unload and reload are refused by the builtin and native loaders until the
+lifecycle layer can honour their declared semantics.
+
+`refrain-tools mods load` prints the registered loaders and, for every loaded
+mod, the loader that executed it and the recorded unload semantics.
 
 ## Build profiles
 
@@ -258,9 +338,22 @@ REFRAIN_MOD_MAIN(refrain_mod_main) {
 }
 ```
 
-The host validates `struct_size`, `abi_major` and `on_load` before calling
-`on_load`; failures abort startup with the mod id. The shared library stays
-loaded for the process lifetime and `on_unload` runs at shutdown.
+The manifest declares the native loader and the packaged member:
+
+```toml
+[entry]
+loader = "native"
+native = "lib/x86_64-linux/libexample.so"
+symbol = "refrain_mod_main"   # optional
+```
+
+The native loader reads the member from the installed package (verifying it
+against the install receipt), copies it into a private host directory the
+dynamic loader can open, and validates the manifest entry ABI, the descriptor
+`struct_size`, `abi_major` and `on_load` before calling `on_load`; failures
+abort startup with the mod id. The shared library stays loaded for the process
+lifetime and `on_unload` runs at shutdown, which is the loader's `retire`
+semantics.
 
 ## Host runtime
 

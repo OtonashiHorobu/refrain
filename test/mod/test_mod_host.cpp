@@ -475,7 +475,9 @@ const suite mod_host_provider_activation_tests = [] {
         expect(static_cast<bool>(good.status))
             << (good.status ? std::string{"load ok"}
                             : good.status.error().message);
-        expect(good.providers == 1U);
+        // The two host-bootstrap mod loaders are registered on the
+        // `refrain:mod.loader` service before the composition's provider.
+        expect(good.providers == 3U);
     };
 };
 

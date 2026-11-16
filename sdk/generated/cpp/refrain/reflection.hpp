@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 27adb7195e7523ba
+// Schema hash: ba0b7f4fa5ba5492
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
@@ -2789,6 +2789,40 @@ template <> struct custom_traits<::refrain::services::data_packs::pack_info> {
         refrain::reflect::custom_field{"version", &::refrain::services::data_packs::pack_info::version},
         refrain::reflect::custom_field{"pack_format", &::refrain::services::data_packs::pack_info::pack_format},
         refrain::reflect::custom_field{"file_count", &::refrain::services::data_packs::pack_info::file_count});
+};
+
+/// Generated RIDL struct 'refrain::services::mod_loader::mod_loader_capabilities'.
+template <> struct custom_traits<::refrain::services::mod_loader::mod_loader_capabilities> {
+    static constexpr std::string_view type_name = "refrain::services::mod_loader::mod_loader_capabilities";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"loader_id", &::refrain::services::mod_loader::mod_loader_capabilities::loader_id},
+        refrain::reflect::custom_field{"abi_major", &::refrain::services::mod_loader::mod_loader_capabilities::abi_major},
+        refrain::reflect::custom_field{"unload", &::refrain::services::mod_loader::mod_loader_capabilities::unload},
+        refrain::reflect::custom_field{"sandboxed", &::refrain::services::mod_loader::mod_loader_capabilities::sandboxed},
+        refrain::reflect::custom_field{"supports_hot_install", &::refrain::services::mod_loader::mod_loader_capabilities::supports_hot_install});
+};
+
+/// Generated RIDL struct 'refrain::services::mod_loader::mod_entry_manifest'.
+template <> struct custom_traits<::refrain::services::mod_loader::mod_entry_manifest> {
+    static constexpr std::string_view type_name = "refrain::services::mod_loader::mod_entry_manifest";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"mod_id", &::refrain::services::mod_loader::mod_entry_manifest::mod_id},
+        refrain::reflect::custom_field{"version", &::refrain::services::mod_loader::mod_entry_manifest::version},
+        refrain::reflect::custom_field{"abi", &::refrain::services::mod_loader::mod_entry_manifest::abi},
+        refrain::reflect::custom_field{"side", &::refrain::services::mod_loader::mod_entry_manifest::side},
+        refrain::reflect::custom_field{"loader", &::refrain::services::mod_loader::mod_entry_manifest::loader},
+        refrain::reflect::custom_field{"package_root", &::refrain::services::mod_loader::mod_entry_manifest::package_root},
+        refrain::reflect::custom_field{"native_path", &::refrain::services::mod_loader::mod_entry_manifest::native_path},
+        refrain::reflect::custom_field{"wasm_path", &::refrain::services::mod_loader::mod_entry_manifest::wasm_path},
+        refrain::reflect::custom_field{"symbol", &::refrain::services::mod_loader::mod_entry_manifest::symbol},
+        refrain::reflect::custom_field{"activate_code", &::refrain::services::mod_loader::mod_entry_manifest::activate_code});
+};
+
+/// Generated RIDL struct 'refrain::services::mod_loader::mod_load_request'.
+template <> struct custom_traits<::refrain::services::mod_loader::mod_load_request> {
+    static constexpr std::string_view type_name = "refrain::services::mod_loader::mod_load_request";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"manifest", &::refrain::services::mod_loader::mod_load_request::manifest});
 };
 
 /// Generated RIDL struct 'refrain::services::net_protocol::protocol_descriptor'.

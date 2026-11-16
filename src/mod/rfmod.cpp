@@ -331,8 +331,11 @@ struct owned_file {
 
 // --- pack_mod_directory helpers -------------------------------------------
 
-constexpr std::array<std::string_view, 3> content_directories{"data", "assets",
-                                                              "scripts"};
+// Shipped top-level directories. `lib/` carries native entry libraries: an
+// installed package is the only external load source, so the native loader
+// materialises its entry from this packaged member.
+constexpr std::array<std::string_view, 4> content_directories{"data", "assets",
+                                                              "scripts", "lib"};
 constexpr std::array<std::string_view, 2> root_metadata_files{"LICENSE",
                                                               "NOTICE"};
 

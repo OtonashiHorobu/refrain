@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 27adb7195e7523ba
+// Schema hash: ba0b7f4fa5ba5492
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_METADATA_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_METADATA_HPP
@@ -235,6 +235,49 @@ inline constexpr std::array<field_entry, 5> refrain_services_data_packs_pack_inf
     field_entry{"version" , "string", 32, 16, 0},
     field_entry{"pack_format" , "u32", 48, 4, 0},
     field_entry{"file_count" , "u64", 56, 8, 0},
+};
+inline constexpr std::array<enum_value_entry, 3> refrain_services_mod_loader_mod_loader_unload_values{
+    enum_value_entry{"clean" , 0},
+    enum_value_entry{"retire" , 1},
+    enum_value_entry{"restart_required" , 2},
+};
+inline constexpr std::array<enum_value_entry, 9> refrain_services_mod_loader_mod_loader_error_values{
+    enum_value_entry{"invalid_argument" , 1},
+    enum_value_entry{"not_found" , 2},
+    enum_value_entry{"already_exists" , 3},
+    enum_value_entry{"permission_denied" , 4},
+    enum_value_entry{"io_error" , 5},
+    enum_value_entry{"unsupported" , 6},
+    enum_value_entry{"version_mismatch" , 7},
+    enum_value_entry{"sandbox_violation" , 8},
+    enum_value_entry{"internal" , 9},
+};
+inline constexpr std::array<enum_value_entry, 3> refrain_services_mod_loader_mod_unload_reason_values{
+    enum_value_entry{"shutdown" , 0},
+    enum_value_entry{"explicit_request" , 1},
+    enum_value_entry{"reload" , 2},
+};
+inline constexpr std::array<field_entry, 5> refrain_services_mod_loader_mod_loader_capabilities_fields{
+    field_entry{"loader_id" , "string", 8, 16, 0},
+    field_entry{"abi_major" , "u32", 24, 4, 0},
+    field_entry{"unload" , "refrain::services::mod_loader::mod_loader_unload", 28, 1, 0},
+    field_entry{"sandboxed" , "bool", 29, 1, 0},
+    field_entry{"supports_hot_install" , "bool", 30, 1, 0},
+};
+inline constexpr std::array<field_entry, 10> refrain_services_mod_loader_mod_entry_manifest_fields{
+    field_entry{"mod_id" , "string", 8, 16, 0},
+    field_entry{"version" , "string", 24, 16, 0},
+    field_entry{"abi" , "u32", 40, 4, 0},
+    field_entry{"side" , "u32", 44, 4, 0},
+    field_entry{"loader" , "string", 48, 16, 0},
+    field_entry{"package_root" , "string", 64, 16, 0},
+    field_entry{"native_path" , "string", 80, 16, 0},
+    field_entry{"wasm_path" , "string", 96, 16, 0},
+    field_entry{"symbol" , "string", 112, 16, 0},
+    field_entry{"activate_code" , "bool", 128, 1, 0},
+};
+inline constexpr std::array<field_entry, 1> refrain_services_mod_loader_mod_load_request_fields{
+    field_entry{"manifest" , "refrain::services::mod_loader::mod_entry_manifest", 8, 136, 0},
 };
 inline constexpr std::array<enum_value_entry, 4> refrain_services_net_protocol_protocol_edition_values{
     enum_value_entry{"java" , 0},
@@ -604,7 +647,7 @@ inline constexpr std::array<field_entry, 3> refrain_services_worldgen_generate_o
 };
 } // namespace detail
 
-inline constexpr std::array<type_entry, 80> types{
+inline constexpr std::array<type_entry, 86> types{
     type_entry{"refrain::core::core_error", 1, 4, 4, std::span<const field_entry>{}, std::span<const enum_value_entry>{detail::refrain_core_core_error_values}},
     type_entry{"refrain::core::chunk_status", 1, 4, 4, std::span<const field_entry>{}, std::span<const enum_value_entry>{detail::refrain_core_chunk_status_values}},
     type_entry{"refrain::core::block_face", 1, 1, 1, std::span<const field_entry>{}, std::span<const enum_value_entry>{detail::refrain_core_block_face_values}},
@@ -630,6 +673,12 @@ inline constexpr std::array<type_entry, 80> types{
     type_entry{"refrain::services::data_packs::pack_error", 1, 4, 4, std::span<const field_entry>{}, std::span<const enum_value_entry>{detail::refrain_services_data_packs_pack_error_values}},
     type_entry{"refrain::services::data_packs::pack_source", 0, 32, 8, std::span<const field_entry>{detail::refrain_services_data_packs_pack_source_fields}, std::span<const enum_value_entry>{}},
     type_entry{"refrain::services::data_packs::pack_info", 0, 64, 8, std::span<const field_entry>{detail::refrain_services_data_packs_pack_info_fields}, std::span<const enum_value_entry>{}},
+    type_entry{"refrain::services::mod_loader::mod_loader_unload", 1, 1, 1, std::span<const field_entry>{}, std::span<const enum_value_entry>{detail::refrain_services_mod_loader_mod_loader_unload_values}},
+    type_entry{"refrain::services::mod_loader::mod_loader_error", 1, 4, 4, std::span<const field_entry>{}, std::span<const enum_value_entry>{detail::refrain_services_mod_loader_mod_loader_error_values}},
+    type_entry{"refrain::services::mod_loader::mod_unload_reason", 1, 4, 4, std::span<const field_entry>{}, std::span<const enum_value_entry>{detail::refrain_services_mod_loader_mod_unload_reason_values}},
+    type_entry{"refrain::services::mod_loader::mod_loader_capabilities", 0, 32, 8, std::span<const field_entry>{detail::refrain_services_mod_loader_mod_loader_capabilities_fields}, std::span<const enum_value_entry>{}},
+    type_entry{"refrain::services::mod_loader::mod_entry_manifest", 0, 136, 8, std::span<const field_entry>{detail::refrain_services_mod_loader_mod_entry_manifest_fields}, std::span<const enum_value_entry>{}},
+    type_entry{"refrain::services::mod_loader::mod_load_request", 0, 144, 8, std::span<const field_entry>{detail::refrain_services_mod_loader_mod_load_request_fields}, std::span<const enum_value_entry>{}},
     type_entry{"refrain::services::net_protocol::protocol_edition", 1, 4, 4, std::span<const field_entry>{}, std::span<const enum_value_entry>{detail::refrain_services_net_protocol_protocol_edition_values}},
     type_entry{"refrain::services::net_protocol::protocol_error", 1, 4, 4, std::span<const field_entry>{}, std::span<const enum_value_entry>{detail::refrain_services_net_protocol_protocol_error_values}},
     type_entry{"refrain::services::net_protocol::protocol_event", 1, 4, 4, std::span<const field_entry>{}, std::span<const enum_value_entry>{detail::refrain_services_net_protocol_protocol_event_values}},
@@ -687,28 +736,29 @@ inline constexpr std::array<type_entry, 80> types{
     type_entry{"refrain::services::worldgen::generate_outcome", 0, 24, 8, std::span<const field_entry>{detail::refrain_services_worldgen_generate_outcome_fields}, std::span<const enum_value_entry>{}},
 };
 
-inline constexpr std::array<contract_entry, 18> contracts{
-    contract_entry{"refrain:host.core", 1, 0, 0, "27adb7195e7523ba", 12},
-    contract_entry{"refrain:host.kernel", 1, 0, 0, "27adb7195e7523ba", 6},
-    contract_entry{"refrain:host.metadata", 1, 0, 0, "27adb7195e7523ba", 8},
-    contract_entry{"refrain:host.platform", 1, 0, 0, "27adb7195e7523ba", 12},
-    contract_entry{"refrain:data.packs", 1, 0, 0, "27adb7195e7523ba", 4},
-    contract_entry{"refrain:net.protocol", 2, 1, 0, "27adb7195e7523ba", 14},
-    contract_entry{"refrain:net.session", 1, 0, 0, "27adb7195e7523ba", 6},
-    contract_entry{"refrain:net.translator", 1, 0, 0, "27adb7195e7523ba", 2},
-    contract_entry{"refrain:runtime", 2, 0, 0, "27adb7195e7523ba", 1},
-    contract_entry{"refrain:session.lifecycle", 1, 0, 0, "27adb7195e7523ba", 3},
-    contract_entry{"refrain:session.status", 1, 0, 0, "27adb7195e7523ba", 1},
-    contract_entry{"refrain:session.tab", 1, 0, 0, "27adb7195e7523ba", 1},
-    contract_entry{"refrain:sim", 1, 1, 0, "27adb7195e7523ba", 18},
-    contract_entry{"refrain:storage", 1, 0, 0, "27adb7195e7523ba", 6},
-    contract_entry{"refrain:transport", 1, 0, 0, "27adb7195e7523ba", 9},
-    contract_entry{"refrain:world", 1, 2, 0, "27adb7195e7523ba", 12},
-    contract_entry{"refrain:world.migration", 1, 0, 0, "27adb7195e7523ba", 3},
-    contract_entry{"refrain:worldgen", 1, 0, 0, "27adb7195e7523ba", 4},
+inline constexpr std::array<contract_entry, 19> contracts{
+    contract_entry{"refrain:host.core", 1, 0, 0, "ba0b7f4fa5ba5492", 12},
+    contract_entry{"refrain:host.kernel", 1, 0, 0, "ba0b7f4fa5ba5492", 6},
+    contract_entry{"refrain:host.metadata", 1, 0, 0, "ba0b7f4fa5ba5492", 8},
+    contract_entry{"refrain:host.platform", 1, 0, 0, "ba0b7f4fa5ba5492", 12},
+    contract_entry{"refrain:data.packs", 1, 0, 0, "ba0b7f4fa5ba5492", 4},
+    contract_entry{"refrain:mod.loader", 1, 0, 0, "ba0b7f4fa5ba5492", 5},
+    contract_entry{"refrain:net.protocol", 2, 1, 0, "ba0b7f4fa5ba5492", 14},
+    contract_entry{"refrain:net.session", 1, 0, 0, "ba0b7f4fa5ba5492", 6},
+    contract_entry{"refrain:net.translator", 1, 0, 0, "ba0b7f4fa5ba5492", 2},
+    contract_entry{"refrain:runtime", 2, 0, 0, "ba0b7f4fa5ba5492", 1},
+    contract_entry{"refrain:session.lifecycle", 1, 0, 0, "ba0b7f4fa5ba5492", 3},
+    contract_entry{"refrain:session.status", 1, 0, 0, "ba0b7f4fa5ba5492", 1},
+    contract_entry{"refrain:session.tab", 1, 0, 0, "ba0b7f4fa5ba5492", 1},
+    contract_entry{"refrain:sim", 1, 1, 0, "ba0b7f4fa5ba5492", 18},
+    contract_entry{"refrain:storage", 1, 0, 0, "ba0b7f4fa5ba5492", 6},
+    contract_entry{"refrain:transport", 1, 0, 0, "ba0b7f4fa5ba5492", 9},
+    contract_entry{"refrain:world", 1, 2, 0, "ba0b7f4fa5ba5492", 12},
+    contract_entry{"refrain:world.migration", 1, 0, 0, "ba0b7f4fa5ba5492", 3},
+    contract_entry{"refrain:worldgen", 1, 0, 0, "ba0b7f4fa5ba5492", 4},
 };
 
-inline constexpr std::string_view schema_hash = "27adb7195e7523ba";
+inline constexpr std::string_view schema_hash = "ba0b7f4fa5ba5492";
 
 } // namespace refrain::metadata
 

@@ -280,6 +280,41 @@ The ABI major version must match between a provider and its consumer and only
 changes for an incompatible layout or calling change. After the release freeze,
 contracts switch to SemVer increments with migrations.
 
+### Version record
+
+| Contract | Version | Composition |
+|---|---|---|
+| `refrain:data.packs` | 1.0.0 | exclusive |
+| `refrain:mod.loader` | 1.0.0 | instanced |
+| `refrain:net.protocol` | 2.1.0 | instanced |
+| `refrain:net.session` | 1.0.0 | exclusive |
+| `refrain:net.translator` | 1.0.0 | exclusive |
+| `refrain:runtime` | 2.0.0 | exclusive |
+| `refrain:session.lifecycle` | 1.0.0 | instanced |
+| `refrain:session.status` | 1.0.0 | instanced |
+| `refrain:session.tab` | 1.0.0 | instanced |
+| `refrain:sim` | 1.1.0 | exclusive |
+| `refrain:storage` | 1.0.0 | exclusive |
+| `refrain:transport` | 1.0.0 | instanced |
+| `refrain:worldgen` | 1.0.0 | exclusive |
+| `refrain:world.migration` | 1.0.0 | exclusive |
+| `refrain:world` | 1.2.0 | exclusive |
+| `refrain:host.core` | 1.0.0 | sealed |
+| `refrain:host.kernel` | 1.0.0 | sealed |
+| `refrain:host.metadata` | 1.0.0 | sealed |
+| `refrain:host.platform` | 1.0.0 | sealed |
+
+The shared primitives module `refrain:core` is at 1.0.0; it declares no
+service, so it has no composition mode.
+
+`refrain:mod.loader` is the loader contract: one provider instance per loader
+id, addressed by the instance name. It is additive and starts at `1.0.0`
+because no earlier service described loader execution. Its capabilities struct
+starts with `struct_size`, and its error enum starts at one so a failed
+`validate`/`load`/`unload`/`reload` never collides with `REFRAIN_STATUS_OK`.
+The unload semantics enum is `u8` because it is a small closed set carried in
+the fixed capabilities struct.
+
 ## See also
 
 - [Architecture](architecture.md) for the layer boundaries and the contract

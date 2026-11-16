@@ -362,18 +362,6 @@ namespace config = core::config;
         return std::unexpected{
             fail(error_code::parse_error, "mod: [entry] must be a table")};
     }
-    constexpr std::array<std::string_view, 3> allowed{"native", "wasm",
-                                                      "symbol"};
-    for (const auto &key : doc.keys("entry")) {
-        const auto known = std::any_of(
-            allowed.begin(), allowed.end(),
-            [&key](std::string_view candidate) { return candidate == key; });
-        if (!known) {
-            return std::unexpected{
-                fail(error_code::invalid_argument,
-                     fmt::format("mod: unknown [entry] key '{}'", key))};
-        }
-    }
 
     manifest_entry_point entry{};
     const auto read_path = [&doc](std::string_view key) -> result<std::string> {
@@ -389,6 +377,11 @@ namespace config = core::config;
         }
         return value;
     };
+    if (auto loader{read_path("loader")}; loader) {
+        entry.loader = std::move(*loader);
+    } else {
+        return std::unexpected{loader.error()};
+    }
     if (auto native{read_path("native")}; native) {
         entry.native = std::move(*native);
     } else {
@@ -405,11 +398,80 @@ namespace config = core::config;
         return std::unexpected{symbol.error()};
     }
 
-    if (entry.native.empty() == entry.wasm.empty()) {
+    const bool declared_loader{!entry.loader.empty()};
+    if (declared_loader && !is_valid_loader_id(entry.loader)) {
+        return std::unexpected{fail(
+            error_code::invalid_argument,
+            fmt::format("mod: invalid [entry].loader '{}': loader ids are 1 to "
+                        "128 lowercase letters, digits, '.', '_' or '-', and "
+                        "a third-party loader id carries a namespace such as "
+                        "com.example.loader",
+                        entry.loader))};
+    }
+    if (declared_loader && !is_reserved_loader_id(entry.loader) &&
+        entry.loader.find('.') == std::string::npos) {
         return std::unexpected{
             fail(error_code::invalid_argument,
-                 "mod: [entry] must define exactly one of 'native' or 'wasm'")};
+                 fmt::format("mod: loader '{}' is not a namespaced loader id; "
+                             "third-party loaders use a namespace such as "
+                             "com.example.loader",
+                             entry.loader))};
     }
+    if (declared_loader && entry.loader == builtin_loader_id) {
+        return std::unexpected{fail(
+            error_code::invalid_argument,
+            "mod: [entry].loader 'builtin' is reserved: a package without an "
+            "[entry] table is loaded by the builtin loader")};
+    }
+
+    if (declared_loader && entry.loader == native_loader_id) {
+        if (entry.native.empty()) {
+            return std::unexpected{
+                fail(error_code::invalid_argument,
+                     "mod: the native loader requires [entry].native with the "
+                     "shared library path")};
+        }
+        if (!entry.wasm.empty()) {
+            return std::unexpected{
+                fail(error_code::invalid_argument,
+                     "mod: the native loader does not accept [entry].wasm; the "
+                     "wasm loader owns script modules")};
+        }
+    } else if (declared_loader && entry.loader == wasm_loader_id) {
+        if (entry.wasm.empty()) {
+            return std::unexpected{fail(
+                error_code::invalid_argument,
+                "mod: the wasm loader requires [entry].wasm with the module "
+                "path")};
+        }
+        if (!entry.native.empty()) {
+            return std::unexpected{
+                fail(error_code::invalid_argument,
+                     "mod: the wasm loader does not accept [entry].native; the "
+                     "native loader owns shared libraries")};
+        }
+    } else if (!declared_loader) {
+        // Legacy entry shape: keep loading, and let the parser infer the
+        // loader the same way the host used to branch on it.
+        if (entry.native.empty() == entry.wasm.empty()) {
+            return std::unexpected{fail(
+                error_code::invalid_argument,
+                "mod: [entry] must define '[entry].loader' or exactly one of "
+                "'native' or 'wasm'")};
+        }
+    }
+
+    // `symbol` is the native loader's shared entry key; no other loader owns
+    // it. The inferred native entry of a legacy manifest keeps the key too.
+    const bool effective_native{declared_loader
+                                    ? entry.loader == native_loader_id
+                                    : !entry.native.empty()};
+    if (!entry.symbol.empty() && !effective_native) {
+        return std::unexpected{
+            fail(error_code::invalid_argument,
+                 "mod: [entry].symbol is only valid with the native loader")};
+    }
+
     if (!entry.native.empty() && !is_safe_package_path(entry.native)) {
         return std::unexpected{fail(
             error_code::invalid_argument,
@@ -420,11 +482,25 @@ namespace config = core::config;
             fail(error_code::invalid_argument,
                  fmt::format("mod: unsafe wasm entry path '{}'", entry.wasm))};
     }
-    if (!entry.symbol.empty() && entry.native.empty()) {
-        return std::unexpected{
-            fail(error_code::invalid_argument,
-                 "mod: [entry].symbol is only valid together with 'native'")};
+
+    // A first-party loader owns the shared entry keys, so a typo there is a
+    // manifest bug. A third-party loader defines its own payload keys; this
+    // parser only knows the shared ones, and the loader validates the rest.
+    const bool third_party_loader{declared_loader &&
+                                  !is_first_party_loader_id(entry.loader)};
+    constexpr std::array<std::string_view, 4> allowed{"loader", "native",
+                                                      "wasm", "symbol"};
+    for (const auto &key : doc.keys("entry")) {
+        const auto known = std::any_of(
+            allowed.begin(), allowed.end(),
+            [&key](std::string_view candidate) { return candidate == key; });
+        if (!known && !third_party_loader) {
+            return std::unexpected{
+                fail(error_code::invalid_argument,
+                     fmt::format("mod: unknown [entry] key '{}'", key))};
+        }
     }
+
     out = std::move(entry);
     return status_ok();
 }
@@ -499,6 +575,68 @@ auto to_string(manifest_side side) noexcept -> std::string_view {
         return "both";
     }
     return "both";
+}
+
+auto to_string(mod_unload_semantics semantics) noexcept -> std::string_view {
+    switch (semantics) {
+    case mod_unload_semantics::clean:
+        return "clean";
+    case mod_unload_semantics::retire:
+        return "retire";
+    case mod_unload_semantics::restart_required:
+        return "restart_required";
+    }
+    return "restart_required";
+}
+
+auto parse_mod_unload_semantics(std::string_view text) noexcept
+    -> std::optional<mod_unload_semantics> {
+    if (text == "clean") {
+        return mod_unload_semantics::clean;
+    }
+    if (text == "retire") {
+        return mod_unload_semantics::retire;
+    }
+    if (text == "restart_required") {
+        return mod_unload_semantics::restart_required;
+    }
+    return std::nullopt;
+}
+
+auto is_valid_loader_id(std::string_view id) noexcept -> bool {
+    if (id.empty() || id.size() > max_mod_id_length) {
+        return false;
+    }
+    const auto is_lower = [](char character) {
+        return character >= 'a' && character <= 'z';
+    };
+    const auto is_digit = [](char character) {
+        return character >= '0' && character <= '9';
+    };
+    if (!is_lower(id.front()) && !is_digit(id.front())) {
+        return false;
+    }
+    for (const char character : id) {
+        if (!is_lower(character) && !is_digit(character) && character != '.' &&
+            character != '_' && character != '-') {
+            return false;
+        }
+    }
+    // No empty, `.` or `..` dot segments: an id starting or ending with a
+    // dot, or containing two dots in a row, is not a namespace.
+    return id.front() != '.' && id.back() != '.' &&
+           id.find("..") == std::string_view::npos;
+}
+
+auto is_reserved_loader_id(std::string_view id) noexcept -> bool {
+    return id == builtin_loader_id || id == native_loader_id ||
+           id == wasm_loader_id || id == lua_loader_id ||
+           id == bukkit_loader_id;
+}
+
+auto is_first_party_loader_id(std::string_view id) noexcept -> bool {
+    constexpr std::string_view first_party_namespace{"refrain."};
+    return is_reserved_loader_id(id) || id.starts_with(first_party_namespace);
 }
 
 auto parse_manifest_side(std::string_view text) noexcept
@@ -674,6 +812,25 @@ auto parse_mod_manifest(const core::config::document &doc,
     }
     if (auto entry{parse_entry(doc, manifest.entry)}; !entry) {
         return std::unexpected{entry.error()};
+    }
+
+    // Effective loader: an internal package has no entry table and is loaded
+    // by the builtin loader; an external package declares its loader or keeps
+    // the legacy shape-inferred one. `entry.loader` stays empty for an
+    // inferred loader so discovery/audit can keep mirroring the manifest.
+    if (!manifest.entry.has_value()) {
+        // An internal package has no entry table to declare a loader in: the
+        // builtin loader is canonical for it, not a deprecated inference.
+        manifest.loader = std::string{builtin_loader_id};
+        manifest.loader_inferred = false;
+    } else if (!manifest.entry->loader.empty()) {
+        manifest.loader = manifest.entry->loader;
+        manifest.loader_inferred = false;
+    } else {
+        manifest.loader = manifest.entry->native.empty()
+                              ? std::string{wasm_loader_id}
+                              : std::string{native_loader_id};
+        manifest.loader_inferred = true;
     }
 
     const std::array<std::string_view, 2> host_api_path{"mod", "host_api"};
