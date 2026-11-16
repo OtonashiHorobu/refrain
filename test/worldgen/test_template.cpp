@@ -2327,27 +2327,27 @@ suite<"worldgen/template"> template_tests = [] {
             if (chunk.entities().empty()) {
                 return;
             }
-            const auto &tag = chunk.entities().front();
-            const auto id = tag.find("id");
-            expect(id != tag.end() &&
+            const auto &entity_tag = chunk.entities().front();
+            const auto id = entity_tag.find("id");
+            expect(id != entity_tag.end() &&
                    id->second.as_string() == "minecraft:pig");
-            expect(tag.find("UUID") == tag.end());
-            const auto pos = tag.find("Pos");
-            expect(pos != tag.end());
+            expect(entity_tag.find("UUID") == entity_tag.end());
+            const auto pos = entity_tag.find("Pos");
+            expect(pos != entity_tag.end());
             if (const auto *list = pos->second.as_list(); list != nullptr) {
                 expect(list->items[0].as_double().value_or(0.0) == 10.5);
                 expect(list->items[1].as_double().value_or(0.0) == 10.0);
                 expect(list->items[2].as_double().value_or(0.0) == 10.5);
             }
-            const auto block_pos_tag = tag.find("block_pos");
-            expect(block_pos_tag != tag.end());
+            const auto block_pos_tag = entity_tag.find("block_pos");
+            expect(block_pos_tag != entity_tag.end());
             if (const auto *list = block_pos_tag->second.as_list();
                 list != nullptr) {
                 expect(list->items[0].as_int().value_or(0) == 10);
                 expect(list->items[2].as_int().value_or(0) == 10);
             }
-            const auto rotation = tag.find("Rotation");
-            expect(rotation != tag.end());
+            const auto rotation = entity_tag.find("Rotation");
+            expect(rotation != entity_tag.end());
             if (const auto *list = rotation->second.as_list();
                 list != nullptr) {
                 expect(list->items[0].as_float().value_or(0.0F) == 180.0F);
