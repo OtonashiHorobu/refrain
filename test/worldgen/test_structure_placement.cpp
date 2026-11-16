@@ -761,7 +761,7 @@ suite<"worldgen/igloo-piece"> igloo_piece_tests = [] {
                 expect(loot != entity->end());
                 if (loot != entity->end()) {
                     expect(loot->second.as_string() ==
-                           "minecraft:chests/igloo");
+                           "minecraft:chests/igloo_chest");
                 }
                 expect(entity->contains("LootTableSeed"));
             }
