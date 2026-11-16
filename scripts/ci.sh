@@ -950,7 +950,9 @@ if "$BIN_DIR/refrain-tools" content gc --store "$GC_BAD_STORE" --apply \
 fi
 grep -Fq "$GC_BAD_RECEIPT" "$EXTRACT_DIR/gc-bad-json.txt" \
     || die "content gc: corrupt-receipt error does not name the receipt"
-printf '{"schema":"refrain.mod-receipt/3"}' >"$GC_BAD_RECEIPT"
+# A receipt from an older development store (the retired `/2` schema) and a
+# wholly foreign schema are both rejected; neither is migrated.
+printf '{"schema":"refrain.mod-receipt/2"}' >"$GC_BAD_RECEIPT"
 if "$BIN_DIR/refrain-tools" content gc --store "$GC_BAD_STORE" --apply \
     >"$EXTRACT_DIR/gc-bad-schema.txt" 2>&1; then
     die "content gc: foreign receipt schema was accepted"

@@ -179,8 +179,7 @@ struct mods_install_options {
     std::string signature_policy{};
     bool allow_downgrade{false};
     bool replace_same_version{false};
-    bool accept_unpinned{false};
-    /// Recorded in the receipt v2 (audit); empty records the tool version.
+    /// Recorded in the install receipt (audit); empty records the tool version.
     std::string installer_version{};
 };
 
@@ -190,24 +189,6 @@ struct mods_uninstall_options {
     /// Empty removes every installed version of `id`.
     std::string version{};
     bool keep_signer_pin{false};
-};
-
-struct mods_pin_options {
-    std::string store{};
-    std::string id{};
-    /// Override the signer recorded by the installed receipt. Both must be
-    /// given together; without them the highest installed receipt supplies
-    /// the signer.
-    std::string key_id{};
-    std::string fingerprint{};
-    /// Clear the pin instead of writing one.
-    bool clear{false};
-};
-
-struct mods_receipts_options {
-    std::string store{};
-    /// Rewrite receipt v1 documents in place; the default is a dry run.
-    bool apply{false};
 };
 
 struct mods_installed_options {
@@ -309,9 +290,6 @@ run_protocol_pool_load(const protocol_pool_load_options &options) -> int;
 [[nodiscard]] auto run_mods_verify(const mods_verify_options &options) -> int;
 [[nodiscard]] auto run_mods_install(const mods_install_options &options) -> int;
 [[nodiscard]] auto run_mods_uninstall(const mods_uninstall_options &options)
-    -> int;
-[[nodiscard]] auto run_mods_pin(const mods_pin_options &options) -> int;
-[[nodiscard]] auto run_mods_receipts(const mods_receipts_options &options)
     -> int;
 [[nodiscard]] auto run_mods_installed(const mods_installed_options &options)
     -> int;

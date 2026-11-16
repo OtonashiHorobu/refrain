@@ -4,8 +4,8 @@
 
 // Install/update/uninstall semantics of the `.rfmod` content-store path:
 // signer continuity (Android-style), version monotonicity, same-version
-// content identity, staging/atomicity, uninstall + GC reclaim, receipt
-// migration, and the receipt-only runtime catalog.
+// content identity, staging/atomicity, uninstall + GC reclaim, the single
+// receipt schema, and the receipt-only runtime catalog.
 
 #include <refrain/core/io.hpp>
 #include <refrain/data/checksum.hpp>
@@ -231,33 +231,24 @@ struct temp_workspace {
     return count;
 }
 
-/// Rewrite an installed receipt as a schema v1 document (simulates a store
-/// installed before signer pinning) and drop its pin.
-[[nodiscard]] auto age_receipt_to_v1(const std::string &receipt_path,
-                                     const std::string &pin_path) -> bool {
+/// Parse an installed receipt, let `mutate` change its member map and write
+/// the document back (a store rewritten by another build).
+template <typename Mutate>
+[[nodiscard]] auto rewrite_receipt(const std::string &receipt_path,
+                                   Mutate mutate) -> bool {
     auto document{data::json::value::parse_file(receipt_path)};
     if (!document) {
         return false;
     }
-    using json_value = data::json::value;
-    json_value::object_type legacy;
-    for (const auto *member :
-         {"id", "version", "abi", "archive_blake3", "manifest_blake3", "signed",
-          "trusted", "key_id", "origin", "files"}) {
-        const auto *value{document->find(member)};
-        if (value == nullptr) {
-            return false;
-        }
-        legacy.emplace(member, *value);
-    }
-    legacy.emplace("schema", json_value{"refrain.mod-receipt/1"});
-    const auto text{json_value{std::move(legacy)}.dump()};
-    std::error_code error;
-    if (!io::write_text(receipt_path, text)) {
+    auto object{document->as_object()};
+    if (!object) {
         return false;
     }
-    fs::remove(fs::path{pin_path}, error);
-    return true;
+    using json_value = data::json::value;
+    json_value::object_type members{object->get()};
+    mutate(members);
+    return io::write_text(receipt_path, json_value{std::move(members)}.dump())
+        .has_value();
 }
 
 // ---------------------------------------------------------------------------
@@ -303,7 +294,6 @@ const suite mod_install_signer_tests = [] {
         if (!receipt) {
             return;
         }
-        expect(receipt->schema_version == 2U);
         expect(receipt->signed_package);
         expect(receipt->key_id == key_a);
         expect(receipt->policy == "strict");
@@ -997,180 +987,153 @@ const suite mod_uninstall_tests = [] {
 };
 
 // ---------------------------------------------------------------------------
-// receipt migration
+// receipt schema
 // ---------------------------------------------------------------------------
 
-const suite mod_receipt_migration_tests = [] {
-    "receipts/migrates v1 documents without confirming the signer"_test = [] {
-        temp_workspace work{"migration"};
-        expect(materialise(work, "mod1", "refrain.test.install", "1.0.0"));
-        auto first{pack(
-            work, "mod1", "out/v1.rfmod",
-            rfmod_write_options{.signing = signing_with(key_a, keypair_a())})};
-        expect(first.has_value());
-        if (!first) {
-            return;
-        }
-        auto store{make_store(work)};
-        expect(store.has_value());
-        if (!store) {
-            return;
-        }
-        auto installed{install_archive(*store, *first)};
-        expect(static_cast<bool>(installed));
-        if (!installed) {
-            return;
-        }
-        const auto pin_path{
-            work.path("store/mods/pins/refrain.test.install.json").string()};
-        expect(age_receipt_to_v1(installed->receipt_path, pin_path));
-        expect(!fs::exists(pin_path));
+const suite mod_receipt_schema_tests = [] {
+    "receipts/rejects an older development-store schema instead of migrating"_test =
+        [] {
+            temp_workspace work{"old-schema"};
+            expect(materialise(work, "mod1", "refrain.test.install", "1.0.0"));
+            auto first{pack(work, "mod1", "out/v1.rfmod",
+                            rfmod_write_options{
+                                .signing = signing_with(key_a, keypair_a())})};
+            expect(first.has_value());
+            if (!first) {
+                return;
+            }
+            auto store{make_store(work)};
+            expect(store.has_value());
+            if (!store) {
+                return;
+            }
+            auto installed{install_archive(*store, *first)};
+            expect(static_cast<bool>(installed));
+            if (!installed) {
+                return;
+            }
+            expect(rewrite_receipt(installed->receipt_path, [](auto &members) {
+                using json_value = data::json::value;
+                members.insert_or_assign("schema",
+                                         json_value{"refrain.mod-receipt/2"});
+            }));
 
-        auto legacy{mod::read_receipt(installed->receipt_path)};
-        expect(static_cast<bool>(legacy));
-        if (!legacy) {
-            return;
-        }
-        expect(legacy->schema_version == 1U);
-        expect(legacy->policy == "legacy");
-        expect(!legacy->pinned());
-        expect(legacy->key_id == key_a);
+            // Fail closed and name both schemas; no rewrite happens.
+            auto rejected{mod::read_receipt(installed->receipt_path)};
+            expect(!rejected);
+            if (!rejected) {
+                expect(rejected.error().code == error_code::parse_error);
+                expect(rejected.error().message.find("refrain.mod-receipt/2") !=
+                       std::string::npos);
+                expect(rejected.error().message.find("refrain.mod-receipt/1") !=
+                       std::string::npos);
+            }
+            auto untouched{io::read_text(installed->receipt_path)};
+            expect(untouched.has_value() &&
+                   untouched->find("refrain.mod-receipt/2") !=
+                       std::string::npos)
+                << "an old receipt must never be rewritten in place";
 
-        // Dry run reports the migration without touching the file.
-        auto dry{mod::migrate_receipts(work.path("store").string(), false)};
-        expect(static_cast<bool>(dry));
-        if (!dry) {
-            return;
-        }
-        expect(dry->scanned == 1U);
-        expect(dry->migrated == 1U);
-        expect(dry->current == 0U);
-        auto still_v1{mod::read_receipt(installed->receipt_path)};
-        expect(static_cast<bool>(still_v1) && still_v1->schema_version == 1U);
+            // The runtime catalog rejects the store instead of loading the
+            // package, so the failure is visible at startup too.
+            const std::vector<std::string> roots{work.path("store").string()};
+            auto catalog{mod::scan_installed(roots)};
+            expect(!catalog);
+            if (!catalog) {
+                expect(catalog.error().code == error_code::parse_error);
+            }
 
-        auto applied{mod::migrate_receipts(work.path("store").string(), true)};
-        expect(static_cast<bool>(applied));
-        if (!applied) {
-            return;
-        }
-        expect(applied->migrated == 1U);
-        expect(applied->failed == 0U);
-        auto migrated{mod::read_receipt(installed->receipt_path)};
-        expect(static_cast<bool>(migrated));
-        if (!migrated) {
-            return;
-        }
-        expect(migrated->schema_version == 2U);
-        expect(migrated->policy == "legacy");
-        expect(migrated->signed_package);
-        expect(migrated->key_id == key_a);
-        expect(migrated->public_key_fingerprint.empty());
-        expect(!migrated->pinned());
-        expect(migrated->files.size() == legacy->files.size());
-        for (std::size_t index{0}; index < migrated->files.size(); ++index) {
-            expect(migrated->files[index].path == legacy->files[index].path);
-            expect(hex_of(migrated->files[index].blake3) ==
-                   hex_of(legacy->files[index].blake3));
-            expect(migrated->files[index].mode == legacy->files[index].mode);
-        }
+            // Reinstalling the package (after removing the old receipt)
+            // recreates the receipt with the current schema.
+            std::error_code remove_error;
+            fs::remove(installed->receipt_path, remove_error);
+            expect(!remove_error);
+            auto reinstalled{install_archive(*store, *first)};
+            expect(static_cast<bool>(reinstalled))
+                << "reinstalling the package did not recover the store";
+            if (!reinstalled) {
+                return;
+            }
+            auto parsed{mod::read_receipt(reinstalled->receipt_path)};
+            expect(static_cast<bool>(parsed));
+            if (parsed) {
+                expect(parsed->pinned());
+                expect(parsed->policy == "strict");
+            }
+        };
 
-        // The legacy signer is not confirmed by a migration: the first update
-        // is refused until an administrator accepts it.
-        expect(materialise(work, "mod2", "refrain.test.install", "1.1.0"));
-        auto second{pack(
-            work, "mod2", "out/v2.rfmod",
-            rfmod_write_options{.signing = signing_with(key_a, keypair_a())})};
-        expect(second.has_value());
-        if (!second) {
-            return;
-        }
-        rfmod_install_options options;
-        options.require_signature = true;
-        options.trusted_keys = {trusted_with(key_a, keypair_a())};
-        auto refused{install_archive(*store, *second, options)};
-        expect(!refused);
-        if (refused) {
-            return;
-        }
-        expect(refused.error().code == error_code::permission_denied);
-        expect(refused.error().message.find("--accept-unpinned-signer") !=
-               std::string::npos);
+    "receipts/rejects the legacy policy and a receipt without signer fields"_test =
+        [] {
+            temp_workspace work{"legacy-fields"};
+            expect(materialise(work, "mod1", "refrain.test.install", "1.0.0"));
+            auto first{pack(work, "mod1", "out/v1.rfmod",
+                            rfmod_write_options{
+                                .signing = signing_with(key_a, keypair_a())})};
+            expect(first.has_value());
+            if (!first) {
+                return;
+            }
+            auto store{make_store(work)};
+            expect(store.has_value());
+            if (!store) {
+                return;
+            }
+            auto installed{install_archive(*store, *first)};
+            expect(static_cast<bool>(installed));
+            if (!installed) {
+                return;
+            }
+            const auto original{io::read_text(installed->receipt_path)};
+            expect(original.has_value());
+            if (!original) {
+                return;
+            }
 
-        options.accept_unpinned = true;
-        auto accepted{install_archive(*store, *second, options)};
-        expect(static_cast<bool>(accepted)) << "confirmed legacy update failed";
-        if (!accepted) {
-            return;
-        }
-        expect(accepted->unpinned_confirmed);
-        expect(accepted->signer_pinned);
-        auto pin{mod::read_signer_pin(work.path("store").string(),
-                                      "refrain.test.install")};
-        expect(pin.has_value() && pin->has_value());
-        if (pin && pin->has_value()) {
-            expect((*pin)->key_id == key_a);
-        }
-    };
+            // The single schema has no legacy policy value.
+            expect(rewrite_receipt(installed->receipt_path, [](auto &members) {
+                using json_value = data::json::value;
+                members.insert_or_assign("policy", json_value{"legacy"});
+            }));
+            auto legacy_policy{mod::read_receipt(installed->receipt_path)};
+            expect(!legacy_policy);
+            if (!legacy_policy) {
+                expect(legacy_policy.error().code == error_code::parse_error);
+                expect(legacy_policy.error().message.find("legacy") !=
+                       std::string::npos);
+            }
 
-    "receipts/admin pin confirms a legacy signer without an update"_test = [] {
-        temp_workspace work{"admin-pin"};
-        expect(materialise(work, "mod1", "refrain.test.install", "1.0.0"));
-        auto first{pack(
-            work, "mod1", "out/v1.rfmod",
-            rfmod_write_options{.signing = signing_with(key_a, keypair_a())})};
-        expect(first.has_value());
-        if (!first) {
-            return;
-        }
-        auto store{make_store(work)};
-        expect(store.has_value());
-        if (!store) {
-            return;
-        }
-        auto installed{install_archive(*store, *first)};
-        expect(static_cast<bool>(installed));
-        if (!installed) {
-            return;
-        }
-        const auto pin_path{
-            work.path("store/mods/pins/refrain.test.install.json").string()};
-        expect(age_receipt_to_v1(installed->receipt_path, pin_path));
-
-        mod::mod_signer_pin pin{};
-        pin.id = "refrain.test.install";
-        pin.key_id = std::string{key_a};
-        pin.public_key_fingerprint =
-            mod::public_key_fingerprint(keypair_a().public_key);
-        pin.source = "admin";
-        expect(mod::write_signer_pin(work.path("store").string(), pin)
-                   .has_value());
-        auto read_back{mod::read_signer_pin(work.path("store").string(),
-                                            "refrain.test.install")};
-        expect(read_back.has_value() && read_back->has_value());
-        if (read_back && read_back->has_value()) {
-            expect((*read_back)->key_id == key_a);
-            expect((*read_back)->public_key_fingerprint ==
-                   pin.public_key_fingerprint);
-        }
-
-        // The confirmed pin admits the update without --accept-unpinned-signer.
-        expect(materialise(work, "mod2", "refrain.test.install", "1.1.0"));
-        auto second{pack(
-            work, "mod2", "out/v2.rfmod",
-            rfmod_write_options{.signing = signing_with(key_a, keypair_a())})};
-        expect(second.has_value());
-        if (!second) {
-            return;
-        }
-        rfmod_install_options options;
-        options.require_signature = true;
-        options.trusted_keys = {trusted_with(key_a, keypair_a())};
-        auto accepted{install_archive(*store, *second, options)};
-        expect(static_cast<bool>(accepted)) << "pinned legacy update failed";
-        if (accepted) {
-            expect(!accepted->unpinned_confirmed);
-        }
-    };
+            // A receipt without the signer identity or the audit fields is
+            // not the current schema and is rejected, never defaulted.
+            for (const auto *field : {"public_key_fingerprint", "policy",
+                                      "installed_at", "installer_version"}) {
+                expect(work.write("store/mods/refrain.test.install/1.0.0.json",
+                                  *original));
+                auto document{
+                    data::json::value::parse_file(installed->receipt_path)};
+                expect(static_cast<bool>(document));
+                if (!document) {
+                    return;
+                }
+                auto object{document->as_object()};
+                expect(static_cast<bool>(object));
+                if (!object) {
+                    return;
+                }
+                using json_value = data::json::value;
+                json_value::object_type members{object->get()};
+                expect(members.erase(field) == 1U);
+                expect(io::write_text(installed->receipt_path,
+                                      json_value{std::move(members)}.dump())
+                           .has_value());
+                auto missing{mod::read_receipt(installed->receipt_path)};
+                expect(!missing)
+                    << "missing field " << field << " was accepted";
+                if (!missing) {
+                    expect(missing.error().message.find(field) !=
+                           std::string::npos);
+                }
+            }
+        };
 };
 
 // ---------------------------------------------------------------------------

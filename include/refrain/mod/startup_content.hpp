@@ -117,9 +117,6 @@ struct startup_content_options {
     /// switches. The caller loads it from server configuration; command-line
     /// flags override individual values before calling.
     install_policy_config policy{};
-    /// Confirm the signer of a legacy (receipt v1) install so an update may
-    /// pin it (administrator confirmation; forwarded to `install_rfmod`).
-    bool accept_unpinned{false};
     /// Garbage-collection policy.
     enum class gc_mode { off, dry_run, apply };
     /// Default is a dry run: the startup path never deletes without an

@@ -1376,7 +1376,7 @@ const suite rfmod_signing_receipt_tests = [] {
         }
         const auto &receipt{*document};
         expect(receipt["schema"].as_string().value_or("") ==
-               "refrain.mod-receipt/2");
+               "refrain.mod-receipt/1");
         expect(receipt["id"].as_string().value_or("") == "refrain.test.signed");
         expect(receipt["version"].as_string().value_or("") == "1.0.0");
         expect(receipt["abi"].as_int64().value_or(-1) == 1);
@@ -1388,7 +1388,7 @@ const suite rfmod_signing_receipt_tests = [] {
         expect(receipt["trusted"].as_bool().value_or(false));
         expect(receipt["key_id"].as_string().value_or("") == test_key_id);
         expect(receipt["origin"].as_string().value_or("") == "user");
-        // Signer identity and audit fields of schema v2.
+        // Signer identity and audit fields of the receipt schema.
         expect(receipt["public_key_fingerprint"].as_string().value_or("") ==
                refrain::mod::public_key_fingerprint(keys.public_key));
         expect(receipt["policy"].as_string().value_or("") == "strict");
@@ -1398,6 +1398,28 @@ const suite rfmod_signing_receipt_tests = [] {
         expect(installed->signer_pinned);
         expect(installed->public_key_fingerprint ==
                refrain::mod::public_key_fingerprint(keys.public_key));
+        expect(receipt.find("schema_version") == nullptr)
+            << "the receipt has one schema and no separate version field";
+
+        // The reader exposes the same single-schema document.
+        auto parsed{refrain::mod::read_receipt(installed->receipt_path)};
+        expect(static_cast<bool>(parsed)) << "read_receipt failed";
+        if (parsed) {
+            expect(parsed->signed_package);
+            expect(parsed->trusted);
+            expect(parsed->key_id == test_key_id);
+            expect(parsed->public_key_fingerprint ==
+                   refrain::mod::public_key_fingerprint(keys.public_key));
+            expect(parsed->policy == "strict");
+            expect(parsed->installed_at == "2026-01-01T00:00:00Z");
+            expect(parsed->installer_version == "test");
+            expect(parsed->origin == refrain::mod::mod_origin::user);
+            expect(parsed->pinned());
+            expect(parsed->files.size() == installed->files.size());
+            for (const auto &file : parsed->files) {
+                expect(file.mode == 0644U);
+            }
+        }
 
         auto files{receipt["files"].as_array()};
         expect(static_cast<bool>(files));
@@ -1493,7 +1515,7 @@ const suite rfmod_signing_receipt_tests = [] {
         }
         const auto &receipt{*document};
         expect(receipt["schema"].as_string().value_or("") ==
-               "refrain.mod-receipt/2");
+               "refrain.mod-receipt/1");
         expect(!receipt["signed"].as_bool().value_or(true));
         expect(!receipt["trusted"].as_bool().value_or(true));
         expect(receipt["key_id"].as_string().value_or("<missing>").empty());
@@ -1712,8 +1734,25 @@ const suite rfmod_signing_receipt_tests = [] {
                static_cast<int>(error_code::parse_error));
         expect(foreign.error().message.find("schema") != std::string::npos);
 
-        // Correct schema but missing required fields: strictly rejected.
+        // The current schema with missing required fields: strictly rejected.
+        expect(work.write(relative, R"({"schema":"refrain.mod-receipt/1"})"));
+        expect(!refrain::mod::read_receipt(path.string()));
+
+        // A receipt from an older development build (schema /2) is not
+        // migrated; the error names the rejected schema and the one the
+        // build writes.
         expect(work.write(relative, R"({"schema":"refrain.mod-receipt/2"})"));
+        const auto old_store{refrain::mod::read_receipt(path.string())};
+        expect(!old_store);
+        expect(old_store.error().message.find("refrain.mod-receipt/2") !=
+               std::string::npos);
+        expect(old_store.error().message.find("refrain.mod-receipt/1") !=
+               std::string::npos);
+
+        // The legacy policy value no longer exists.
+        expect(work.write(
+            relative,
+            R"({"schema":"refrain.mod-receipt/1","policy":"legacy"})"));
         expect(!refrain::mod::read_receipt(path.string()));
     };
 };

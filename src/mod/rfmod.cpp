@@ -1986,8 +1986,7 @@ namespace {
 }
 
 /// Residency of the receipt's `policy` field. A signed install is accepted
-/// under the continuity policy in force; an unsigned one records `unsigned`;
-/// a migrated v1 receipt records `legacy`.
+/// under the continuity policy in force; an unsigned one records `unsigned`.
 [[nodiscard]] auto receipt_policy_text(bool signed_package,
                                        rfmod_signature_policy policy)
     -> std::string {
@@ -2004,7 +2003,7 @@ namespace {
                        fmt::gmtime(std::chrono::system_clock::to_time_t(now)));
 }
 
-/// Serialize the install receipt (schema `refrain.mod-receipt/2`).
+/// Serialize the install receipt (schema `refrain.mod-receipt/1`).
 ///
 /// `json::dump()` writes object members in sorted key order and the file list
 /// is sorted by path bytes, so the same install with the same `installed_at`
@@ -2041,7 +2040,7 @@ namespace {
     }
 
     json_value::object_type receipt;
-    receipt.emplace("schema", json_value{std::string{mod_receipt_schema_v2}});
+    receipt.emplace("schema", json_value{std::string{mod_receipt_schema}});
     receipt.emplace("id", json_value{result.manifest.common.id});
     receipt.emplace("version", json_value{result.manifest.common.version});
     receipt.emplace("abi", json_value{result.manifest.common.abi});
@@ -2283,9 +2282,8 @@ struct rebuilt_resolution_index {
 
 /// Effective signer state of one mod id before an install.
 enum class signer_state : std::uint8_t {
-    none,           ///< no installed version and no signer pin: first install
-    pinned,         ///< a signer is pinned (pin file or a v2 receipt)
-    legacy_unpinned ///< only v1 receipts: the signer is unknown until confirmed
+    none,   ///< no installed version and no signer pin: first install
+    pinned, ///< a signer is pinned (pin file or a signed receipt)
 };
 
 /// Everything an update decision needs about the current install of one id.
@@ -2324,10 +2322,8 @@ struct installed_state {
 
 /// Load the installed receipts of `id` and resolve the effective signer pin.
 ///
-/// The pin file is authoritative. Without one, a v2 signed receipt pins its
-/// signer (key id plus fingerprint when the key bytes were configured); a v1
-/// signed receipt is legacy state, so an update needs explicit administrator
-/// confirmation before it may pin a signer.
+/// The pin file is authoritative. Without one, a signed receipt pins its
+/// signer (key id plus fingerprint when the key bytes were configured).
 [[nodiscard]] auto load_installed_state(std::string_view store_root,
                                         std::string_view id)
     -> result<installed_state> {
@@ -2362,29 +2358,6 @@ struct installed_state {
         return state;
     }
 
-    // A v1 receipt and a v2 document migrated from v1 both record a signer
-    // that was never confirmed for continuity purposes.
-    const auto legacy{std::find_if(
-        state.receipts.begin(), state.receipts.end(),
-        [](const mod_receipt &receipt) {
-            const auto legacy_document{receipt.schema_version == 1U ||
-                                       receipt.policy == "legacy"};
-            return legacy_document && receipt.signed_package &&
-                   !receipt.key_id.empty();
-        })};
-    if (legacy != state.receipts.end()) {
-        // The key id is known from the v1 receipt, the fingerprint is not: the
-        // signer is pinned by id only and stays "unconfirmed" until an
-        // administrator accepts it.
-        state.pin = mod_signer_pin{.id = std::string{id},
-                                   .key_id = legacy->key_id,
-                                   .public_key_fingerprint = {},
-                                   .policy = rfmod_signature_policy::strict,
-                                   .pinned_at = {},
-                                   .source = "legacy"};
-        state.state = signer_state::legacy_unpinned;
-        return state;
-    }
     if (const auto *latest{latest_receipt(state.receipts)};
         latest != nullptr && latest->pinned()) {
         state.pin = mod_signer_pin{
@@ -2421,7 +2394,6 @@ struct update_decision {
     std::optional<mod_signer_pin> next_pin{};
     bool downgrade_override{false};
     bool same_version_override{false};
-    bool unpinned_confirmed{false};
     bool signer_rotated{false};
 };
 
@@ -2505,28 +2477,6 @@ decide_update(std::string_view store_root, std::string_view id,
         if (signer.signed_package) {
             decision.next_pin = make_pin("install", signer.fingerprint);
         }
-        return decision;
-
-    case signer_state::legacy_unpinned:
-        if (!options.accept_unpinned) {
-            return std::unexpected{make_error(
-                error_code::permission_denied,
-                fmt::format("mod install: '{}' is installed from an older "
-                            "receipt that does not pin a signer; confirm the "
-                            "signer with --accept-unpinned-signer or "
-                            "`mods pin` before updating",
-                            id))};
-        }
-        decision.unpinned_confirmed = true;
-        if (!signer.signed_package) {
-            return std::unexpected{make_error(
-                error_code::permission_denied,
-                fmt::format("mod install: '{}' is a signed install but the "
-                            "update is unsigned; signed-to-unsigned updates "
-                            "are rejected",
-                            id))};
-        }
-        decision.next_pin = make_pin("install", signer.fingerprint);
         return decision;
 
     case signer_state::pinned:
@@ -2884,7 +2834,6 @@ auto install_rfmod(const rfmod_reader &reader, data::content_store &store,
         decision = std::move(*decided);
         result.downgrade_override = decision.downgrade_override;
         result.same_version_override = decision.same_version_override;
-        result.unpinned_confirmed = decision.unpinned_confirmed;
         result.signer_rotated = decision.signer_rotated;
         if (decision.already_installed) {
             // Identical archive already installed: no blob, table, receipt or
@@ -3122,7 +3071,7 @@ auto install_rfmod(const rfmod_reader &reader, data::content_store &store,
     // Signer pin: written after the receipt so the pin never describes an
     // install that does not exist. A pin write failure is reported but the
     // install itself is committed; the next install derives the same pin from
-    // the receipt v2.
+    // the receipt.
     if (options.write_receipt && options.write_pin &&
         decision.next_pin.has_value()) {
         const auto &signer{*decision.next_pin};
@@ -3235,7 +3184,7 @@ namespace {
     return *digest;
 }
 
-/// Validate an already-opened JSON document as `refrain.mod-receipt/1`.
+/// Validate an already-opened JSON document as an install receipt.
 [[nodiscard]] auto parse_receipt_document(const data::json::value &document,
                                           std::string_view path)
     -> result<mod_receipt> {
@@ -3247,14 +3196,11 @@ namespace {
     if (!schema) {
         return std::unexpected{std::move(schema.error())};
     }
-    mod_receipt out;
-    if (*schema == mod_receipt_schema_v1) {
-        out.schema_version = 1;
-    } else if (*schema == mod_receipt_schema_v2) {
-        out.schema_version = 2;
-    } else {
+    if (*schema != mod_receipt_schema) {
         return std::unexpected{receipt_error(
-            path, fmt::format("unsupported receipt schema '{}'", *schema))};
+            path, fmt::format("unsupported receipt schema '{}' (expected "
+                              "'{}')",
+                              *schema, mod_receipt_schema))};
     }
     auto id{receipt_string(document, "id", path)};
     if (!id) {
@@ -3264,6 +3210,7 @@ namespace {
         return std::unexpected{
             receipt_error(path, "field 'id' must not be empty")};
     }
+    mod_receipt out;
     out.id = std::move(*id);
 
     auto version{receipt_string(document, "version", path)};
@@ -3319,64 +3266,54 @@ namespace {
     }
     out.key_id = std::move(*key_id);
 
-    if (out.schema_version >= 2U) {
-        auto fingerprint{
-            receipt_string(document, "public_key_fingerprint", path)};
-        if (!fingerprint) {
-            return std::unexpected{std::move(fingerprint.error())};
-        }
-        if (!fingerprint->empty() && !is_lower_hex(*fingerprint, 64)) {
-            return std::unexpected{receipt_error(
-                path, "field 'public_key_fingerprint' must be empty or 64 "
-                      "lowercase hex characters")};
-        }
-        out.public_key_fingerprint = std::move(*fingerprint);
-
-        auto policy{receipt_string(document, "policy", path)};
-        if (!policy) {
-            return std::unexpected{std::move(policy.error())};
-        }
-        if (*policy != "strict" && *policy != "trusted-any" &&
-            *policy != "unsigned" && *policy != "legacy") {
-            return std::unexpected{receipt_error(
-                path, fmt::format("unknown policy '{}' (expected strict, "
-                                  "trusted-any, unsigned or legacy)",
-                                  *policy))};
-        }
-        out.policy = std::move(*policy);
-
-        auto installed_at{receipt_string(document, "installed_at", path)};
-        if (!installed_at) {
-            return std::unexpected{std::move(installed_at.error())};
-        }
-        out.installed_at = std::move(*installed_at);
-
-        auto installer_version{
-            receipt_string(document, "installer_version", path)};
-        if (!installer_version) {
-            return std::unexpected{std::move(installer_version.error())};
-        }
-        out.installer_version = std::move(*installer_version);
-    } else {
-        // A v1 receipt predates signer pinning and the audit fields; the
-        // runtime treats it as legacy state until the signer is confirmed.
-        out.policy = "legacy";
+    auto fingerprint{receipt_string(document, "public_key_fingerprint", path)};
+    if (!fingerprint) {
+        return std::unexpected{std::move(fingerprint.error())};
     }
-
-    if (document.find("origin") != nullptr) {
-        auto origin{receipt_string(document, "origin", path)};
-        if (!origin) {
-            return std::unexpected{std::move(origin.error())};
-        }
-        auto parsed{parse_mod_origin(*origin)};
-        if (!parsed) {
-            return std::unexpected{receipt_error(
-                path, fmt::format("unknown origin '{}' (expected builtin, "
-                                  "first_party or user)",
-                                  *origin))};
-        }
-        out.origin = *parsed;
+    if (!fingerprint->empty() && !is_lower_hex(*fingerprint, 64)) {
+        return std::unexpected{receipt_error(
+            path, "field 'public_key_fingerprint' must be empty or 64 "
+                  "lowercase hex characters")};
     }
+    out.public_key_fingerprint = std::move(*fingerprint);
+
+    auto policy{receipt_string(document, "policy", path)};
+    if (!policy) {
+        return std::unexpected{std::move(policy.error())};
+    }
+    if (*policy != "strict" && *policy != "trusted-any" &&
+        *policy != "unsigned") {
+        return std::unexpected{receipt_error(
+            path, fmt::format("unknown policy '{}' (expected strict, "
+                              "trusted-any or unsigned)",
+                              *policy))};
+    }
+    out.policy = std::move(*policy);
+
+    auto installed_at{receipt_string(document, "installed_at", path)};
+    if (!installed_at) {
+        return std::unexpected{std::move(installed_at.error())};
+    }
+    out.installed_at = std::move(*installed_at);
+
+    auto installer_version{receipt_string(document, "installer_version", path)};
+    if (!installer_version) {
+        return std::unexpected{std::move(installer_version.error())};
+    }
+    out.installer_version = std::move(*installer_version);
+
+    auto origin{receipt_string(document, "origin", path)};
+    if (!origin) {
+        return std::unexpected{std::move(origin.error())};
+    }
+    auto parsed_origin{parse_mod_origin(*origin)};
+    if (!parsed_origin) {
+        return std::unexpected{receipt_error(
+            path, fmt::format("unknown origin '{}' (expected builtin, "
+                              "first_party or user)",
+                              *origin))};
+    }
+    out.origin = *parsed_origin;
 
     auto files{receipt_field(document, "files", path)};
     if (!files) {
@@ -3417,24 +3354,19 @@ namespace {
         if (!blake3) {
             return std::unexpected{std::move(blake3.error())};
         }
-        std::uint32_t file_mode{0644};
-        if (entry.find("mode") != nullptr) {
-            auto mode{receipt_integer(entry, "mode", path)};
-            if (!mode) {
-                return std::unexpected{std::move(mode.error())};
-            }
-            if (*mode < 0 || *mode > 0777) {
-                return std::unexpected{receipt_error(
-                    path,
-                    fmt::format("files[{}].mode must be 0..0777", index))};
-            }
-            file_mode = static_cast<std::uint32_t>(*mode);
+        auto mode{receipt_integer(entry, "mode", path)};
+        if (!mode) {
+            return std::unexpected{std::move(mode.error())};
+        }
+        if (*mode < 0 || *mode > 0777) {
+            return std::unexpected{receipt_error(
+                path, fmt::format("files[{}].mode must be 0..0777", index))};
         }
         out.files.push_back(receipt_file{
             .path = std::move(*file_path),
             .size = static_cast<std::uint64_t>(*size),
             .blake3 = *blake3,
-            .mode = file_mode,
+            .mode = static_cast<std::uint32_t>(*mode),
         });
     }
     return out;
@@ -3814,8 +3746,8 @@ auto uninstall_rfmod(data::content_store &store, std::string_view id,
         result.signer_pin_kept = true;
         result.signer_pin_path = *pin_path;
         if (!io::exists(*pin_path)) {
-            // Derive from the removed receipts: the highest signed v2 receipt
-            // names the signer. A store whose receipts predate signing has no
+            // Derive from the removed receipts: the highest signed receipt
+            // names the signer. A store whose receipts are unsigned has no
             // signer to keep.
             std::optional<mod_signer_pin> derived;
             std::optional<core::semver> derived_version;
@@ -3868,74 +3800,6 @@ auto uninstall_rfmod(data::content_store &store, std::string_view id,
         result.signer_pin_cleared = true;
     }
     return result;
-}
-
-auto migrate_receipts(std::string_view store_root, bool apply)
-    -> result<receipt_migration_report> {
-    auto paths{list_receipt_paths(store_root)};
-    if (!paths) {
-        return std::unexpected{
-            annotate(std::move(paths.error()), "mod receipts migration")};
-    }
-    receipt_migration_report report;
-    for (const auto &path : *paths) {
-        ++report.scanned;
-        auto receipt{read_receipt(path)};
-        if (!receipt) {
-            return std::unexpected{
-                annotate(std::move(receipt.error()), "mod receipts migration")};
-        }
-        if (receipt->schema_version >= 2U) {
-            ++report.current;
-            continue;
-        }
-        if (!apply) {
-            ++report.migrated;
-            continue;
-        }
-        using json_value = data::json::value;
-        json_value::array_type files;
-        files.reserve(receipt->files.size());
-        for (const auto &file : receipt->files) {
-            json_value::object_type entry;
-            entry.emplace("path", json_value{file.path});
-            entry.emplace("size",
-                          json_value{static_cast<std::int64_t>(file.size)});
-            entry.emplace("blake3", json_value{data::to_hex(file.blake3)});
-            entry.emplace("mode", json_value{file.mode});
-            files.emplace_back(std::move(entry));
-        }
-        json_value::object_type document;
-        document.emplace("schema",
-                         json_value{std::string{mod_receipt_schema_v2}});
-        document.emplace("id", json_value{receipt->id});
-        document.emplace("version", json_value{receipt->version});
-        document.emplace("abi", json_value{receipt->abi});
-        document.emplace("archive_blake3",
-                         json_value{data::to_hex(receipt->archive_blake3)});
-        document.emplace("manifest_blake3",
-                         json_value{data::to_hex(receipt->manifest_blake3)});
-        document.emplace("signed", json_value{receipt->signed_package});
-        document.emplace("trusted", json_value{receipt->trusted});
-        document.emplace("key_id", json_value{receipt->key_id});
-        // A migration never confirms a signer: the fingerprint is unknown and
-        // the policy records the legacy provenance.
-        document.emplace("public_key_fingerprint", json_value{std::string{}});
-        document.emplace("policy", json_value{"legacy"});
-        document.emplace("installed_at", json_value{std::string{}});
-        document.emplace("installer_version", json_value{std::string{}});
-        document.emplace("origin",
-                         json_value{std::string{to_string(receipt->origin)}});
-        document.emplace("files", json_value{std::move(files)});
-        if (auto written{io::atomic_write_text(
-                path, json_value{std::move(document)}.dump())};
-            !written) {
-            ++report.failed;
-            continue;
-        }
-        ++report.migrated;
-    }
-    return report;
 }
 
 } // namespace refrain::mod
