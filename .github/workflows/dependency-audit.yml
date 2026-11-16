@@ -9,6 +9,9 @@ permissions:
   contents: read
   security-events: write
 
+env:
+  REFRAIN_CONAN_PROFILE: gcc-release
+
 concurrency:
   group: dependency-audit
   cancel-in-progress: true
@@ -27,8 +30,11 @@ jobs:
       - name: Install Conan
         run: pip install "conan==2.31.2"
 
-      - name: Configure the Conan profile
-        run: conan profile detect --force
+      - name: Create the Conan profiles
+        run: bash scripts/bootstrap.sh --profile-only
+
+      - name: Export the vendored recipes
+        run: python3 tools/vendor_export.py --profile "${REFRAIN_CONAN_PROFILE}"
 
       - name: Authenticate the audit provider
         env:
@@ -42,7 +48,8 @@ jobs:
 
       - name: Scan the dependency graph
         run: |
-          conan audit scan . --lockfile=conan/locks/vendor.lock \
+          conan audit scan . -pr "${REFRAIN_CONAN_PROFILE}" \
+            --lockfile=conan/locks/vendor.lock \
             --format json --out-file conan-audit.json \
             --severity-level 100
 
