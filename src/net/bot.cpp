@@ -522,11 +522,20 @@ class bot_session {
     }
 
     void send_walk(double phase) {
+        double spawn_x{0.0};
+        double spawn_y{0.0};
+        double spawn_z{0.0};
+        {
+            std::lock_guard lock{mutex_};
+            spawn_x = spawn_x_;
+            spawn_y = spawn_y_;
+            spawn_z = spawn_z_;
+        }
         play_sb::move_player_pos_rot packet{};
-        packet.x = spawn_x_ + options_.walk_origin_x +
+        packet.x = spawn_x + options_.walk_origin_x +
                    std::cos(phase) * options_.walk_radius;
-        packet.y = spawn_y_;
-        packet.z = spawn_z_ + options_.walk_origin_z +
+        packet.y = spawn_y;
+        packet.z = spawn_z + options_.walk_origin_z +
                    std::sin(phase) * options_.walk_radius;
         packet.y_rot =
             static_cast<float>(phase * (180.0 / 3.141592653589793)) + 90.0F;
@@ -558,10 +567,19 @@ class bot_session {
     }
 
     void send_move() {
+        double spawn_x{0.0};
+        double spawn_y{0.0};
+        double spawn_z{0.0};
+        {
+            std::lock_guard lock{mutex_};
+            spawn_x = spawn_x_;
+            spawn_y = spawn_y_;
+            spawn_z = spawn_z_;
+        }
         play_sb::move_player_pos_rot packet{};
-        packet.x = spawn_x_ + options_.move_dx;
-        packet.y = spawn_y_ + options_.move_dy;
-        packet.z = spawn_z_ + options_.move_dz;
+        packet.x = spawn_x + options_.move_dx;
+        packet.y = spawn_y + options_.move_dy;
+        packet.z = spawn_z + options_.move_dz;
         packet.y_rot = 0.0F;
         packet.x_rot = 0.0F;
         packet.flags = 1U;
