@@ -330,8 +330,8 @@ auto offline_profile(std::string_view name) -> result<profile> {
     material.append(name);
     auto digest{md5(std::as_bytes(
         std::span<const char>{material.data(), material.size()}))};
-    secure_zero(std::span<std::byte>{
-        reinterpret_cast<std::byte *>(material.data()), material.size()});
+    secure_zero(
+        std::as_writable_bytes(std::span{material.data(), material.size()}));
     if (!digest) {
         return std::unexpected{
             make_auth_error(auth_error::unsupported,

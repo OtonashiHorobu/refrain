@@ -119,8 +119,7 @@ void report_failure(transfer_state &state, error cause) {
                            state.max_bytes)));
         return 0;
     }
-    const auto chunk{std::span<const std::byte>{
-        reinterpret_cast<const std::byte *>(data), length}};
+    const auto chunk{std::as_bytes(std::span{data, length})};
     if (!state.hasher.update(chunk)) {
         report_failure(state,
                        transfer_failure("failed to hash the response body"));

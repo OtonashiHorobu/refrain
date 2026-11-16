@@ -4,6 +4,7 @@
 
 #include <refrain/data/vanilla.hpp>
 
+#include <refrain/core/byte_order.hpp>
 #include <refrain/data/checksum.hpp>
 
 #include <algorithm>
@@ -43,59 +44,38 @@ auto fail(std::string_view message) -> error {
     return make_error(error_code::invalid_argument, message);
 }
 
+/// Append `value` to `out` as little-endian bytes.
+template <core::byte_order::fixed_width_integer T>
+void append_le(std::vector<std::byte> &out, T value) {
+    const auto offset{out.size()};
+    out.resize(offset + sizeof(T));
+    core::byte_order::store_le<T>(out, offset, value);
+}
+
 void put_u16(std::vector<std::byte> &out, std::uint16_t value) {
-    out.push_back(static_cast<std::byte>(value & 0xFFU));
-    out.push_back(static_cast<std::byte>((value >> 8U) & 0xFFU));
+    append_le(out, value);
 }
 
 void put_u32(std::vector<std::byte> &out, std::uint32_t value) {
-    for (int shift = 0; shift < 32; shift += 8) {
-        out.push_back(static_cast<std::byte>((value >> shift) & 0xFFU));
-    }
+    append_le(out, value);
 }
 
 void put_u64(std::vector<std::byte> &out, std::uint64_t value) {
-    for (int shift = 0; shift < 64; shift += 8) {
-        out.push_back(static_cast<std::byte>((value >> shift) & 0xFFU));
-    }
+    append_le(out, value);
 }
 
 void put_i32(std::vector<std::byte> &out, std::int32_t value) {
-    put_u32(out, static_cast<std::uint32_t>(value));
+    append_le(out, value);
 }
 
 void put_bytes(std::vector<std::byte> &out, std::span<const std::byte> bytes) {
     out.insert(out.end(), bytes.begin(), bytes.end());
 }
 
-auto read_u16(std::span<const std::byte> bytes, std::size_t offset)
-    -> std::uint16_t {
-    return static_cast<std::uint16_t>(bytes[offset]) |
-           (static_cast<std::uint16_t>(bytes[offset + 1]) << 8U);
-}
-
-auto read_u32(std::span<const std::byte> bytes, std::size_t offset)
-    -> std::uint32_t {
-    std::uint32_t value = 0;
-    for (int i = 0; i < 4; ++i) {
-        value |= static_cast<std::uint32_t>(bytes[offset + i]) << (8 * i);
-    }
-    return value;
-}
-
-auto read_u64(std::span<const std::byte> bytes, std::size_t offset)
-    -> std::uint64_t {
-    std::uint64_t value = 0;
-    for (int i = 0; i < 8; ++i) {
-        value |= static_cast<std::uint64_t>(bytes[offset + i]) << (8 * i);
-    }
-    return value;
-}
-
-auto read_i32(std::span<const std::byte> bytes, std::size_t offset)
-    -> std::int32_t {
-    return static_cast<std::int32_t>(read_u32(bytes, offset));
-}
+using core::byte_order::load_le;
+using core::byte_order::load_le16;
+using core::byte_order::load_le32;
+using core::byte_order::load_le64;
 
 auto align8(std::size_t value) -> std::size_t {
     return (value + 7U) & ~std::size_t{7U};
@@ -713,17 +693,17 @@ auto vanilla_tables::open(std::span<const std::byte> bytes, bool verify)
             return std::unexpected{fail("bad container magic")};
         }
     }
-    const auto version = read_u16(bytes, 4);
+    const auto version = load_le16(bytes, 4);
     if (version != vanilla_table_version) {
         return std::unexpected{fail("unsupported container version")};
     }
-    if (read_u16(bytes, 6) != vanilla_table_kind) {
+    if (load_le16(bytes, 6) != vanilla_table_kind) {
         return std::unexpected{fail("unsupported container kind")};
     }
-    if (read_u32(bytes, 32) != 1) {
+    if (load_le32(bytes, 32) != 1) {
         return std::unexpected{fail("unsupported digest algorithm")};
     }
-    if (read_u64(bytes, 24) != bytes.size() - header_size) {
+    if (load_le64(bytes, 24) != bytes.size() - header_size) {
         return std::unexpected{fail("payload size does not match the file")};
     }
 
@@ -731,9 +711,9 @@ auto vanilla_tables::open(std::span<const std::byte> bytes, bool verify)
     table.bytes_ = bytes;
     table.info_.version = version;
     table.info_.kind = vanilla_table_kind;
-    table.info_.data_version = read_i32(bytes, 12);
+    table.info_.data_version = load_le<std::int32_t>(bytes, 12);
 
-    const auto section_count = read_u32(bytes, 16);
+    const auto section_count = load_le32(bytes, 16);
     if (section_count > max_sections) {
         return std::unexpected{fail("too many sections")};
     }
@@ -774,8 +754,8 @@ auto vanilla_tables::open(std::span<const std::byte> bytes, bool verify)
             static_cast<char>(bytes[base + 3]),
         };
         section record{};
-        record.offset = read_u32(bytes, base + 4);
-        record.size = read_u32(bytes, base + 8);
+        record.offset = load_le32(bytes, base + 4);
+        record.size = load_le32(bytes, base + 8);
         if (record.offset % 8U != 0 || record.offset < table_end ||
             record.size > bytes.size() ||
             record.offset > bytes.size() - record.size) {
@@ -783,7 +763,7 @@ auto vanilla_tables::open(std::span<const std::byte> bytes, bool verify)
         }
         const auto payload = std::span<const std::byte>{bytes}.subspan(
             record.offset, record.size);
-        if (crc32c(payload) != read_u32(bytes, base + 12)) {
+        if (crc32c(payload) != load_le32(bytes, base + 12)) {
             return std::unexpected{fail("section checksum mismatch")};
         }
         const std::string_view name{tag.data(), tag.size()};
@@ -828,7 +808,7 @@ auto vanilla_tables::open(std::span<const std::byte> bytes, bool verify)
 
     // --- structural validation --------------------------------------------
 
-    const auto str_count = read_u32(bytes, table.strings_.offset);
+    const auto str_count = load_le32(bytes, table.strings_.offset);
     if (table.strings_.size < 4U + (str_count + 1ULL) * 4U) {
         return std::unexpected{fail("string pool truncated")};
     }
@@ -838,7 +818,7 @@ auto vanilla_tables::open(std::span<const std::byte> bytes, bool verify)
     std::uint32_t strings_size = 0;
     for (std::uint32_t i = 0; i <= str_count; ++i) {
         const auto value =
-            read_u32(bytes, table.strings_.offset + 4U + i * 4ULL);
+            load_le32(bytes, table.strings_.offset + 4U + i * 4ULL);
         if (i == 0 && value != 0) {
             return std::unexpected{fail("string pool does not start at zero")};
         }
@@ -851,33 +831,33 @@ auto vanilla_tables::open(std::span<const std::byte> bytes, bool verify)
         table.strings_.offset + table.strings_.size) {
         return std::unexpected{fail("string pool overrun")};
     }
-    table.info_.blocks = read_u32(bytes, table.blocks_.offset);
+    table.info_.blocks = load_le32(bytes, table.blocks_.offset);
     if (table.blocks_.size < 4U + table.info_.blocks * block_record_size) {
         return std::unexpected{fail("block section truncated")};
     }
-    table.info_.properties = read_u32(bytes, table.properties_.offset);
+    table.info_.properties = load_le32(bytes, table.properties_.offset);
     if (table.properties_.size <
         4U + table.info_.properties * property_record_size) {
         return std::unexpected{fail("property section truncated")};
     }
-    const auto value_count = read_u32(bytes, table.property_values_.offset);
+    const auto value_count = load_le32(bytes, table.property_values_.offset);
     if (table.property_values_.size < 4U + value_count * 4ULL) {
         return std::unexpected{fail("value section truncated")};
     }
-    table.info_.states = read_u32(bytes, table.states_.offset);
+    table.info_.states = load_le32(bytes, table.states_.offset);
     if (table.states_.size < 4U + table.info_.states * state_record_size) {
         return std::unexpected{fail("state section truncated")};
     }
-    table.info_.presets = read_u32(bytes, table.biomes_.offset);
+    table.info_.presets = load_le32(bytes, table.biomes_.offset);
     if (table.biomes_.size < 4U + table.info_.presets * preset_record_size) {
         return std::unexpected{fail("biome section truncated")};
     }
-    table.info_.registries = read_u32(bytes, table.registries_.offset);
+    table.info_.registries = load_le32(bytes, table.registries_.offset);
     if (table.registries_.size <
         4U + table.info_.registries * registry_record_size) {
         return std::unexpected{fail("registry section truncated")};
     }
-    table.info_.items = read_u32(bytes, table.items_.offset);
+    table.info_.items = load_le32(bytes, table.items_.offset);
     if (table.items_.size < 4U + table.info_.items * item_record_size) {
         return std::unexpected{fail("item section truncated")};
     }
@@ -889,12 +869,12 @@ auto vanilla_tables::open(std::span<const std::byte> bytes, bool verify)
     // Strings referenced by blocks and properties must be in range.
     for (std::uint32_t i = 0; i < table.info_.blocks; ++i) {
         const auto base = block_base + i * block_record_size;
-        const auto first = read_u32(bytes, base + 4);
-        const auto count = read_u32(bytes, base + 8);
-        const auto default_state = read_u32(bytes, base + 12);
-        const auto first_property = read_u32(bytes, base + 16);
-        const auto property_count = read_u16(bytes, base + 20);
-        if (read_u32(bytes, base) >= table.info_.strings) {
+        const auto first = load_le32(bytes, base + 4);
+        const auto count = load_le32(bytes, base + 8);
+        const auto default_state = load_le32(bytes, base + 12);
+        const auto first_property = load_le32(bytes, base + 16);
+        const auto property_count = load_le16(bytes, base + 20);
+        if (load_le32(bytes, base) >= table.info_.strings) {
             return std::unexpected{fail("block name out of range")};
         }
         if (count == 0 ||
@@ -911,9 +891,9 @@ auto vanilla_tables::open(std::span<const std::byte> bytes, bool verify)
     }
     for (std::uint32_t i = 0; i < table.info_.properties; ++i) {
         const auto base = property_base + i * property_record_size;
-        const auto first_value = read_u32(bytes, base + 4);
-        const auto value_count_property = read_u16(bytes, base + 8);
-        if (read_u32(bytes, base) >= table.info_.strings) {
+        const auto first_value = load_le32(bytes, base + 4);
+        const auto value_count_property = load_le16(bytes, base + 8);
+        if (load_le32(bytes, base) >= table.info_.strings) {
             return std::unexpected{fail("property name out of range")};
         }
         if (value_count_property == 0 ||
@@ -923,23 +903,23 @@ auto vanilla_tables::open(std::span<const std::byte> bytes, bool verify)
         }
     }
     for (std::uint32_t i = 0; i < value_count; ++i) {
-        if (read_u32(bytes, table.property_values_.offset + 4U + i * 4ULL) >=
+        if (load_le32(bytes, table.property_values_.offset + 4U + i * 4ULL) >=
             table.info_.strings) {
             return std::unexpected{fail("value string out of range")};
         }
     }
     for (std::uint32_t i = 0; i < table.info_.states; ++i) {
         const auto base = state_base + i * state_record_size;
-        const auto block = read_u16(bytes, base);
+        const auto block = load_le16(bytes, base);
         const auto property_count = static_cast<std::size_t>(bytes[base + 4]);
-        const auto key = read_u32(bytes, base + 16);
+        const auto key = load_le32(bytes, base + 16);
         if (block >= table.info_.blocks || property_count > 8 ||
             key >= table.info_.strings) {
             return std::unexpected{fail("state record invalid")};
         }
         const auto block_record = block_base + block * block_record_size;
-        const auto first_property = read_u32(bytes, block_record + 16);
-        const auto block_property_count = read_u16(bytes, block_record + 20);
+        const auto first_property = load_le32(bytes, block_record + 16);
+        const auto block_property_count = load_le16(bytes, block_record + 20);
         if (property_count != block_property_count) {
             return std::unexpected{fail("state property count mismatch")};
         }
@@ -952,7 +932,7 @@ auto vanilla_tables::open(std::span<const std::byte> bytes, bool verify)
             const auto property_record =
                 property_base + property_id * property_record_size;
             const auto value_count_property =
-                read_u16(bytes, property_record + 8);
+                load_le16(bytes, property_record + 8);
             if (std::to_integer<std::size_t>(bytes[base + 5 + p]) >=
                 value_count_property) {
                 return std::unexpected{fail("state value index out of range")};
@@ -961,15 +941,15 @@ auto vanilla_tables::open(std::span<const std::byte> bytes, bool verify)
     }
     for (std::uint32_t i = 0; i < table.info_.presets; ++i) {
         const auto base = table.biomes_.offset + 4U + i * preset_record_size;
-        const auto first_entry = read_u32(bytes, base + 4);
-        const auto entry_count = read_u32(bytes, base + 8);
+        const auto first_entry = load_le32(bytes, base + 4);
+        const auto entry_count = load_le32(bytes, base + 8);
         const auto required =
             4ULL +
             static_cast<std::uint64_t>(table.info_.presets) *
                 preset_record_size +
             (static_cast<std::uint64_t>(first_entry) + entry_count) *
                 biome_entry_size;
-        if (read_u32(bytes, base) >= table.info_.strings ||
+        if (load_le32(bytes, base) >= table.info_.strings ||
             required > table.biomes_.size) {
             return std::unexpected{fail("biome preset record invalid")};
         }
@@ -977,15 +957,15 @@ auto vanilla_tables::open(std::span<const std::byte> bytes, bool verify)
     for (std::uint32_t i = 0; i < table.info_.registries; ++i) {
         const auto base =
             table.registries_.offset + 4U + i * registry_record_size;
-        const auto first_entry = read_u32(bytes, base + 4);
-        const auto entry_count = read_u32(bytes, base + 8);
+        const auto first_entry = load_le32(bytes, base + 4);
+        const auto entry_count = load_le32(bytes, base + 8);
         const auto required =
             4ULL +
             static_cast<std::uint64_t>(table.info_.registries) *
                 registry_record_size +
             (static_cast<std::uint64_t>(first_entry) + entry_count) *
                 registry_entry_size;
-        if (read_u32(bytes, base) >= table.info_.strings ||
+        if (load_le32(bytes, base) >= table.info_.strings ||
             required > table.registries_.size) {
             return std::unexpected{fail("registry record invalid")};
         }
@@ -1029,8 +1009,8 @@ auto vanilla_tables::string_at(std::uint32_t index) const -> std::string_view {
     }
     const auto offsets = strings_.offset + 4U;
     const auto data = offsets + (info_.strings + 1ULL) * 4U;
-    const auto begin = read_u32(bytes_, offsets + index * 4ULL);
-    const auto end = read_u32(bytes_, offsets + (index + 1ULL) * 4ULL);
+    const auto begin = load_le32(bytes_, offsets + index * 4ULL);
+    const auto end = load_le32(bytes_, offsets + (index + 1ULL) * 4ULL);
     const auto pointer =
         reinterpret_cast<const char *>(bytes_.data() + data + begin);
     return std::string_view{pointer, end - begin};
@@ -1039,10 +1019,10 @@ auto vanilla_tables::string_at(std::uint32_t index) const -> std::string_view {
 auto vanilla_tables::block_at(std::uint16_t id) const -> block_view {
     const auto base = blocks_.offset + 4U + id * block_record_size;
     return block_view{
-        .name = string_at(read_u32(bytes_, base)),
-        .first_state = read_u32(bytes_, base + 4),
-        .state_count = read_u32(bytes_, base + 8),
-        .default_state = read_u32(bytes_, base + 12),
+        .name = string_at(load_le32(bytes_, base)),
+        .first_state = load_le32(bytes_, base + 4),
+        .state_count = load_le32(bytes_, base + 8),
+        .default_state = load_le32(bytes_, base + 12),
     };
 }
 
@@ -1065,12 +1045,12 @@ auto vanilla_tables::find_block(std::string_view name) const
 
 auto vanilla_tables::state_at(std::uint32_t id) const -> state_view {
     const auto base = states_.offset + 4U + id * state_record_size;
-    const auto block = read_u16(bytes_, base);
+    const auto block = load_le16(bytes_, base);
     const auto count = static_cast<std::size_t>(bytes_[base + 4]);
     return state_view{
         .block = block,
-        .vanilla_id = read_u16(bytes_, base + 2),
-        .key = string_at(read_u32(bytes_, base + 16)),
+        .vanilla_id = load_le16(bytes_, base + 2),
+        .key = string_at(load_le32(bytes_, base + 16)),
         .values =
             std::span<const std::uint8_t>{
                 reinterpret_cast<const std::uint8_t *>(bytes_.data() + base +
@@ -1109,29 +1089,29 @@ auto vanilla_tables::state_by_vanilla_id(std::uint16_t vanilla_id) const
 
 auto vanilla_tables::property_name(std::uint16_t id) const -> std::string_view {
     return string_at(
-        read_u32(bytes_, properties_.offset + 4U + id * property_record_size));
+        load_le32(bytes_, properties_.offset + 4U + id * property_record_size));
 }
 
 auto vanilla_tables::property_value_count(std::uint16_t id) const
     -> std::uint8_t {
-    return static_cast<std::uint8_t>(read_u16(
+    return static_cast<std::uint8_t>(load_le16(
         bytes_, properties_.offset + 4U + id * property_record_size + 8));
 }
 
 auto vanilla_tables::property_value(std::uint16_t id, std::uint8_t index) const
     -> std::string_view {
     const auto base = properties_.offset + 4U + id * property_record_size;
-    const auto first_value = read_u32(bytes_, base + 4);
-    const auto value = read_u32(bytes_, property_values_.offset + 4U +
-                                            (first_value + index) * 4ULL);
+    const auto first_value = load_le32(bytes_, base + 4);
+    const auto value = load_le32(bytes_, property_values_.offset + 4U +
+                                             (first_value + index) * 4ULL);
     return string_at(value);
 }
 
 auto vanilla_tables::block_properties(std::uint16_t block) const
     -> std::span<const std::uint8_t> {
     const auto base = blocks_.offset + 4U + block * block_record_size;
-    const auto first = read_u32(bytes_, base + 16);
-    const auto count = read_u16(bytes_, base + 20);
+    const auto first = load_le32(bytes_, base + 16);
+    const auto count = load_le16(bytes_, base + 20);
     return std::span<const std::uint8_t>{
         reinterpret_cast<const std::uint8_t *>(
             bytes_.data() + block_properties_.offset + first),
@@ -1140,7 +1120,7 @@ auto vanilla_tables::block_properties(std::uint16_t block) const
 
 auto vanilla_tables::preset_at(std::uint32_t index) const -> std::string_view {
     return string_at(
-        read_u32(bytes_, biomes_.offset + 4U + index * preset_record_size));
+        load_le32(bytes_, biomes_.offset + 4U + index * preset_record_size));
 }
 
 auto vanilla_tables::find_preset(std::string_view name) const
@@ -1155,32 +1135,33 @@ auto vanilla_tables::find_preset(std::string_view name) const
 
 auto vanilla_tables::biome_parameter_count(std::uint32_t preset) const
     -> std::uint32_t {
-    return read_u32(bytes_,
-                    biomes_.offset + 4U + preset * preset_record_size + 8);
+    return load_le32(bytes_,
+                     biomes_.offset + 4U + preset * preset_record_size + 8);
 }
 
 auto vanilla_tables::biome_parameter(std::uint32_t preset,
                                      std::uint32_t index) const
     -> biome_parameter_view {
     const auto preset_base = biomes_.offset + 4U + preset * preset_record_size;
-    const auto first_entry = read_u32(bytes_, preset_base + 4);
+    const auto first_entry = load_le32(bytes_, preset_base + 4);
     const auto entry_base = biomes_.offset + 4U +
                             info_.presets * preset_record_size +
                             (first_entry + index) * biome_entry_size;
     biome_parameter_view view;
     for (std::size_t i = 0; i < 6; ++i) {
-        view.min[i] = read_i32(bytes_, entry_base + i * 4ULL);
-        view.max[i] = read_i32(bytes_, entry_base + 24U + i * 4ULL);
+        view.min[i] = load_le<std::int32_t>(bytes_, entry_base + i * 4ULL);
+        view.max[i] =
+            load_le<std::int32_t>(bytes_, entry_base + 24U + i * 4ULL);
     }
-    view.offset = read_i32(bytes_, entry_base + 48U);
-    view.biome = string_at(read_u32(bytes_, entry_base + 52U));
+    view.offset = load_le<std::int32_t>(bytes_, entry_base + 48U);
+    view.biome = string_at(load_le32(bytes_, entry_base + 52U));
     return view;
 }
 
 auto vanilla_tables::registry_at(std::uint32_t index) const
     -> std::string_view {
-    return string_at(read_u32(bytes_, registries_.offset + 4U +
-                                          index * registry_record_size));
+    return string_at(load_le32(bytes_, registries_.offset + 4U +
+                                           index * registry_record_size));
 }
 
 auto vanilla_tables::find_registry(std::string_view name) const
@@ -1195,8 +1176,8 @@ auto vanilla_tables::find_registry(std::string_view name) const
 
 auto vanilla_tables::registry_entry_count(std::uint32_t registry) const
     -> std::uint32_t {
-    return read_u32(bytes_, registries_.offset + 4U +
-                                registry * registry_record_size + 8);
+    return load_le32(bytes_, registries_.offset + 4U +
+                                 registry * registry_record_size + 8);
 }
 
 auto vanilla_tables::registry_entry(std::uint32_t registry,
@@ -1204,22 +1185,22 @@ auto vanilla_tables::registry_entry(std::uint32_t registry,
     -> registry_entry_view {
     const auto registry_base =
         registries_.offset + 4U + registry * registry_record_size;
-    const auto first_entry = read_u32(bytes_, registry_base + 4);
+    const auto first_entry = load_le32(bytes_, registry_base + 4);
     const auto entry_base = registries_.offset + 4U +
                             info_.registries * registry_record_size +
                             (first_entry + index) * registry_entry_size;
     return registry_entry_view{
-        .name = string_at(read_u32(bytes_, entry_base)),
-        .protocol_id = read_i32(bytes_, entry_base + 4),
+        .name = string_at(load_le32(bytes_, entry_base)),
+        .protocol_id = load_le<std::int32_t>(bytes_, entry_base + 4),
     };
 }
 
 auto vanilla_tables::item_at(std::uint32_t index) const -> item_view {
     const auto base = items_.offset + 4U + index * item_record_size;
     return item_view{
-        .name = string_at(read_u32(bytes_, base)),
-        .max_stack_size = read_u16(bytes_, base + 4),
-        .max_damage = read_u32(bytes_, base + 8),
+        .name = string_at(load_le32(bytes_, base)),
+        .max_stack_size = load_le16(bytes_, base + 4),
+        .max_damage = load_le32(bytes_, base + 8),
     };
 }
 

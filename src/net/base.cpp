@@ -4,9 +4,12 @@
 
 #include <refrain/net/base.hpp>
 
+#include <refrain/core/byte_order.hpp>
+
+#include <array>
 #include <bit>
-#include <cstring>
 #include <limits>
+#include <span>
 #include <utility>
 
 #include <fmt/format.h>
@@ -187,36 +190,27 @@ auto reader::read_u16() -> result<std::uint16_t> {
     if (auto checked{need(2)}; !checked) {
         return std::unexpected{checked.error()};
     }
-    const auto high{static_cast<std::uint16_t>(data_[position_])};
-    const auto low{static_cast<std::uint16_t>(data_[position_ + 1])};
+    const auto value{core::byte_order::load_be16(data_, position_)};
     position_ += 2;
-    return static_cast<std::uint16_t>((high << 8U) | low);
+    return value;
 }
 
 auto reader::read_i32() -> result<std::int32_t> {
     if (auto checked{need(4)}; !checked) {
         return std::unexpected{checked.error()};
     }
-    std::uint32_t value{0};
-    for (unsigned index{0}; index < 4; ++index) {
-        value =
-            (value << 8U) | static_cast<std::uint8_t>(data_[position_ + index]);
-    }
+    const auto value{core::byte_order::load_be<std::int32_t>(data_, position_)};
     position_ += 4;
-    return std::bit_cast<std::int32_t>(value);
+    return value;
 }
 
 auto reader::read_i64() -> result<std::int64_t> {
     if (auto checked{need(8)}; !checked) {
         return std::unexpected{checked.error()};
     }
-    std::uint64_t value{0};
-    for (unsigned index{0}; index < 8; ++index) {
-        value =
-            (value << 8U) | static_cast<std::uint8_t>(data_[position_ + index]);
-    }
+    const auto value{core::byte_order::load_be<std::int64_t>(data_, position_)};
     position_ += 8;
-    return std::bit_cast<std::int64_t>(value);
+    return value;
 }
 
 auto reader::read_f32() -> result<float> {
@@ -332,15 +326,13 @@ auto reader::read_identifier() -> result<data::resource_location> {
 
 auto reader::read_uuid() -> result<uuid> {
     uuid value{};
+    auto raw{std::as_writable_bytes(std::span{value.bytes})};
     for (std::size_t half{0}; half < 2; ++half) {
         auto part{read_big_endian_u64(*this)};
         if (!part) {
             return std::unexpected{part.error()};
         }
-        for (unsigned index{0}; index < 8; ++index) {
-            value.bytes[half * 8 + index] = static_cast<std::uint8_t>(
-                (*part >> (56U - index * 8U)) & 0xFFU);
-        }
+        core::byte_order::store_be64(raw, half * 8, *part);
     }
     return value;
 }
@@ -368,22 +360,21 @@ void writer::write_u8(std::uint8_t value) {
 }
 
 void writer::write_u16(std::uint16_t value) {
-    write_u8(static_cast<std::uint8_t>(value >> 8U));
-    write_u8(static_cast<std::uint8_t>(value & 0xFFU));
+    std::array<std::byte, 2> raw{};
+    core::byte_order::store_be16(raw, 0, value);
+    out_->insert(out_->end(), raw.begin(), raw.end());
 }
 
 void writer::write_i32(std::int32_t value) {
-    const auto raw{std::bit_cast<std::uint32_t>(value)};
-    for (int shift{24}; shift >= 0; shift -= 8) {
-        write_u8(static_cast<std::uint8_t>((raw >> shift) & 0xFFU));
-    }
+    std::array<std::byte, 4> raw{};
+    core::byte_order::store_be(raw, 0, value);
+    out_->insert(out_->end(), raw.begin(), raw.end());
 }
 
 void writer::write_i64(std::int64_t value) {
-    const auto raw{std::bit_cast<std::uint64_t>(value)};
-    for (int shift{56}; shift >= 0; shift -= 8) {
-        write_u8(static_cast<std::uint8_t>((raw >> shift) & 0xFFU));
-    }
+    std::array<std::byte, 8> raw{};
+    core::byte_order::store_be(raw, 0, value);
+    out_->insert(out_->end(), raw.begin(), raw.end());
 }
 
 void writer::write_f32(float value) {
@@ -428,9 +419,8 @@ auto writer::write_string(std::string_view text, std::size_t max_characters)
                                           "string exceeds the VarInt length")};
     }
     write_varint(static_cast<std::uint32_t>(text.size()));
-    out_->insert(out_->end(), reinterpret_cast<const std::byte *>(text.data()),
-                 reinterpret_cast<const std::byte *>(text.data()) +
-                     text.size());
+    const auto payload{std::as_bytes(std::span{text})};
+    out_->insert(out_->end(), payload.begin(), payload.end());
     return status_ok();
 }
 
@@ -439,12 +429,10 @@ auto writer::write_identifier(const data::resource_location &value) -> status {
 }
 
 auto writer::write_uuid(const uuid &value) -> status {
+    const auto raw{std::as_bytes(std::span{value.bytes})};
     for (std::size_t half{0}; half < 2; ++half) {
-        std::uint64_t part{0};
-        for (unsigned index{0}; index < 8; ++index) {
-            part = (part << 8U) | value.bytes[half * 8 + index];
-        }
-        write_i64(std::bit_cast<std::int64_t>(part));
+        write_i64(std::bit_cast<std::int64_t>(
+            core::byte_order::load_be64(raw, half * 8)));
     }
     return status_ok();
 }
