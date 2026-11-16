@@ -1,0 +1,31 @@
+# CVE-2026-27171: negative lengths in the crc32_combine functions.
+#
+# zlib-ng 2.3.3 feeds the signed len2 directly into x2nmodp(), whose loop
+# right-shifts that value until it reaches zero. A negative len2 never
+# reaches zero, so crc32_combine(), crc32_combine64(), crc32_combine_gen()
+# and crc32_combine_gen64() spin forever instead of returning.
+#
+# Backport of the upstream guard in zlib-ng commit
+# c6df39a06a4d6aa701b25bd4b6b146dde4156e02
+# (https://github.com/zlib-ng/zlib-ng/commit/c6df39a06a4d6aa701b25bd4b6b146dde4156e02),
+# itself the zlib-ng backport of madler/zlib commit ba829a45.
+# Drop this patch when the pinned zlib-ng release already contains the guard.
+#
+--- a/crc32_braid_comb.c
++++ b/crc32_braid_comb.c
+@@ -14,10 +14,14 @@
+ 
+ /* ========================================================================= */
+ static uint32_t crc32_combine_(uint32_t crc1, uint32_t crc2, z_off64_t len2) {
++    if (len2 < 0)
++        return 0;
+     return multmodp(x2nmodp(len2, 3), crc1) ^ crc2;
+ }
+ static uint32_t crc32_combine_gen_(z_off64_t len2) {
+-     return x2nmodp(len2, 3);
++    if (len2 < 0)
++        return 0;
++    return x2nmodp(len2, 3);
+ }
+ static uint32_t crc32_combine_op_(uint32_t crc1, uint32_t crc2, const uint32_t op) {
+     return multmodp(op, crc1) ^ crc2;

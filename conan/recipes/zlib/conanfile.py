@@ -14,15 +14,23 @@
 # Upgrade procedure:
 #   1. https://github.com/zlib-ng/zlib-ng/releases -> new tag
 #   2. bump `version` (compat level, e.g. 1.3.1) + `_url` + `_sha256`
-#   3. python3 tools/vendor_export.py --build --only zlib
-#   4. refresh conan/locks/vendor.lock and run the extract/crashpad smoke tests
+#   3. drop `patches/crc32-combine-negative-length.patch` if the new release
+#      already rejects negative lengths in crc32_combine()/crc32_combine_gen()
+#   4. python3 tools/vendor_export.py --build --only zlib
+#   5. refresh conan/locks/vendor.lock and run the extract/crashpad smoke tests
 #      plus an inflate benchmark
+#
+# Patch backport:
+#   zlib-ng 2.3.3 does not terminate when a negative len2 reaches
+#   crc32_combine()/crc32_combine_gen() (CVE-2026-27171). `source()` applies
+#   the upstream guard from zlib-ng commit
+#   c6df39a06a4d6aa701b25bd4b6b146dde4156e02 until a release contains it.
 
 import os
 
 from conan import ConanFile
 from conan.tools.cmake import CMake, CMakeToolchain, cmake_layout
-from conan.tools.files import collect_libs, copy, get, rmdir
+from conan.tools.files import collect_libs, copy, get, patch, rmdir
 
 
 class ZlibConan(ConanFile):
@@ -43,6 +51,8 @@ class ZlibConan(ConanFile):
     options = {"shared": [True, False], "fPIC": [True, False]}
     default_options = {"shared": False, "fPIC": True}
 
+    exports_sources = "patches/*"
+
     _url = "https://github.com/zlib-ng/zlib-ng/archive/refs/tags/2.3.3.tar.gz"
     _sha256 = "f9c65aa9c852eb8255b636fd9f07ce1c406f061ec19a2e7d508b318ca0c907d1"
 
@@ -59,6 +69,11 @@ class ZlibConan(ConanFile):
 
     def source(self):
         get(self, url=self._url, sha256=self._sha256, strip_root=True)
+        # CVE-2026-27171: negative lengths must be rejected instead of being
+        # shifted forever inside x2nmodp().
+        patch(self,
+              patch_file="patches/crc32-combine-negative-length.patch",
+              strip=1)
 
     def generate(self):
         tc = CMakeToolchain(self)
