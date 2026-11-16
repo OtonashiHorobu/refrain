@@ -64,6 +64,13 @@ class host_context final : public refrain::host::context,
     [[nodiscard]] auto query_service(std::string_view service,
                                      std::string_view instance)
         -> refrain::result<refrain::host::core::provider_ref> override;
+    [[nodiscard]] auto query_service_handle(std::string_view service,
+                                            std::string_view instance)
+        -> refrain::result<refrain::host::core::provider_handle> override;
+    [[nodiscard]] auto validate_handle(std::string_view service,
+                                       std::string_view instance,
+                                       std::uint64_t generation)
+        -> refrain::status override;
     [[nodiscard]] auto
     register_provider(std::string_view service, std::string_view instance,
                       const refrain::host::core::provider_ref &ref)

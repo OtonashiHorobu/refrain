@@ -49,6 +49,21 @@ class context {
     [[nodiscard]] virtual auto query_service(std::string_view service,
                                              std::string_view instance)
         -> result<core::provider_ref> = 0;
+    /// Generation-stamped form of `query_service` for a provider the caller
+    /// keeps across ticks. A sealed host service is returned with generation
+    /// zero (process lifetime, never stale); an ordinary service carries the
+    /// committed generation of its `(service, instance)` slot.
+    [[nodiscard]] virtual auto query_service_handle(std::string_view service,
+                                                    std::string_view instance)
+        -> result<core::provider_handle> = 0;
+    /// Check a cached generation at a tick boundary. Success means the
+    /// generation is current (or the service is sealed and the generation is
+    /// zero); `error_code::stale` means the caller must re-query instead of
+    /// calling the table it cached.
+    [[nodiscard]] virtual auto validate_handle(std::string_view service,
+                                               std::string_view instance,
+                                               std::uint64_t generation)
+        -> status = 0;
     [[nodiscard]] virtual auto register_provider(std::string_view service,
                                                  std::string_view instance,
                                                  const core::provider_ref &ref)

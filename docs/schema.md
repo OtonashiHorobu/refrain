@@ -300,6 +300,17 @@ The ABI major version must match between a provider and its consumer and only
 changes for an incompatible layout or calling change;
 the minor and patch carry additive and compatible evolution.
 
+Sealed host contracts follow the same rule. `refrain:host.core` moved from
+`1.0.0` to `1.1.0` when it gained the generation-stamped provider handle:
+`provider_handle` appends a struct, `query_service_handle` and `validate_handle`
+append vtable slots, and `host_error` appends `stale`. Every existing slot,
+field and enum value keeps its offset or number, so a provider built against
+`1.0.0` keeps its `version`, `log` and registry calls; a consumer that needs the
+new path checks the table's `struct_size` and minor. The sealed host tables
+themselves stay process-lifetime: a sealed handle carries generation zero and
+never needs validation, and only an ordinary service returns a replaceable
+generation.
+
         On -
         disk formats keep a monotonic integer format version.A breaking layout
             change bumps it and either migrates older data or
@@ -325,7 +336,7 @@ it is not a version.
     : worldgen` |
       1.0.0 | exclusive | | `refrain : world.migration` | 1.0.0 | exclusive |
       | `refrain : world` | 1.2.0 | exclusive | | `refrain : host.core` |
-                   1.0.0 | sealed | | `refrain : host.kernel` | 1.0.0 | sealed |
+                   1.1.0 | sealed | | `refrain : host.kernel` | 1.0.0 | sealed |
                    | `refrain : host.metadata` | 1.0.0 | sealed |
                    | `refrain : host.platform` | 1.0.0 | sealed |
 

@@ -101,6 +101,39 @@ class fake_context final : public host::context {
         return ref;
     }
 
+    [[nodiscard]] auto query_service_handle(std::string_view service,
+                                            std::string_view instance)
+        -> refrain::result<core::provider_handle> override {
+        if (service.empty()) {
+            return std::unexpected{refrain::make_error(
+                refrain::error_code::invalid_argument, "empty service")};
+        }
+        queried_service = service;
+        queried_instance = instance;
+        core::provider_handle handle{};
+        handle.provider.vtable = &some_vtable;
+        handle.provider.self = this;
+        handle.provider.abi_major = 1;
+        handle.generation = 7;
+        handle.epoch = 3;
+        return handle;
+    }
+
+    [[nodiscard]] auto validate_handle(std::string_view service,
+                                       std::string_view instance,
+                                       std::uint64_t generation)
+        -> refrain::status override {
+        queried_service = service;
+        queried_instance = instance;
+        validated_generation = generation;
+        if (service == "refrain:missing") {
+            return std::unexpected{
+                refrain::make_error(refrain::error_code::stale,
+                                    "the cached generation was replaced")};
+        }
+        return refrain::status_ok();
+    }
+
     [[nodiscard]] auto register_provider(std::string_view service,
                                          std::string_view instance,
                                          const core::provider_ref &ref)
@@ -139,6 +172,7 @@ class fake_context final : public host::context {
     std::string last_config_namespace{};
     std::string queried_service{};
     std::string queried_instance{};
+    std::uint64_t validated_generation{0};
     std::string registered_service{};
     std::string registered_instance{};
     core::provider_ref registered_ref{};
@@ -217,6 +251,38 @@ const suite host_core_tests = [] {
         expect(*message == "sealed service");
     };
 
+    "host/core generation handle carries the registry stamp and stale maps to "
+    "stale"_test = [] {
+        fake_context fake;
+        const auto api{host::make_core_provider(fake)};
+
+        const auto found{api.query_service_handle("refrain:leaf", "primary")};
+        expect(found.has_value());
+        if (found) {
+            expect(found->struct_size ==
+                   REFRAIN_HOST_CORE_PROVIDER_HANDLE_SIZE);
+            expect(found->provider.struct_size ==
+                   REFRAIN_HOST_CORE_PROVIDER_REF_SIZE);
+            expect(found->provider.vtable == &fake.some_vtable);
+            expect(found->provider.self == &fake);
+            expect(found->generation == 7U);
+            expect(found->epoch == 3U);
+        }
+        expect(fake.queried_service == "refrain:leaf");
+        expect(fake.queried_instance == "primary");
+
+        const auto current{api.validate_handle("refrain:leaf", "primary", 7)};
+        expect(current.has_value());
+        expect(fake.validated_generation == 7U);
+
+        const auto stale{api.validate_handle("refrain:missing", {}, 7)};
+        expect(!stale.has_value());
+        expect(stale.error() == core::host_error::stale);
+        const auto message{api.last_error_message()};
+        expect(message.has_value());
+        expect(*message == "the cached generation was replaced");
+    };
+
     "host/core alloc/free round trip and error mapping"_test = [] {
         fake_context fake;
         const auto api{host::make_core_provider(fake)};
@@ -291,6 +357,33 @@ const suite host_core_tests = [] {
                 expect(found->self == &context);
             }
 
+            // The sealed table has no replaceable generation; the registered
+            // slot is not committed yet in this fixture, so the stamp is zero
+            // and validating it against the live slot succeeds.
+            const auto handle{
+                context.query_service_handle("refrain:host.core", {})};
+            expect(handle.has_value());
+            if (handle) {
+                expect(
+                    handle->provider.vtable ==
+                    static_cast<const void *>(&refrain::host::core_vtable()));
+                expect(handle->provider.self == &context);
+                expect(handle->generation == 0U);
+            }
+
+            const auto empty_query{context.query_service_handle("", {})};
+            expect(!empty_query.has_value());
+            expect(empty_query.error().code ==
+                   refrain::error_code::invalid_argument);
+            const auto empty_validate{context.validate_handle("", {}, 0)};
+            expect(!empty_validate.has_value());
+            expect(empty_validate.error().code ==
+                   refrain::error_code::invalid_argument);
+            const auto stale_missing{
+                context.validate_handle("refrain:missing", {}, 0)};
+            expect(!stale_missing.has_value());
+            expect(stale_missing.error().code == refrain::error_code::stale);
+
             const auto block{context.alloc(32, 16)};
             expect(block.has_value());
             if (block) {
@@ -351,6 +444,14 @@ const suite host_core_tests = [] {
 
         const auto null_query{table.query_service(&fake, {}, {}, nullptr)};
         expect(null_query ==
+               static_cast<refrain_status>(core::host_error::invalid_argument));
+
+        refrain_host_core_provider_handle handle{};
+        expect(table.query_service_handle(&fake, {}, {}, nullptr) ==
+               static_cast<refrain_status>(core::host_error::invalid_argument));
+        expect(table.query_service_handle(nullptr, {}, {}, &handle) ==
+               static_cast<refrain_status>(core::host_error::invalid_argument));
+        expect(table.validate_handle(nullptr, {}, {}, 0) ==
                static_cast<refrain_status>(core::host_error::invalid_argument));
 
         core::provider_ref ref{};

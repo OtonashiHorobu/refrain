@@ -9,6 +9,7 @@
 // a clean fake loader, a temporary content store and a one-column flat world)
 // so the assertions are about the wiring, not about a gamepack.
 
+#include <refrain/app/host_context.hpp>
 #include <refrain/app/mod_lifecycle.hpp>
 #include <refrain/contracts/abi.hpp>
 #include <refrain/contracts/services/mod_loader_abi.h>
@@ -16,6 +17,7 @@
 #include <refrain/core/io.hpp>
 #include <refrain/core/log.hpp>
 #include <refrain/data/content_store.hpp>
+#include <refrain/host/core_api.hpp>
 #include <refrain/mod/discovery.hpp>
 #include <refrain/mod/gamepack.hpp>
 #include <refrain/mod/host.hpp>
@@ -305,6 +307,9 @@ struct wired_host {
     // against a destroyed state object.
     clean_loader_state loader{};
     mod::host host{registry};
+    // The sealed `refrain:host.core` context a mod reaches the registry
+    // through, declared after the host it reads.
+    refrain::app::host_context context{host};
 };
 
 /// Resolve the installed catalog against `roots` and load it into `fixture`.
@@ -320,6 +325,18 @@ struct wired_host {
     }
     if (!register_clean_loader(fixture.host, fixture.loader)) {
         expect(false) << "clean loader registration failed";
+        return false;
+    }
+    const mod::provider_api host_core_api{
+        .vtable = &refrain::host::core_vtable(),
+        .self = &fixture.context,
+        .abi_major = REFRAIN_HOST_CORE_ABI_MAJOR,
+    };
+    if (!fixture.host
+             .register_sealed_provider("refrain:host.core", host_core_api,
+                                       "1.1.0")
+             .has_value()) {
+        expect(false) << "sealed host core registration failed";
         return false;
     }
     auto loaded{fixture.host.load(*plan, std::span<const std::byte>{})};
@@ -472,6 +489,13 @@ struct observations {
     std::optional<kernel::provider_handle> new_handle{};
     std::uint64_t epoch_after_removal{0};
     bool composition_without_mod{false};
+    /// The same slots as a mod sees them through the sealed host core ABI: one
+    /// handle cached at a tick, validated at the next tick boundary.
+    std::optional<refrain::host::core::provider_handle> abi_handle_before{};
+    bool abi_valid_before_commit{false};
+    bool abi_stale_after_commit{false};
+    std::uint64_t abi_generation_after_commit{0};
+    bool abi_missing_after_removal{false};
 };
 
 } // namespace
@@ -531,6 +555,8 @@ const suite mod_lifecycle_wiring_tests = [] {
         options.mod_host = &fixture.host;
         observations seen{};
         options.on_tick = [&fixture, &seen](std::uint64_t tick) {
+            const auto host_core{
+                refrain::host::make_core_provider(fixture.context)};
             if (tick == 1) {
                 seen.epoch_before_commit = fixture.host.epoch();
                 seen.staged_before_commit =
@@ -539,6 +565,18 @@ const suite mod_lifecycle_wiring_tests = [] {
                         fixture.host.services().query("refrain:leaf")};
                     handle) {
                     seen.oldest_handle = *handle;
+                }
+                // A mod caches the generation-stamped handle at the tick and
+                // validates it at the next boundary.
+                if (const auto handle{
+                        host_core.query_service_handle("refrain:leaf", {})};
+                    handle) {
+                    seen.abi_handle_before = *handle;
+                    seen.abi_valid_before_commit =
+                        host_core
+                            .validate_handle("refrain:leaf", {},
+                                             handle->generation)
+                            .has_value();
                 }
                 return;
             }
@@ -554,12 +592,32 @@ const suite mod_lifecycle_wiring_tests = [] {
                     handle) {
                     seen.new_handle = *handle;
                 }
+                // The generation cached before the commit is stale; the
+                // re-query returns the new generation.
+                if (seen.abi_handle_before.has_value()) {
+                    const auto stale{host_core.validate_handle(
+                        "refrain:leaf", {},
+                        seen.abi_handle_before->generation)};
+                    seen.abi_stale_after_commit =
+                        !stale.has_value() &&
+                        stale.error() == refrain::host::core::host_error::stale;
+                }
+                if (const auto handle{
+                        host_core.query_service_handle("refrain:leaf", {})};
+                    handle) {
+                    seen.abi_generation_after_commit = handle->generation;
+                }
                 return;
             }
             if (tick == 4) {
                 seen.epoch_after_removal = fixture.host.epoch();
                 seen.composition_without_mod =
                     fixture.host.find(leaf_id) == nullptr;
+                const auto gone{
+                    host_core.query_service_handle("refrain:leaf", {})};
+                seen.abi_missing_after_removal =
+                    !gone.has_value() &&
+                    gone.error() == refrain::host::core::host_error::not_found;
             }
         };
         server::publish_mod_lifecycle_inputs(server::mod_lifecycle_inputs{
@@ -588,6 +646,18 @@ const suite mod_lifecycle_wiring_tests = [] {
         }
         expect(seen.epoch_after_removal == 3U);
         expect(seen.composition_without_mod);
+        // The host core ABI saw the same composition: a handle queried before
+        // the commit validated, the commit staled it, the re-query advanced the
+        // generation, and the removal turned the query into not_found.
+        expect(seen.abi_handle_before.has_value());
+        if (seen.abi_handle_before) {
+            expect(seen.abi_handle_before->generation == 1U);
+            expect(seen.abi_handle_before->epoch == 1U);
+        }
+        expect(seen.abi_valid_before_commit);
+        expect(seen.abi_stale_after_commit);
+        expect(seen.abi_generation_after_commit == 2U);
+        expect(seen.abi_missing_after_removal);
         // The running composition followed the console command.
         expect(fixture.host.epoch() == 3U);
         expect(fixture.host.mods().empty());

@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: c735c6db25ca24c9
+// Schema hash: 05a109909008d815
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_CONTRACTS_HOST_CORE_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_CONTRACTS_HOST_CORE_HPP
@@ -38,6 +38,10 @@ enum class host_error : std::uint32_t { // enum 'host_error'
     internal = 10,
     already_exists = 11,
     io_error = 12,
+    /// The cached provider generation is no longer committed: the service
+    /// instance was replaced, retired or is quiescing. The caller must
+    /// re-query instead of calling the table it holds.
+    stale = 13,
 };
 
 using host_version = ::refrain_host_core_host_version;
@@ -50,10 +54,30 @@ using host_version = ::refrain_host_core_host_version;
 /// A service provider table plus its instance. `vtable` and `self` are
 /// opaque: the consumer casts them to the generated vtable of the requested
 /// service. The host validates the vtable header before returning a ref.
+/// 
+/// A `provider_ref` carries no composition state. It stays usable only for a
+/// sealed/process-lifetime provider, or while the caller knows the queried
+/// slot has not been replaced; `query_service_handle` wraps it with the
+/// generation that answers that question at a tick boundary.
 using provider_ref = ::refrain_host_core_provider_ref;
 /// Zero-initialized `provider_ref` with the mandatory `struct_size` set; fill the fields before passing it across the ABI.
 [[nodiscard]] inline auto make_provider_ref() noexcept -> provider_ref {
     provider_ref value{};
+    ::refrain::contracts::init_struct(value);
+    return value;
+}
+/// A provider table together with the composition state it was read from.
+/// 
+/// `generation` is the committed generation of the `(service, instance)` slot
+/// that produced `provider`. A non-zero generation is the value a caller
+/// hands back to `validate_handle` when it crosses a tick boundary or a
+/// composition epoch; zero identifies a sealed, process-lifetime provider
+/// table, which never changes and needs no re-query. `epoch` is the committed
+/// composition epoch at query time, for diagnostics and audit.
+using provider_handle = ::refrain_host_core_provider_handle;
+/// Zero-initialized `provider_handle` with the mandatory `struct_size` set; fill the fields before passing it across the ABI.
+[[nodiscard]] inline auto make_provider_handle() noexcept -> provider_handle {
+    provider_handle value{};
     ::refrain::contracts::init_struct(value);
     return value;
 }
@@ -71,10 +95,16 @@ static_assert(offsetof(provider_ref, vtable) == 8);
 static_assert(offsetof(provider_ref, self) == 16);
 static_assert(offsetof(provider_ref, abi_major) == 24);
 static_assert(offsetof(provider_ref, reserved) == 28);
+static_assert(sizeof(provider_handle) == 56);
+static_assert(alignof(provider_handle) == 8);
+static_assert(offsetof(provider_handle, struct_size) == 0);
+static_assert(offsetof(provider_handle, provider) == 8);
+static_assert(offsetof(provider_handle, generation) == 40);
+static_assert(offsetof(provider_handle, epoch) == 48);
 
 inline constexpr std::string_view service_id = "refrain:host.core";
 inline constexpr std::uint32_t abi_major = 1;
-inline constexpr std::uint32_t abi_minor = 0;
+inline constexpr std::uint32_t abi_minor = 1;
 inline constexpr std::uint32_t abi_patch = 0;
 inline constexpr ::refrain::contracts::side_kind side = ::refrain::contracts::side_kind::both;
 inline constexpr ::refrain::contracts::thread_kind thread = ::refrain::contracts::thread_kind::any;
@@ -147,8 +177,18 @@ class provider final {
         return ::refrain::contracts::as_string_view(value);
     }
 
-    /// Look up a frozen service provider. `instance` is empty for the default
-    /// instance. The returned vtable/self stay valid for the process lifetime.
+    /// Look up a service provider without composition state. `instance` is
+    /// empty for the default instance.
+    /// 
+    /// This is the legacy/process-lifetime form: the returned table is the
+    /// provider committed at the call, and nothing in the result tells the
+    /// caller whether a later composition epoch replaced it. Only a sealed
+    /// host table (which never changes) and a caller that never crosses a
+    /// composition boundary may keep the result. Use `query_service_handle`
+    /// for an ordinary service the caller caches across ticks.
+    /// 
+    /// Errors: `not_found` when the instance has no active provider, `stale`
+    /// while the instance is quiescing for a staged replacement.
     [[nodiscard]] auto query_service(std::string_view service, std::string_view instance) const -> std::expected<::refrain::host::core::provider_ref, ::refrain::host::core::host_error> {
         ::refrain_host_core_provider_ref value{};
         ::refrain::contracts::init_struct(value);
@@ -189,6 +229,42 @@ class provider final {
             return std::unexpected(static_cast<::refrain::host::core::host_error>(code));
         }
         return ::refrain::contracts::as_string_view(value);
+    }
+
+    /// Look up a service provider together with the generation it was read
+    /// from. `instance` is empty for the default instance.
+    /// 
+    /// A sealed host table is returned with `generation == 0`: it is
+    /// process-lifetime and never needs validation. Any other service returns
+    /// the generation of its committed slot; a caller caches the handle for
+    /// one tick and either calls `validate_handle` at the next tick boundary or
+    /// re-queries around a composition epoch.
+    /// 
+    /// Errors: `not_found` when the instance has no active provider (never
+    /// active or retired), `stale` while the instance is quiescing for a
+    /// staged replacement.
+    [[nodiscard]] auto query_service_handle(std::string_view service, std::string_view instance) const -> std::expected<::refrain::host::core::provider_handle, ::refrain::host::core::host_error> {
+        ::refrain_host_core_provider_handle value{};
+        ::refrain::contracts::init_struct(value);
+        if (const auto code = table_->query_service_handle(self_, ::refrain::contracts::to_borrowed(service), ::refrain::contracts::to_borrowed(instance), &value); code != REFRAIN_STATUS_OK) {
+            return std::unexpected(static_cast<::refrain::host::core::host_error>(code));
+        }
+        return value;
+    }
+
+    /// Check a cached provider generation against the committed composition.
+    /// 
+    /// Success means `generation` is the current committed generation, or that
+    /// `service` is a sealed host table and `generation` is zero. `stale`
+    /// means the slot was replaced, retired or is quiescing: the caller must
+    /// re-query and use the new table instead of the one it cached. The
+    /// generation identifies a slot of one service instance, so the caller
+    /// passes the same `service` and `instance` it queried with.
+    [[nodiscard]] auto validate_handle(std::string_view service, std::string_view instance, std::uint64_t generation) const -> std::expected<void, ::refrain::host::core::host_error> {
+        if (const auto code = table_->validate_handle(self_, ::refrain::contracts::to_borrowed(service), ::refrain::contracts::to_borrowed(instance), generation); code != REFRAIN_STATUS_OK) {
+            return std::unexpected(static_cast<::refrain::host::core::host_error>(code));
+        }
+        return {};
     }
 
   private:

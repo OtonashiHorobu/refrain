@@ -28,6 +28,7 @@
 #include <refrain/core/error.hpp>
 #include <refrain/core/log.hpp>
 #include <refrain/data/checksum.hpp>
+#include <refrain/kernel/service_registry.hpp>
 #include <refrain/mod/discovery.hpp>
 #include <refrain/mod/gamepack.hpp>
 #include <refrain/mod/host.hpp>
@@ -64,6 +65,8 @@ using namespace boost::ut::literals;
 
 namespace abi = refrain::contracts;
 namespace data = refrain::data;
+namespace kernel = refrain::kernel;
+namespace mod = refrain::mod;
 namespace server = refrain::server;
 namespace sim = refrain::sim;
 namespace world = refrain::world;
@@ -836,6 +839,55 @@ const refrain_services_storage_vtable recording_storage_vtable{
 }
 
 [[maybe_unused]] const suite world_port_tests = [] {
+    "world port/cached provider generations are validated at the boundary"_test =
+        [] {
+            kernel::service_registry registry;
+            int world_table{0};
+            int world_self{0};
+            mod::provider_api api{
+                .vtable = &world_table, .self = &world_self, .abi_major = 1};
+            kernel::provider_info info{};
+            info.service = "refrain:world";
+            info.id = "test.world";
+            info.version = "1.0.0";
+            info.instance = &api;
+            expect(registry.add_provider(std::move(info)).has_value());
+            expect(registry.select_active("refrain:world", "test.world")
+                       .has_value());
+            expect(registry.commit_epoch().has_value());
+
+            server::server_service_handles handles{};
+            handles.world =
+                reinterpret_cast<const refrain_services_world_vtable *>(
+                    &world_table);
+            handles.world_self = &world_self;
+            // No stamp means the struct was not built from a registry query;
+            // there is no generation to validate.
+            expect(server::validate_cached_providers(handles, registry)
+                       .has_value());
+            handles.world_generation = 1;
+            expect(server::validate_cached_providers(handles, registry)
+                       .has_value());
+            // A committed replacement stales the cached stamp.
+            handles.world_generation = 2;
+            const auto stale{
+                server::validate_cached_providers(handles, registry)};
+            expect(!stale.has_value());
+            if (!stale) {
+                expect(stale.error().code == refrain::error_code::stale);
+            }
+            // A retired slot is stale for the generation that was committed.
+            expect(registry.stage_retire("refrain:world").has_value());
+            expect(registry.commit_epoch().has_value());
+            handles.world_generation = 1;
+            const auto retired{
+                server::validate_cached_providers(handles, registry)};
+            expect(!retired.has_value());
+            if (!retired) {
+                expect(retired.error().code == refrain::error_code::stale);
+            }
+        };
+
     "world port/direct forwards block, chunk, hash and snapshot operations"_test =
         [] {
             test_support::scratch_directory directory{};
