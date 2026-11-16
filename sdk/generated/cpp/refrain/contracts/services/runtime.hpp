@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: ba0b7f4fa5ba5492
+// Schema hash: f6c5a91158b1672c
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_CONTRACTS_SERVICES_RUNTIME_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_CONTRACTS_SERVICES_RUNTIME_HPP
@@ -42,7 +42,7 @@ using runtime_config = ::refrain_services_runtime_runtime_config;
     return value;
 }
 
-static_assert(sizeof(runtime_config) == 184);
+static_assert(sizeof(runtime_config) == 200);
 static_assert(alignof(runtime_config) == 8);
 static_assert(offsetof(runtime_config, struct_size) == 0);
 static_assert(offsetof(runtime_config, world_path) == 8);
@@ -67,10 +67,11 @@ static_assert(offsetof(runtime_config, content_gc_apply) == 160);
 static_assert(offsetof(runtime_config, content_gc_keep_days) == 164);
 static_assert(offsetof(runtime_config, content_gc_budget_ms) == 168);
 static_assert(offsetof(runtime_config, content_gc_interval_ticks) == 176);
+static_assert(offsetof(runtime_config, config_dir) == 184);
 
 inline constexpr std::string_view service_id = "refrain:runtime";
 inline constexpr std::uint32_t abi_major = 2;
-inline constexpr std::uint32_t abi_minor = 0;
+inline constexpr std::uint32_t abi_minor = 1;
 inline constexpr std::uint32_t abi_patch = 0;
 inline constexpr ::refrain::contracts::side_kind side = ::refrain::contracts::side_kind::server;
 inline constexpr ::refrain::contracts::thread_kind thread = ::refrain::contracts::thread_kind::main;

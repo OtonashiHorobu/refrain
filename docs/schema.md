@@ -267,6 +267,11 @@ batches once per tick. `refrain:sim` 1.1.0 exposes the player table that way:
 order, which is the order the state hash covers. Each record's name and profile
 uuid are borrowed for the call, exactly like the level projection's level name.
 
+A configuration struct grows the same way: `refrain:runtime` 2.1.0 appends the
+host configuration directory to `runtime_config` so the provider can read the
+mod management policy and its hot lifecycle gates, and the struct-size prologue
+rejects a provider built against the older layout before its `run` is called.
+
 An appended slot may be optional: a provider that does not implement the
 operation leaves the slot empty (a null function pointer), which declares that
 the operation does not apply to it. The consumer decides what absence means.
@@ -289,7 +294,7 @@ contracts switch to SemVer increments with migrations.
 | `refrain:net.protocol` | 2.1.0 | instanced |
 | `refrain:net.session` | 1.0.0 | exclusive |
 | `refrain:net.translator` | 1.0.0 | exclusive |
-| `refrain:runtime` | 2.0.0 | exclusive |
+| `refrain:runtime` | 2.1.0 | exclusive |
 | `refrain:session.lifecycle` | 1.0.0 | instanced |
 | `refrain:session.status` | 1.0.0 | instanced |
 | `refrain:session.tab` | 1.0.0 | instanced |
