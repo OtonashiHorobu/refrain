@@ -5,10 +5,12 @@
 #include <refrain/server/world_port.hpp>
 
 #include <refrain/core/error.hpp>
+#include <refrain/kernel/service_registry.hpp>
 #include <refrain/server/world_bootstrap.hpp>
 
 #include <fmt/format.h>
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -46,6 +48,41 @@ auto select_world_port(const server_service_handles &services) noexcept
     -> world_port_choice {
     return is_first_party_world(services) ? world_port_choice::direct
                                           : world_port_choice::contract;
+}
+
+auto validate_cached_providers(const server_service_handles &services,
+                               const kernel::service_registry &registry)
+    -> status {
+    struct cached_slot {
+        std::string_view service;
+        bool present;
+        std::uint64_t generation;
+    };
+    const std::array<cached_slot, 3> slots{{
+        {"refrain:world", services.world != nullptr, services.world_generation},
+        {"refrain:sim", services.sim != nullptr, services.sim_generation},
+        {"refrain:storage", services.storage != nullptr,
+         services.storage_generation},
+    }};
+    for (const auto &slot : slots) {
+        if (!slot.present || slot.generation == 0) {
+            continue;
+        }
+        kernel::provider_handle handle{};
+        handle.provider.service = std::string{slot.service};
+        handle.generation = slot.generation;
+        auto verdict{registry.validate(handle)};
+        if (!verdict) {
+            return std::unexpected{make_error(
+                verdict.error().code,
+                fmt::format("the tick loop cached {} generation {} but the "
+                            "committed composition no longer holds it at "
+                            "epoch {}; stopping instead of calling a retired "
+                            "provider",
+                            slot.service, slot.generation, registry.epoch()))};
+        }
+    }
+    return status_ok();
 }
 
 // --- residency defaults -----------------------------------------------------

@@ -50,6 +50,7 @@ namespace config = refrain::core::config;
 namespace data = refrain::data;
 namespace io = refrain::core::io;
 namespace mod = refrain::mod;
+namespace core = refrain::host::core;
 using refrain::error_code;
 
 namespace fs = std::filesystem;
@@ -489,6 +490,134 @@ const suite mod_lifecycle_tests = [] {
         // registry.
         expect(host.services().provider_count() == initial_providers);
         expect(host.quarantined_mods().empty());
+    };
+
+    "mod_lifecycle/host core ABI stamps the leaf generation and the reload "
+    "stales it"_test = [] {
+        mod::static_mod_registry registry{};
+        auto plan{make_gamepack("\"refrain.test.life.leaf@1.0.0\"",
+                                "leaf = \"refrain.test.life.leaf@^1.0.0\"\n")};
+        expect(static_cast<bool>(plan));
+        if (!plan) {
+            return;
+        }
+        image_builder builder{};
+        builder.add("refrain.test.life.leaf",
+                    make_manifest("refrain.test.life.leaf", "1.0.0",
+                                  "refrain:leaf", clean_loader_id));
+        const auto image{builder.build()};
+        clean_loader_state loader{};
+        mod::host host{registry};
+        refrain::app::host_context context{host};
+        expect(register_host_core(host, context));
+        expect(register_clean_loader(host, loader));
+        auto loaded{host.load(*plan, image)};
+        expect(static_cast<bool>(loaded))
+            << (loaded ? std::string{"load ok"}
+                       : loaded.error().message + " / " + loader.last_error);
+        if (!loaded) {
+            return;
+        }
+        // The ABI table a mod receives: the sealed host core provider table.
+        const auto host_core{refrain::host::make_core_provider(context)};
+
+        // A sealed host table is process lifetime and generation free.
+        const auto sealed{
+            host_core.query_service_handle("refrain:host.core", {})};
+        expect(sealed.has_value());
+        if (sealed) {
+            expect(sealed->struct_size ==
+                   REFRAIN_HOST_CORE_PROVIDER_HANDLE_SIZE);
+            expect(sealed->provider.struct_size ==
+                   REFRAIN_HOST_CORE_PROVIDER_REF_SIZE);
+            expect(sealed->provider.vtable ==
+                   static_cast<const void *>(&refrain::host::core_vtable()));
+            expect(sealed->generation == 0U);
+        }
+        expect(
+            host_core.validate_handle("refrain:host.core", {}, 0).has_value());
+
+        // An ordinary leaf provider carries the committed slot generation.
+        const auto first{host_core.query_service_handle("refrain:leaf", {})};
+        expect(first.has_value());
+        if (!first) {
+            return;
+        }
+        expect(first->generation == 1U);
+        expect(first->epoch == host.epoch());
+        expect(host_core.validate_handle("refrain:leaf", {}, first->generation)
+                   .has_value());
+
+        // An unknown service and an unknown instance are not_found, not stale.
+        const auto missing{
+            host_core.query_service_handle("refrain:missing", {})};
+        expect(!missing.has_value());
+        if (!missing) {
+            expect(missing.error() ==
+                   refrain::host::core::host_error::not_found);
+        }
+        const auto typo{host_core.query_service_handle("refrain:leaf", "typo")};
+        expect(!typo.has_value());
+        if (!typo) {
+            expect(typo.error() == refrain::host::core::host_error::not_found);
+        }
+
+        // A staged reload does not publish: the cached generation stays
+        // current until the tick-boundary commit.
+        auto resolver{make_package_resolver_for(image)};
+        auto staged{host.stage_composition(
+            *plan, resolver,
+            mod::stage_options{.reload = {"refrain.test.life.leaf"}})};
+        expect(static_cast<bool>(staged))
+            << (staged ? std::string{"staged"} : staged.error().message);
+        if (!staged) {
+            return;
+        }
+        expect(host_core.validate_handle("refrain:leaf", {}, first->generation)
+                   .has_value());
+        auto committed{host.commit_epoch()};
+        expect(static_cast<bool>(committed));
+        if (!committed) {
+            return;
+        }
+        // The pre-reload handle is stale through the ABI; re-querying returns
+        // the new generation and the new table validates.
+        const auto stale{
+            host_core.validate_handle("refrain:leaf", {}, first->generation)};
+        expect(!stale.has_value());
+        if (!stale) {
+            expect(stale.error() == refrain::host::core::host_error::stale);
+        }
+        const auto second{host_core.query_service_handle("refrain:leaf", {})};
+        expect(second.has_value());
+        if (!second) {
+            return;
+        }
+        expect(second->generation == 2U);
+        expect(host_core.validate_handle("refrain:leaf", {}, second->generation)
+                   .has_value());
+
+        // A retired instance: the query is not_found, the cached generation is
+        // stale, and the sealed table is untouched.
+        auto removal{host.stage_uninstall("refrain.test.life.leaf")};
+        expect(static_cast<bool>(removal));
+        if (!removal) {
+            return;
+        }
+        expect(static_cast<bool>(host.commit_epoch()));
+        const auto gone{host_core.query_service_handle("refrain:leaf", {})};
+        expect(!gone.has_value());
+        if (!gone) {
+            expect(gone.error() == refrain::host::core::host_error::not_found);
+        }
+        const auto retired{
+            host_core.validate_handle("refrain:leaf", {}, second->generation)};
+        expect(!retired.has_value());
+        if (!retired) {
+            expect(retired.error() == refrain::host::core::host_error::stale);
+        }
+        expect(
+            host_core.validate_handle("refrain:host.core", {}, 0).has_value());
     };
 
     "mod_lifecycle/hot uninstall drains the generation and reports the "

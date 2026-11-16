@@ -12,6 +12,15 @@
 // The host API is passed to a mod through the host provider table. The table
 // is process-lifetime and immutable; consumers must not retain borrowed
 // strings past their documented lifetime.
+//
+// Provider lookup has two forms. `query_service` resolves a provider table
+// without composition state and is only safe for the sealed host tables and
+// for providers that never change; `query_service_handle` also returns the
+// registry generation the table was read from, and `validate_handle` tells a
+// caller at a tick boundary whether that generation is still the committed
+// one. Ordinary services can be replaced while the process runs, so a caller
+// that keeps a provider across ticks must use the handle form and re-query
+// when validation reports `stale`.
 
 module refrain::host::core;
 version 1.0.0;
@@ -31,6 +40,10 @@ enum host_error : u32 {
     internal = 10,
     already_exists = 11,
     io_error = 12,
+    /// The cached provider generation is no longer committed: the service
+    /// instance was replaced, retired or is quiescing. The caller must
+    /// re-query instead of calling the table it holds.
+    stale = 13,
 }
 
 struct host_version {
@@ -42,6 +55,11 @@ struct host_version {
 /// A service provider table plus its instance. `vtable` and `self` are
 /// opaque: the consumer casts them to the generated vtable of the requested
 /// service. The host validates the vtable header before returning a ref.
+///
+/// A `provider_ref` carries no composition state. It stays usable only for a
+/// sealed/process-lifetime provider, or while the caller knows the queried
+/// slot has not been replaced; `query_service_handle` wraps it with the
+/// generation that answers that question at a tick boundary.
 struct provider_ref {
     opaque_ptr vtable;
     opaque_ptr self;
@@ -49,7 +67,21 @@ struct provider_ref {
     u32 reserved;
 }
 
-service core : 1.0.0 {
+/// A provider table together with the composition state it was read from.
+///
+/// `generation` is the committed generation of the `(service, instance)` slot
+/// that produced `provider`. A non-zero generation is the value a caller
+/// hands back to `validate_handle` when it crosses a tick boundary or a
+/// composition epoch; zero identifies a sealed, process-lifetime provider
+/// table, which never changes and needs no re-query. `epoch` is the committed
+/// composition epoch at query time, for diagnostics and audit.
+struct provider_handle {
+    provider_ref provider;
+    u64 generation;
+    u64 epoch;
+}
+
+service core : 1.1.0 {
     side = both;
     thread = any;
     composition = sealed;
@@ -83,8 +115,18 @@ service core : 1.0.0 {
     #[thread(any)] #[can_fail]
     fn config_get_string(string ns, string key) -> result<string, host_error>;
 
-    /// Look up a frozen service provider. `instance` is empty for the default
-    /// instance. The returned vtable/self stay valid for the process lifetime.
+    /// Look up a service provider without composition state. `instance` is
+    /// empty for the default instance.
+    ///
+    /// This is the legacy/process-lifetime form: the returned table is the
+    /// provider committed at the call, and nothing in the result tells the
+    /// caller whether a later composition epoch replaced it. Only a sealed
+    /// host table (which never changes) and a caller that never crosses a
+    /// composition boundary may keep the result. Use `query_service_handle`
+    /// for an ordinary service the caller caches across ticks.
+    ///
+    /// Errors: `not_found` when the instance has no active provider, `stale`
+    /// while the instance is quiescing for a staged replacement.
     #[thread(any)] #[can_fail]
     fn query_service(string service, string instance)
         -> result<provider_ref, host_error>;
@@ -106,4 +148,32 @@ service core : 1.0.0 {
     /// Thread-local diagnostic for the last failed host call on this thread.
     #[thread(any)] #[can_fail]
     fn last_error_message() -> result<string, host_error>;
+
+    /// Look up a service provider together with the generation it was read
+    /// from. `instance` is empty for the default instance.
+    ///
+    /// A sealed host table is returned with `generation == 0`: it is
+    /// process-lifetime and never needs validation. Any other service returns
+    /// the generation of its committed slot; a caller caches the handle for
+    /// one tick and either calls `validate_handle` at the next tick boundary or
+    /// re-queries around a composition epoch.
+    ///
+    /// Errors: `not_found` when the instance has no active provider (never
+    /// active or retired), `stale` while the instance is quiescing for a
+    /// staged replacement.
+    #[thread(any)] #[can_fail]
+    fn query_service_handle(string service, string instance)
+        -> result<provider_handle, host_error>;
+
+    /// Check a cached provider generation against the committed composition.
+    ///
+    /// Success means `generation` is the current committed generation, or that
+    /// `service` is a sealed host table and `generation` is zero. `stale`
+    /// means the slot was replaced, retired or is quiescing: the caller must
+    /// re-query and use the new table instead of the one it cached. The
+    /// generation identifies a slot of one service instance, so the caller
+    /// passes the same `service` and `instance` it queried with.
+    #[thread(any)] #[can_fail]
+    fn validate_handle(string service, string instance, u64 generation)
+        -> result<void, host_error>;
 }

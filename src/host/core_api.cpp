@@ -81,12 +81,13 @@ void set_error(std::string_view message) noexcept {
         return core::host_error::internal;
     case error_code::out_of_memory:
         return core::host_error::out_of_memory;
-    case error_code::mod_error:
     case error_code::stale:
-        // The host ABI has no stale code and must stay append-only; a stale
-        // handle means the service instance the caller looked up no longer
-        // exists, which the closest stable code is `not_found`.
-        return core::host_error::not_found;
+        // A stale handle is a composition-state answer, not a missing service:
+        // the ABI carries a dedicated code so a caller can tell "re-query this
+        // slot" from "there is no such service".
+        return core::host_error::stale;
+    case error_code::mod_error:
+        return core::host_error::internal;
     }
     return core::host_error::internal;
 }
@@ -245,6 +246,57 @@ auto host_query_service(void *self, refrain_str service, refrain_str instance,
     return REFRAIN_STATUS_OK;
 }
 
+auto host_query_service_handle(void *self, refrain_str service,
+                               refrain_str instance,
+                               refrain_host_core_provider_handle *out)
+    -> refrain_status {
+    if (self == nullptr || out == nullptr) {
+        clear_error();
+        set_error("query_service_handle: null argument");
+        return static_cast<refrain_status>(core::host_error::invalid_argument);
+    }
+    clear_error();
+    try {
+        auto value{context_of(self)->query_service_handle(
+            abi::to_view(service), abi::to_view(instance))};
+        if (!value) {
+            set_error(value.error());
+            return static_cast<refrain_status>(
+                to_host_error(value.error().code));
+        }
+        *out = *value;
+        out->struct_size = REFRAIN_HOST_CORE_PROVIDER_HANDLE_SIZE;
+        out->provider.struct_size = REFRAIN_HOST_CORE_PROVIDER_REF_SIZE;
+    } catch (...) {
+        set_error("query_service_handle: host threw");
+        return static_cast<refrain_status>(core::host_error::internal);
+    }
+    return REFRAIN_STATUS_OK;
+}
+
+auto host_validate_handle(void *self, refrain_str service, refrain_str instance,
+                          std::uint64_t generation) -> refrain_status {
+    if (self == nullptr) {
+        clear_error();
+        set_error("validate_handle: null argument");
+        return static_cast<refrain_status>(core::host_error::invalid_argument);
+    }
+    clear_error();
+    try {
+        auto checked{context_of(self)->validate_handle(
+            abi::to_view(service), abi::to_view(instance), generation)};
+        if (!checked) {
+            set_error(checked.error());
+            return static_cast<refrain_status>(
+                to_host_error(checked.error().code));
+        }
+    } catch (...) {
+        set_error("validate_handle: host threw");
+        return static_cast<refrain_status>(core::host_error::internal);
+    }
+    return REFRAIN_STATUS_OK;
+}
+
 auto host_register_provider(void *self, refrain_str service,
                             refrain_str instance,
                             const refrain_host_core_provider_ref *ref)
@@ -342,6 +394,8 @@ auto core_vtable() noexcept -> const refrain_host_core_vtable & {
         .alloc = &host_alloc,
         .free = &host_free,
         .last_error_message = &host_last_error_message,
+        .query_service_handle = &host_query_service_handle,
+        .validate_handle = &host_validate_handle,
     };
     return table;
 }

@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: c735c6db25ca24c9
+// Schema hash: 05a109909008d815
 
 // Rust bindings for the sealed Refrain host contracts.
 // C ABI layout is authoritative; this file mirrors it.
@@ -56,6 +56,7 @@ pub mod core {
     pub const HOST_ERROR_INTERNAL: host_error = 10;
     pub const HOST_ERROR_ALREADY_EXISTS: host_error = 11;
     pub const HOST_ERROR_IO_ERROR: host_error = 12;
+    pub const HOST_ERROR_STALE: host_error = 13;
 
     #[repr(C)]
     pub struct host_version {
@@ -74,6 +75,14 @@ pub mod core {
         pub reserved: u32,
     }
 
+    #[repr(C)]
+    pub struct provider_handle {
+        pub struct_size: u32,
+        pub provider: provider_ref,
+        pub generation: u64,
+        pub epoch: u64,
+    }
+
     const _: () = assert!(::core::mem::size_of::<host_version>() == 16);
     const _: () = assert!(::core::mem::align_of::<host_version>() == 4);
     const _: () = assert!(::core::mem::offset_of!(host_version, major) == 4);
@@ -86,6 +95,12 @@ pub mod core {
     const _: () = assert!(::core::mem::offset_of!(provider_ref, self_) == 16);
     const _: () = assert!(::core::mem::offset_of!(provider_ref, abi_major) == 24);
     const _: () = assert!(::core::mem::offset_of!(provider_ref, reserved) == 28);
+
+    const _: () = assert!(::core::mem::size_of::<provider_handle>() == 56);
+    const _: () = assert!(::core::mem::align_of::<provider_handle>() == 8);
+    const _: () = assert!(::core::mem::offset_of!(provider_handle, provider) == 8);
+    const _: () = assert!(::core::mem::offset_of!(provider_handle, generation) == 40);
+    const _: () = assert!(::core::mem::offset_of!(provider_handle, epoch) == 48);
 
     #[repr(C)]
     pub struct refrain_host_core_vtable {
@@ -105,11 +120,13 @@ pub mod core {
         pub alloc: Option<unsafe extern "C" fn(self_: *mut ::core::ffi::c_void, size: u64, alignment: u64, out_value: *mut RefrainMutBytes) -> RefrainStatus>,
         pub free: Option<unsafe extern "C" fn(self_: *mut ::core::ffi::c_void, block: RefrainMutBytes) -> ()>,
         pub last_error_message: Option<unsafe extern "C" fn(self_: *mut ::core::ffi::c_void, out_value: *mut RefrainStr) -> RefrainStatus>,
+        pub query_service_handle: Option<unsafe extern "C" fn(self_: *mut ::core::ffi::c_void, service: RefrainStr, instance: RefrainStr, out_value: *mut provider_handle) -> RefrainStatus>,
+        pub validate_handle: Option<unsafe extern "C" fn(self_: *mut ::core::ffi::c_void, service: RefrainStr, instance: RefrainStr, generation: u64) -> RefrainStatus>,
     }
 
     pub const REFRAIN_HOST_CORE_SERVICE_ID: &str = "refrain:host.core";
     pub const REFRAIN_HOST_CORE_ABI_MAJOR: u32 = 1;
-    pub const REFRAIN_HOST_CORE_ABI_MINOR: u32 = 0;
+    pub const REFRAIN_HOST_CORE_ABI_MINOR: u32 = 1;
     pub const REFRAIN_HOST_CORE_ABI_PATCH: u32 = 0;
 
 } // pub mod core

@@ -97,7 +97,7 @@ const suite host_metadata_tests = [] {
                 "refrain:host.core") {
                 found_core = true;
                 expect(contract->abi_major == 1U);
-                expect(contract->abi_minor == 0U);
+                expect(contract->abi_minor == 1U);
                 expect(contract->abi_patch == 0U);
                 expect(contract->method_count > 0U);
             }

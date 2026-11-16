@@ -31,6 +31,7 @@
 #include <refrain/core/log.hpp>
 #include <refrain/host/abi_bridge.hpp>
 #include <refrain/mod/host.hpp>
+#include <refrain/mod/provider_cache.hpp>
 #include <refrain/mod/static_mod.hpp>
 #include <refrain/server/game_data.hpp>
 #include <refrain/server/provider_protocol.hpp>
@@ -38,6 +39,7 @@
 #include <refrain/server/server_runtime.hpp>
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -98,37 +100,56 @@ make_options(const refrain_services_runtime_runtime_config &config,
     return options;
 }
 
-/// Active provider of one contract, or null handles when it is inactive.
+/// Active provider of one contract plus its committed generation, or null
+/// handles and generation zero when it is inactive.
 template <typename Vtable>
 void collect_service(const refrain::mod::host &host, std::string_view service,
                      const Vtable *&vtable, void *&self,
-                     std::string &provider_id) {
-    const auto info{host.services().active_provider(service)};
-    if (!info || info->instance == nullptr) {
+                     std::string &provider_id, std::uint64_t &generation) {
+    const auto info{host.services().query(service)};
+    if (!info || info->provider.instance == nullptr) {
         return;
     }
-    const auto *api{
-        static_cast<const refrain::mod::provider_api *>(info->instance)};
+    const auto *api{static_cast<const refrain::mod::provider_api *>(
+        info->provider.instance)};
     if (api->vtable == nullptr) {
         return;
     }
     vtable = static_cast<const Vtable *>(api->vtable);
     self = api->self;
-    provider_id = info->id;
+    provider_id = info->provider.id;
+    generation = info->generation;
 }
 
 [[nodiscard]] auto collect_services(const refrain::mod::host &host)
     -> refrain::server::server_service_handles {
     refrain::server::server_service_handles services{};
     collect_service(host, "refrain:world", services.world, services.world_self,
-                    services.world_provider);
+                    services.world_provider, services.world_generation);
     collect_service(host, "refrain:sim", services.sim, services.sim_self,
-                    services.sim_provider);
+                    services.sim_provider, services.sim_generation);
     collect_service(host, "refrain:storage", services.storage,
-                    services.storage_self, services.storage_provider);
+                    services.storage_self, services.storage_provider,
+                    services.storage_generation);
     collect_service(host, "refrain:world.migration", services.migration,
-                    services.migration_self, services.migration_provider);
+                    services.migration_self, services.migration_provider,
+                    services.migration_generation);
     return services;
+}
+
+/// Generation-stamped caches for every active instance of one leaf service.
+/// The hooks below read a snapshot per call; the tick boundary refreshes the
+/// caches, so a reloaded generation is picked up without a per-call registry
+/// lookup.
+[[nodiscard]] auto collect_instance_caches(const refrain::mod::host &host,
+                                           std::string_view service)
+    -> std::vector<std::shared_ptr<refrain::mod::provider_cache>> {
+    std::vector<std::shared_ptr<refrain::mod::provider_cache>> caches{};
+    for (const auto &instance : host.services().active_instances(service)) {
+        caches.push_back(std::make_shared<refrain::mod::provider_cache>(
+            host.services(), std::string{service}, instance));
+    }
+    return caches;
 }
 
 struct runtime_provider {
@@ -176,93 +197,81 @@ struct runtime_provider {
                 provider->network.get_string("protocol_instance", "java_777")};
             const auto transport_instance{
                 provider->network.get_string("transport_instance", "asio_tcp")};
-            std::vector<std::pair<
-                const refrain_services_session_status_vtable *, void *>>
-                status_hooks{};
-            for (const auto &instance :
-                 provider->host->services().active_instances(
-                     "refrain:session.status")) {
-                const auto info{provider->host->services().active_provider(
-                    "refrain:session.status", instance)};
-                if (!info || info->instance == nullptr) {
-                    continue;
-                }
-                const auto *api{static_cast<const refrain::mod::provider_api *>(
-                    info->instance)};
-                if (api->vtable != nullptr) {
-                    status_hooks.emplace_back(
-                        static_cast<const refrain_services_session_status_vtable
-                                        *>(api->vtable),
-                        api->self);
-                }
-            }
+            std::vector<std::shared_ptr<refrain::mod::provider_cache>>
+                refreshable{};
+            std::function<void(std::uint64_t)> tick_lifecycle{};
+            auto status_hooks{collect_instance_caches(
+                *provider->host, "refrain:session.status")};
+            refreshable.insert(refreshable.end(), status_hooks.begin(),
+                               status_hooks.end());
             if (!status_hooks.empty()) {
                 const auto network_view{provider->network};
-                options.status =
-                    [hooks = std::move(status_hooks), network_view](
-                        const refrain::net::status_request_context &context) {
-                        for (const auto &[vtable, hook_self] : hooks) {
-                            const refrain::services::session_status::provider
-                                status_service{*vtable, hook_self};
-                            auto request{refrain::services::session_status::
-                                             make_status_request()};
-                            request.protocol =
-                                static_cast<std::uint32_t>(context.protocol);
-                            request.host =
-                                refrain::contracts::to_borrowed(context.host);
-                            request.port = context.port;
-                            request.online_players = static_cast<std::uint32_t>(
-                                context.online_players);
-                            auto view{refrain::services::session_status::
-                                          make_status_view()};
-                            if (status_service.status(request, view)) {
-                                refrain::net::status_info info{};
-                                info.description = std::string{
-                                    refrain::contracts::as_string_view(
-                                        view.description)};
-                                info.online_players = static_cast<std::int32_t>(
-                                    view.online_players);
-                                info.max_players =
-                                    static_cast<std::int32_t>(view.max_players);
-                                return info;
-                            }
+                options.status = [hooks = std::move(status_hooks),
+                                  network_view](
+                                     const refrain::net::status_request_context
+                                         &context) {
+                    for (const auto &hook : hooks) {
+                        const auto table{hook->current()};
+                        if (table == nullptr) {
+                            continue;
                         }
-                        refrain::net::status_info info{};
-                        info.description = network_view.get_string(
-                            "status.motd", "A Refrain Server");
-                        info.online_players = context.online_players;
-                        info.max_players = static_cast<std::int32_t>(
-                            network_view.get_int64("status.max_players", 20));
-                        return info;
-                    };
+                        const refrain::services::session_status::provider
+                            status_service{
+                                *static_cast<
+                                    const refrain_services_session_status_vtable
+                                        *>(table->vtable),
+                                table->self};
+                        auto request{refrain::services::session_status::
+                                         make_status_request()};
+                        request.protocol =
+                            static_cast<std::uint32_t>(context.protocol);
+                        request.host =
+                            refrain::contracts::to_borrowed(context.host);
+                        request.port = context.port;
+                        request.online_players =
+                            static_cast<std::uint32_t>(context.online_players);
+                        auto view{refrain::services::session_status::
+                                      make_status_view()};
+                        if (status_service.status(request, view)) {
+                            refrain::net::status_info info{};
+                            info.description =
+                                std::string{refrain::contracts::as_string_view(
+                                    view.description)};
+                            info.online_players =
+                                static_cast<std::int32_t>(view.online_players);
+                            info.max_players =
+                                static_cast<std::int32_t>(view.max_players);
+                            return info;
+                        }
+                    }
+                    refrain::net::status_info info{};
+                    info.description = network_view.get_string(
+                        "status.motd", "A Refrain Server");
+                    info.online_players = context.online_players;
+                    info.max_players = static_cast<std::int32_t>(
+                        network_view.get_int64("status.max_players", 20));
+                    return info;
+                };
             }
-            std::vector<
-                std::pair<const refrain_services_session_tab_vtable *, void *>>
-                tab_hooks{};
-            for (const auto &instance :
-                 provider->host->services().active_instances(
-                     "refrain:session.tab")) {
-                const auto info{provider->host->services().active_provider(
-                    "refrain:session.tab", instance)};
-                if (!info || info->instance == nullptr) {
-                    continue;
-                }
-                const auto *api{static_cast<const refrain::mod::provider_api *>(
-                    info->instance)};
-                if (api->vtable != nullptr) {
-                    tab_hooks.emplace_back(
-                        static_cast<const refrain_services_session_tab_vtable
-                                        *>(api->vtable),
-                        api->self);
-                }
-            }
+            auto tab_hooks{collect_instance_caches(*provider->host,
+                                                   "refrain:session.tab")};
+            refreshable.insert(refreshable.end(), tab_hooks.begin(),
+                               tab_hooks.end());
             if (!tab_hooks.empty()) {
                 options
                     .tab = [hooks = std::move(tab_hooks)](
                                const refrain::net::player_identity &identity) {
-                    for (const auto &[vtable, hook_self] : hooks) {
+                    for (const auto &hook : hooks) {
+                        const auto table{hook->current()};
+                        if (table == nullptr) {
+                            continue;
+                        }
                         const refrain::services::session_tab::provider
-                            tab_service{*vtable, hook_self};
+                            tab_service{
+                                *static_cast<
+                                    const refrain_services_session_tab_vtable
+                                        *>(table->vtable),
+                                table->self};
                         auto request{
                             refrain::services::session_tab::make_tab_request()};
                         request.connection = identity.connection;
@@ -286,62 +295,66 @@ struct runtime_provider {
                     return refrain::net::tab_view{};
                 };
             }
-            std::vector<std::pair<
-                const refrain_services_session_lifecycle_vtable *, void *>>
-                lifecycle_hooks{};
-            for (const auto &instance :
-                 provider->host->services().active_instances(
-                     "refrain:session.lifecycle")) {
-                const auto info{provider->host->services().active_provider(
-                    "refrain:session.lifecycle", instance)};
-                if (!info || info->instance == nullptr) {
-                    continue;
+            auto lifecycle_hooks{collect_instance_caches(
+                *provider->host, "refrain:session.lifecycle")};
+            refreshable.insert(refreshable.end(), lifecycle_hooks.begin(),
+                               lifecycle_hooks.end());
+            const bool has_lifecycle_hooks{!lifecycle_hooks.empty()};
+            const auto dispatch_lifecycle{[hooks = lifecycle_hooks](
+                                              const refrain::net::
+                                                  player_identity &identity,
+                                              bool joining) {
+                for (const auto &hook : hooks) {
+                    const auto table{hook->current()};
+                    if (table == nullptr) {
+                        continue;
+                    }
+                    const refrain::services::session_lifecycle::provider
+                        lifecycle{
+                            *static_cast<
+                                const refrain_services_session_lifecycle_vtable
+                                    *>(table->vtable),
+                            table->self};
+                    auto request{refrain::services::session_lifecycle::
+                                     make_player_info()};
+                    request.connection = identity.connection;
+                    request.name =
+                        refrain::contracts::to_borrowed(identity.name);
+                    request.world =
+                        refrain::contracts::to_borrowed(identity.world);
+                    if (joining) {
+                        lifecycle.player_join(request);
+                    } else {
+                        lifecycle.player_leave(request);
+                    }
                 }
-                const auto *api{static_cast<const refrain::mod::provider_api *>(
-                    info->instance)};
-                if (api->vtable != nullptr) {
-                    lifecycle_hooks.emplace_back(
-                        static_cast<
-                            const refrain_services_session_lifecycle_vtable *>(
-                            api->vtable),
-                        api->self);
-                }
-            }
-            if (!lifecycle_hooks.empty()) {
-                const auto dispatch =
-                    [hooks = lifecycle_hooks](
-                        const refrain::net::player_identity &identity,
-                        bool joining) {
-                        for (const auto &[vtable, hook_self] : hooks) {
-                            const refrain::services::session_lifecycle::provider
-                                lifecycle{*vtable, hook_self};
-                            auto request{refrain::services::session_lifecycle::
-                                             make_player_info()};
-                            request.connection = identity.connection;
-                            request.name =
-                                refrain::contracts::to_borrowed(identity.name);
-                            request.world =
-                                refrain::contracts::to_borrowed(identity.world);
-                            if (joining) {
-                                lifecycle.player_join(request);
-                            } else {
-                                lifecycle.player_leave(request);
-                            }
-                        }
-                    };
+            }};
+            if (has_lifecycle_hooks) {
                 options.player_join =
-                    [dispatch](const refrain::net::player_identity &identity) {
-                        dispatch(identity, true);
+                    [dispatch_lifecycle](
+                        const refrain::net::player_identity &identity) {
+                        dispatch_lifecycle(identity, true);
                     };
                 options.player_leave =
-                    [dispatch](const refrain::net::player_identity &identity) {
-                        dispatch(identity, false);
+                    [dispatch_lifecycle](
+                        const refrain::net::player_identity &identity) {
+                        dispatch_lifecycle(identity, false);
                     };
-                options.on_tick = [hooks =
-                                       lifecycle_hooks](std::uint64_t tick) {
-                    for (const auto &[vtable, hook_self] : hooks) {
+            }
+            if (has_lifecycle_hooks) {
+                tick_lifecycle = [hooks = std::move(lifecycle_hooks)](
+                                     std::uint64_t tick) {
+                    for (const auto &hook : hooks) {
+                        const auto table{hook->current()};
+                        if (table == nullptr) {
+                            continue;
+                        }
                         const refrain::services::session_lifecycle::provider
-                            lifecycle{*vtable, hook_self};
+                            lifecycle{
+                                *static_cast<
+                                    const refrain_services_session_lifecycle_vtable
+                                        *>(table->vtable),
+                                table->self};
                         lifecycle.tick(tick);
                     }
                 };
@@ -404,103 +417,130 @@ struct runtime_provider {
                         *static_cast<const refrain_services_net_protocol_vtable
                                          *>(protocol_api->vtable),
                         protocol_api->self))};
-            const auto session_auth{provider->host->services().active_provider(
-                "refrain:net.session")};
-            if (session_auth && session_auth->instance != nullptr) {
-                const auto *session_api{
-                    static_cast<const refrain::mod::provider_api *>(
-                        session_auth->instance)};
-                if (session_api->vtable != nullptr) {
-                    const auto *session_vtable{static_cast<
-                        const refrain_services_net_session_vtable *>(
-                        session_api->vtable)};
-                    void *session_self{session_api->self};
-                    options.verify_session = [session_vtable, session_self](
-                                                 std::string_view name,
-                                                 std::string_view server_hash)
-                        -> refrain::result<refrain::net::session_profile> {
-                        const refrain::services::net_session::provider session{
-                            *session_vtable, session_self};
-                        auto profile{refrain::services::net_session::
-                                         make_session_profile()};
-                        const auto joined{session.joined_profile(
-                            name, server_hash, {}, profile)};
-                        if (!joined) {
-                            auto code{refrain::error_code::io_error};
-                            switch (joined.error()) {
-                            case refrain::services::net_session::session_error::
-                                invalid_argument:
-                                code = refrain::error_code::invalid_argument;
-                                break;
-                            case refrain::services::net_session::session_error::
-                                not_joined:
-                                code = refrain::error_code::not_found;
-                                break;
-                            case refrain::services::net_session::session_error::
-                                malformed_profile:
-                                code = refrain::error_code::parse_error;
-                                break;
-                            default:
-                                break;
-                            }
-                            return std::unexpected{refrain::make_error(
-                                code, "session server rejected the login")};
+            auto session_cache{std::make_shared<refrain::mod::provider_cache>(
+                provider->host->services(), "refrain:net.session")};
+            if (session_cache->current() != nullptr) {
+                refreshable.push_back(session_cache);
+                options.verify_session =
+                    [session_cache](std::string_view name,
+                                    std::string_view server_hash)
+                    -> refrain::result<refrain::net::session_profile> {
+                    const auto table{session_cache->current()};
+                    if (table == nullptr) {
+                        return std::unexpected{refrain::make_error(
+                            refrain::error_code::not_found,
+                            "refrain:net.session provider is not active")};
+                    }
+                    const refrain::services::net_session::provider session{
+                        *static_cast<const refrain_services_net_session_vtable
+                                         *>(table->vtable),
+                        table->self};
+                    auto profile{
+                        refrain::services::net_session::make_session_profile()};
+                    const auto joined{
+                        session.joined_profile(name, server_hash, {}, profile)};
+                    if (!joined) {
+                        auto code{refrain::error_code::io_error};
+                        switch (joined.error()) {
+                        case refrain::services::net_session::session_error::
+                            invalid_argument:
+                            code = refrain::error_code::invalid_argument;
+                            break;
+                        case refrain::services::net_session::session_error::
+                            not_joined:
+                            code = refrain::error_code::not_found;
+                            break;
+                        case refrain::services::net_session::session_error::
+                            malformed_profile:
+                            code = refrain::error_code::parse_error;
+                            break;
+                        default:
+                            break;
                         }
-                        auto id{refrain::net::uuid::parse(
-                            refrain::contracts::as_string_view(profile.id))};
-                        if (!id) {
-                            return std::unexpected{refrain::make_error(
-                                refrain::error_code::parse_error,
-                                "session server returned an invalid profile")};
-                        }
-                        return refrain::net::session_profile{
-                            .id = *id,
-                            .name =
-                                std::string{refrain::contracts::as_string_view(
-                                    profile.name)},
-                        };
+                        return std::unexpected{refrain::make_error(
+                            code, "session server rejected the login")};
+                    }
+                    auto id{refrain::net::uuid::parse(
+                        refrain::contracts::as_string_view(profile.id))};
+                    if (!id) {
+                        return std::unexpected{refrain::make_error(
+                            refrain::error_code::parse_error,
+                            "session server returned an invalid profile")};
+                    }
+                    return refrain::net::session_profile{
+                        .id = *id,
+                        .name = std::string{refrain::contracts::as_string_view(
+                            profile.name)},
                     };
-                }
+                };
             }
-            const auto transport{provider->host->services().active_provider(
+            const auto transport{provider->host->services().query(
                 "refrain:transport", transport_instance)};
             if (transport) {
-                log_net_transport.info("using transport {}", transport->id);
+                log_net_transport.info("using transport {}",
+                                       transport->provider.id);
             }
-            if (transport && transport->instance != nullptr) {
-                const auto *api{static_cast<const refrain::mod::provider_api *>(
-                    transport->instance)};
-                if (api->vtable != nullptr) {
-                    const auto *vtable{
-                        static_cast<const refrain_services_transport_vtable *>(
-                            api->vtable)};
-                    void *transport_self{api->self};
-                    const refrain::services::transport::provider
-                        transport_inspector{*vtable, transport_self};
-                    auto transport_descriptor{refrain::services::transport::
-                                                  make_transport_descriptor()};
-                    transport_inspector.descriptor(transport_descriptor);
-                    if (transport_descriptor.protocol !=
-                            descriptor.transport_protocol ||
-                        transport_descriptor.reliable == 0 ||
-                        transport_descriptor.ordered == 0 ||
-                        (descriptor.requires_stream != 0 &&
-                         transport_descriptor.message_oriented != 0)) {
-                        return REFRAIN_SERVICES_RUNTIME_RUNTIME_ERROR_INVALID_CONFIG;
-                    }
-                    options.make_transport =
-                        [vtable, transport_self](
-                            refrain::net::transport_handler handler,
-                            std::size_t)
-                        -> refrain::result<
-                            std::unique_ptr<refrain::net::transport>> {
-                        auto transport_service{std::make_unique<
-                            refrain::services::transport::provider>(
-                            *vtable, transport_self)};
-                        return refrain::server::make_provider_transport(
-                            std::move(transport_service), std::move(handler));
-                    };
+            auto transport_cache{std::make_shared<refrain::mod::provider_cache>(
+                provider->host->services(), "refrain:transport",
+                transport_instance)};
+            if (const auto table{transport_cache->current()};
+                table != nullptr) {
+                refreshable.push_back(transport_cache);
+                const refrain::services::transport::provider
+                    transport_inspector{
+                        *static_cast<const refrain_services_transport_vtable *>(
+                            table->vtable),
+                        table->self};
+                auto transport_descriptor{
+                    refrain::services::transport::make_transport_descriptor()};
+                transport_inspector.descriptor(transport_descriptor);
+                if (transport_descriptor.protocol !=
+                        descriptor.transport_protocol ||
+                    transport_descriptor.reliable == 0 ||
+                    transport_descriptor.ordered == 0 ||
+                    (descriptor.requires_stream != 0 &&
+                     transport_descriptor.message_oriented != 0)) {
+                    return REFRAIN_SERVICES_RUNTIME_RUNTIME_ERROR_INVALID_CONFIG;
                 }
+                options.make_transport =
+                    [transport_cache](refrain::net::transport_handler handler,
+                                      std::size_t)
+                    -> refrain::result<
+                        std::unique_ptr<refrain::net::transport>> {
+                    const auto current{transport_cache->current()};
+                    if (current == nullptr) {
+                        return std::unexpected{refrain::make_error(
+                            refrain::error_code::not_found,
+                            "refrain:transport provider is not active")};
+                    }
+                    auto transport_service{std::make_unique<
+                        refrain::services::transport::provider>(
+                        *static_cast<const refrain_services_transport_vtable *>(
+                            current->vtable),
+                        current->self)};
+                    return refrain::server::make_provider_transport(
+                        std::move(transport_service), std::move(handler));
+                };
+            }
+            // The tick boundary is the publication point for a committed
+            // composition change: refresh every cached leaf table, then run the
+            // session lifecycle tick against the snapshot that is current now.
+            // The cache list is fixed at boot, so this follows a replacement of
+            // an instance the runtime already reaches.
+            // TODO: a leaf service instance installed after boot is not in the
+            // list. Re-read `active_instances()` at the boundary and add or
+            // drop caches so a hot-installed instance takes effect without a
+            // restart.
+            if (!refreshable.empty() || has_lifecycle_hooks) {
+                options.on_tick = [refreshable = std::move(refreshable),
+                                   tick_lifecycle](std::uint64_t tick) {
+                    for (const auto &cache : refreshable) {
+                        static_cast<void>(cache->refresh());
+                    }
+                    if (tick_lifecycle) {
+                        tick_lifecycle(tick);
+                    }
+                };
             }
         }
         if (options.world_path.empty()) {

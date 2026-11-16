@@ -70,7 +70,10 @@ as a candidate, activated without publishing it, and then committed atomically
 at the next tick boundary. Each `(service, instance)` slot carries a
 monotonically increasing generation; callers cache a generation-stamped handle
 for the tick and a handle from a retired generation fails with `stale` instead
-of reaching code that is being unloaded.
+of reaching code that is being unloaded. In-process callers read that handle
+from the registry; a mod reads it from the sealed `refrain:host.core` table
+through `query_service_handle`, and `validate_handle` answers whether the
+cached generation is still committed.
 
 Staging is the IO half (read and verify the package, open a shared library,
 build the provider table) and runs on the command/installation thread. The

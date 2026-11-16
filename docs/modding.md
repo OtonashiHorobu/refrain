@@ -411,7 +411,14 @@ semantics.
 The server exposes a stable runtime API to mods through sealed services.
 `refrain:host.core` is registered by the host bootstrap before any mod factory
 runs; it covers logging, time, host memory, read-only config namespaces and service
-lookup/registration. `refrain:host.platform` adds random-access files,
+lookup/registration. A mod that keeps a provider lookup across ticks uses
+`query_service_handle`, which returns the provider table together with the
+committed `(service, instance)` generation, and re-checks it with
+`validate_handle` at each tick boundary. A replaced or retired generation
+reports `stale`, and the mod re-queries instead of calling the table it cached;
+the sealed host tables report generation zero because they never change.
+`query_service` stays the process-lifetime form for those sealed tables and
+for providers a caller uses only within one call chain. `refrain:host.platform` adds random-access files,
 read-only mmap and crash annotations; file handles are host-owned and
 single-threaded. `refrain:host.kernel` adds background jobs and a process-local
 event bus; job callbacks run on host workers and event callbacks run on the
@@ -590,7 +597,12 @@ handle with its generation and re-check it (`service_registry::validate`) when
 crossing a composition boundary; a handle from a retired generation returns
 `stale` instead of reaching freed code. Normal tick-path calls are direct
 vtable calls; the generation check is a per-boundary check, not a per-call
-lookup.
+lookup. The sealed host core ABI exposes the same state to mods:
+`query_service_handle` returns the table with its generation and
+`validate_handle` answers `stale` when the cached generation was replaced, so
+a mod does not need in-process registry access to detect a hot reload. An
+in-process consumer that keeps a table across ticks caches it through
+`mod::provider_cache` and refreshes the cache at the tick boundary.
 
 The composition epoch and a BLAKE3 digest over the committed mod generations,
 provider generations and gamepack identity are part of the audit record, so a

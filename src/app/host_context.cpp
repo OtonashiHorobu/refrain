@@ -164,25 +164,15 @@ auto host_context::config_string(std::string_view ns, std::string_view key)
     return std::string_view{config_string_buffer};
 }
 
-auto host_context::query_service(std::string_view service,
-                                 std::string_view instance)
+namespace {
+
+/// Convert the opaque payload of an active registry slot into the contract
+/// ref. The payload is the host-owned `mod::provider_api` the composition root
+/// registered; a missing table is reported instead of dereferenced.
+[[nodiscard]] auto make_provider_ref(const refrain::kernel::provider_info &info)
     -> refrain::result<refrain::host::core::provider_ref> {
-    // TODO: return a generation-stamped provider ref and validate it before
-    // every cross-tick call. The sealed host ABI carries a raw vtable/self
-    // pair, so an external mod that caches this ref keeps calling a retired
-    // generation after a hot commit. Migrating the contract surface needs an
-    // additive ABI field (generation plus a validation call); until then only
-    // the in-process leaf-service path uses `service_registry::query()` and
-    // leases, and restart-required core providers are refused by the
-    // lifecycle layer.
-    auto active{owner_.services().active_provider(service, instance)};
-    if (!active) {
-        return std::unexpected{refrain::make_error(
-            refrain::error_code::not_found,
-            "service is not active in the frozen registry")};
-    }
     const auto *api{
-        static_cast<const refrain::mod::provider_api *>(active->instance)};
+        static_cast<const refrain::mod::provider_api *>(info.instance)};
     if (api == nullptr || api->vtable == nullptr || api->self == nullptr) {
         return std::unexpected{refrain::make_error(
             refrain::error_code::unknown, "active provider has no ABI table")};
@@ -192,6 +182,101 @@ auto host_context::query_service(std::string_view service,
     ref.self = api->self;
     ref.abi_major = api->abi_major;
     return ref;
+}
+
+} // namespace
+
+auto host_context::query_service(std::string_view service,
+                                 std::string_view instance)
+    -> refrain::result<refrain::host::core::provider_ref> {
+    if (service.empty()) {
+        return std::unexpected{refrain::make_error(
+            refrain::error_code::invalid_argument, "service name is empty")};
+    }
+    auto active{owner_.services().query(service, instance)};
+    if (!active) {
+        return std::unexpected{std::move(active.error())};
+    }
+    return make_provider_ref(active->provider);
+}
+
+auto host_context::query_service_handle(std::string_view service,
+                                        std::string_view instance)
+    -> refrain::result<refrain::host::core::provider_handle> {
+    if (service.empty()) {
+        return std::unexpected{refrain::make_error(
+            refrain::error_code::invalid_argument, "service name is empty")};
+    }
+    const auto &registry{owner_.services()};
+    refrain::host::core::provider_handle handle{};
+    if (registry.is_sealed(service)) {
+        // A sealed host table is process lifetime: it has no replaceable
+        // generation, so the handle reports zero and validation only has to
+        // confirm the slot is still registered.
+        auto active{registry.active_provider(service, instance)};
+        if (!active) {
+            return std::unexpected{refrain::make_error(
+                refrain::error_code::not_found,
+                "sealed service '" + std::string{service} + "' instance '" +
+                    std::string{instance} + "' is not active")};
+        }
+        auto ref{make_provider_ref(*active)};
+        if (!ref) {
+            return std::unexpected{std::move(ref.error())};
+        }
+        handle.provider = *ref;
+        handle.generation = 0;
+        handle.epoch = registry.epoch();
+        return handle;
+    }
+    auto active{registry.query(service, instance)};
+    if (!active) {
+        return std::unexpected{std::move(active.error())};
+    }
+    auto ref{make_provider_ref(active->provider)};
+    if (!ref) {
+        return std::unexpected{std::move(ref.error())};
+    }
+    handle.provider = *ref;
+    handle.generation = active->generation;
+    handle.epoch = active->epoch;
+    return handle;
+}
+
+auto host_context::validate_handle(std::string_view service,
+                                   std::string_view instance,
+                                   std::uint64_t generation)
+    -> refrain::status {
+    if (service.empty()) {
+        return std::unexpected{refrain::make_error(
+            refrain::error_code::invalid_argument, "service name is empty")};
+    }
+    const auto &registry{owner_.services()};
+    if (registry.is_sealed(service)) {
+        if (generation != 0) {
+            return std::unexpected{refrain::make_error(
+                refrain::error_code::stale,
+                "sealed service '" + std::string{service} + "' instance '" +
+                    std::string{instance} +
+                    "' has no replaceable generation; the cached generation " +
+                    std::to_string(generation) +
+                    " does not identify a sealed provider table")};
+        }
+        if (registry.active_provider(service, instance)) {
+            return refrain::status_ok();
+        }
+        return std::unexpected{refrain::make_error(
+            refrain::error_code::stale,
+            "sealed service '" + std::string{service} + "' instance '" +
+                std::string{instance} + "' is no longer active")};
+    }
+    // `validate()` resolves the reserved default instance itself, so an empty
+    // instance string addresses the same slot the query used.
+    refrain::kernel::provider_handle handle{};
+    handle.provider.service = std::string{service};
+    handle.instance = std::string{instance};
+    handle.generation = generation;
+    return registry.validate(handle);
 }
 
 auto host_context::register_provider(

@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: c735c6db25ca24c9
+// Schema hash: 05a109909008d815
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
@@ -122,6 +122,15 @@ template <> struct custom_traits<::refrain::host::core::provider_ref> {
         refrain::reflect::custom_field{"self", &::refrain::host::core::provider_ref::self},
         refrain::reflect::custom_field{"abi_major", &::refrain::host::core::provider_ref::abi_major},
         refrain::reflect::custom_field{"reserved", &::refrain::host::core::provider_ref::reserved});
+};
+
+/// Generated RIDL struct 'refrain::host::core::provider_handle'.
+template <> struct custom_traits<::refrain::host::core::provider_handle> {
+    static constexpr std::string_view type_name = "refrain::host::core::provider_handle";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"provider", &::refrain::host::core::provider_handle::provider},
+        refrain::reflect::custom_field{"generation", &::refrain::host::core::provider_handle::generation},
+        refrain::reflect::custom_field{"epoch", &::refrain::host::core::provider_handle::epoch});
 };
 
 /// Generated RIDL struct 'refrain::host::metadata::type_info'.

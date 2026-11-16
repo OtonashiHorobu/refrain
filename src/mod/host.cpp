@@ -132,6 +132,8 @@ namespace {
         return error_code::already_exists;
     case refrain::host::core::host_error::io_error:
         return error_code::io_error;
+    case refrain::host::core::host_error::stale:
+        return error_code::stale;
     case refrain::host::core::host_error::not_initialized:
     case refrain::host::core::host_error::out_of_memory:
     case refrain::host::core::host_error::limit_exceeded:

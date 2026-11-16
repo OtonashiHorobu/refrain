@@ -27,6 +27,10 @@
 #include <string_view>
 #include <vector>
 
+namespace refrain::kernel {
+class service_registry;
+} // namespace refrain::kernel
+
 namespace refrain::server {
 
 /// Datapack inputs of the spawn-area fill. Kept beside the port because the
@@ -64,6 +68,17 @@ struct server_service_handles {
     std::string world_provider{};
     std::string sim_provider{};
     std::string storage_provider{};
+    /// Committed registry generation of each cached table, as read by the
+    /// composition root's generation-aware query. Zero means the caller
+    /// assembled the struct without a registry query (an embedder or a test),
+    /// so there is no generation to validate. The tick loop validates the
+    /// non-zero stamps at every composition boundary: these services are
+    /// restart-required, so a changed generation means the running
+    /// composition no longer owns the tables the loop holds and the loop must
+    /// not call them.
+    std::uint64_t world_generation{0};
+    std::uint64_t sim_generation{0};
+    std::uint64_t storage_generation{0};
     /// Optional `refrain:world.migration` provider. Null when the composition
     /// selects none: the open path then refuses a world recorded with a data
     /// version this build does not read, instead of interpreting it with the
@@ -72,6 +87,9 @@ struct server_service_handles {
     const refrain_services_world_migration_vtable *migration{nullptr};
     void *migration_self{nullptr};
     std::string migration_provider{};
+    /// Generation of the migration table. It is only read before the tick loop
+    /// starts, so the loop does not validate it.
+    std::uint64_t migration_generation{0};
 };
 
 /// Which implementation of `world_port` the runtime uses.
@@ -410,6 +428,21 @@ class world_port {
 /// (`refrain.world.vanilla`, `refrain.sim.vanilla`, `refrain.storage.rwf`).
 [[nodiscard]] auto
 is_first_party_world(const server_service_handles &services) noexcept -> bool;
+
+/// Validate the generation stamps of the provider tables the tick loop cached
+/// in `services` against the committed registry.
+///
+/// A zero stamp means the struct was assembled without a registry query (an
+/// embedder or a test) and is skipped. A non-zero stamp that is no longer the
+/// committed generation of its `(service, instance)` slot means the running
+/// composition no longer owns the table the loop holds: `refrain:world`,
+/// `refrain:sim` and `refrain:storage` are restart-required, so there is no
+/// hand-over contract and the loop must stop instead of calling a retired
+/// provider. `refrain:world.migration` is checked only before the loop starts
+/// and is not validated here.
+[[nodiscard]] auto
+validate_cached_providers(const server_service_handles &services,
+                          const kernel::service_registry &registry) -> status;
 
 /// The selection rule.
 ///

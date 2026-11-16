@@ -1252,6 +1252,7 @@ auto run_server(const server_run_options &options,
     clock.start();
     std::int64_t ticks_run{0};
     bool player_projection_failed{false};
+    bool provider_validation_failed{false};
     log_server.info("target tick rate is {} tps",
                     refrain::core::ticks_per_second);
 
@@ -1274,6 +1275,21 @@ auto run_server(const server_run_options &options,
             log_server.error(
                 "failed to commit a staged mod composition change: {}",
                 committed.error().message);
+        }
+        // The world/sim/storage providers are restart-required: the lifecycle
+        // refuses to replace them while the loop holds their live state, so a
+        // changed generation means the cached tables no longer belong to the
+        // committed composition. Re-querying cannot hand over the live world,
+        // so stop instead of calling a provider the lifecycle retired.
+        if (options.mod_host != nullptr) {
+            if (auto valid{refrain::server::validate_cached_providers(
+                    services, options.mod_host->services())};
+                !valid) {
+                log_server.error("{}", valid.error().message);
+                provider_validation_failed = true;
+                state->stop->store(true, std::memory_order_release);
+                break;
+            }
         }
         // Publish a finished content view rebuild at the same boundary. The
         // commit only swaps a shared pointer: the pack IO and the validation
@@ -1469,7 +1485,7 @@ auto run_server(const server_run_options &options,
         }
     }
     log_server.info("ran {} ticks", ticks_run);
-    return player_projection_failed ? 1 : 0;
+    return player_projection_failed || provider_validation_failed ? 1 : 0;
 }
 
 } // namespace refrain::server
