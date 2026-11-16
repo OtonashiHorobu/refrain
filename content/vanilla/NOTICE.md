@@ -32,8 +32,12 @@ copy of the game, under the terms of the
 and the
 [Mojang Brand and Assets Guidelines](https://www.minecraft.net/en-us/usage-guidelines).
 
-Vanilla Minecraft datapacks are not distributed in this repository. Generate
-the datapack and its manifest from the `server.jar` you own:
+Vanilla Minecraft datapacks are not distributed in this repository and are
+not shipped with the server. On the first start after the EULA is accepted, the
+server extracts the datapack it needs from the official server archive of the
+target version into its local data directory; the archive is downloaded by the
+operator and is never redistributed. To stage the snapshot without the network
+instead, generate it from the `server.jar` you own:
 
 ```bash
 scripts/fetch-content.sh <server.jar>

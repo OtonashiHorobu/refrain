@@ -16,6 +16,12 @@
 __pycache__/
 *.pyc
 
+# First-run server state created next to the working directory: the EULA
+# acceptance, the generated configuration and the downloaded game data.
+/config
+/data
+/eula.toml
+
 # Game files and local run directories (never committed)
 *.jar
 *.mca

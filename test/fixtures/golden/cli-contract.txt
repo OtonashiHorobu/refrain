@@ -31,6 +31,9 @@ data-registry-recipe    | stdout | 0       | registry recipe: 1 entry(s) fingerp
 server-plan-stdout      | stdout | 0       | refrain.worldgen.vanilla@1.0.0 | refrain-server --gamepack {root}/gamepack/gamepack.toml --dump-gamepack
 server-log-stderr       | stderr | 0       | [main/info] | refrain-server --gamepack {root}/gamepack/gamepack.toml --dump-gamepack
 server-stdout-clean     | stdout | 0       | ![main/info] | refrain-server --gamepack {root}/gamepack/gamepack.toml --dump-gamepack
+server-help-first-run   | stdout | 0       | --accept-eula | refrain-server --help
+server-help-defaults    | stdout | 0       | world './world' | refrain-server --help
+server-help-data-dir    | stdout | 0       | Game data directory | refrain-server --help
 error-path-exit         | stderr | nonzero | io_error | refrain-tools gamepack check -f {root}/test/fixtures/does-not-exist.toml
 world-info-help        | stdout | 0       | Print world metadata and storage statistics | refrain-tools world info --help
 world-fsck-missing     | stderr | nonzero | is not a directory | refrain-tools world fsck {root}/test/fixtures/does-not-exist-world

@@ -34,6 +34,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TARGET="${1:-linux}"
+# Game version whose tracked tables and reports ship in the installed layout.
+GAME_VERSION="26.3"
 case "$TARGET" in
     linux|mingw|msvc) ;;
     *)
@@ -353,7 +355,8 @@ case "$TARGET" in
     msvc) name="refrain-${VERSION}-windows-msvc-${DIST_ARCH}" ;;
 esac
 STAGE="$(mktemp -d)"
-mkdir -p "$STAGE/$name/bin" "$STAGE/$name/gamepack" "$STAGE/$name/licenses"
+mkdir -p "$STAGE/$name/bin" "$STAGE/$name/gamepack" "$STAGE/$name/licenses" \
+    "$STAGE/$name/content/vanilla/$GAME_VERSION"
 
 exe_suffix=""
 [[ "$TARGET" == linux ]] || exe_suffix=".exe"
@@ -361,6 +364,17 @@ cp "$BUILD/bin/refrain-server$exe_suffix" "$STAGE/$name/bin/"
 cp "$BUILD/bin/refrain-tools$exe_suffix" "$STAGE/$name/bin/"
 cp gamepack/gamepack.toml "$STAGE/$name/gamepack/"
 cp -r gamepack/presets "$STAGE/$name/gamepack/"
+# The installed layout carries the tracked game-derived tables and reports;
+# the datapack is not shipped and is fetched from the operator's own copy of
+# the game on the first accepted start (or staged into `data/` offline).
+cp "content/vanilla/$GAME_VERSION/tables.rvtb" \
+    "content/vanilla/$GAME_VERSION/protocol_registry.json" \
+    "content/vanilla/$GAME_VERSION/packets.json" \
+    "$STAGE/$name/content/vanilla/$GAME_VERSION/"
+cp -r "content/vanilla/$GAME_VERSION/reports" \
+    "$STAGE/$name/content/vanilla/$GAME_VERSION/"
+cp content/vanilla/NOTICE.md content/vanilla/README.md \
+    "$STAGE/$name/content/vanilla/"
 cp LICENSE NOTICE.md README.md "$STAGE/$name/"
 
 case "$TARGET" in

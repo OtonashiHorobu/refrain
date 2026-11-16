@@ -38,6 +38,21 @@ suite<"platform/process"> process_tests = [] {
         expect(refrain::platform::process_id() > 0U);
     };
 
+    "platform/process: executable_path names the binary being run"_test = [] {
+        const auto path = refrain::platform::executable_path();
+        if (!path.has_value()) {
+            // Only Linux and Windows resolve the image path; a POSIX host
+            // without /proc reports unsupported and the test says so.
+            expect(static_cast<int>(path.error().code) ==
+                   static_cast<int>(refrain::error_code::unsupported));
+            return;
+        }
+        expect(path->starts_with('/') || path->find(':') != std::string::npos);
+        std::error_code error;
+        expect(fs::is_regular_file(fs::path{*path}, error));
+        expect(!error);
+    };
+
     "platform/process: null callback is invalid_argument"_test = [] {
         const auto installed =
             refrain::platform::install_fault_handler(nullptr, nullptr);

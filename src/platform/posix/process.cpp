@@ -257,6 +257,40 @@ auto process_id() noexcept -> std::uint64_t {
     return static_cast<std::uint64_t>(::getpid());
 }
 
+auto executable_path() -> result<std::string> {
+#if defined(__linux__)
+    // /proc/self/exe is a symlink to the image the kernel is executing. It
+    // resolves symlinks and relative launches for us, and it keeps pointing at
+    // the original file when the binary is replaced on disk.
+    std::array<char, 4096> buffer{};
+    for (;;) {
+        const auto length{
+            ::readlink("/proc/self/exe", buffer.data(), buffer.size())};
+        if (length < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            return std::unexpected{make_error(
+                error_code::io_error,
+                "failed to read /proc/self/exe for the executable path")};
+        }
+        if (static_cast<std::size_t>(length) < buffer.size()) {
+            return std::string{buffer.data(), static_cast<std::size_t>(length)};
+        }
+        // The kernel truncates rather than failing when the buffer is too
+        // small; a path this long cannot be resolved by growing the buffer, so
+        // report it instead of looping forever.
+        return std::unexpected{
+            make_error(error_code::io_error,
+                       "the executable path does not fit in 4096 bytes")};
+    }
+#else
+    return std::unexpected{
+        make_error(error_code::unsupported,
+                   "the executable path is only resolved on Linux")};
+#endif
+}
+
 auto process_alive(std::uint64_t pid) noexcept -> bool {
     // kill(pid, 0) performs the permission/existence check without delivering
     // a signal. ESRCH means "no such process"; EPERM means it exists but is

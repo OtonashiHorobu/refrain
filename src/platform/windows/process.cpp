@@ -12,6 +12,7 @@
 
 #include <atomic>
 #include <charconv>
+#include <cstddef>
 #include <cstdlib>
 #include <limits>
 #include <string>
@@ -164,6 +165,55 @@ auto native_signal_for(fault_kind kind) noexcept -> int {
 
 auto process_id() noexcept -> std::uint64_t {
     return static_cast<std::uint64_t>(::GetCurrentProcessId());
+}
+
+auto executable_path() -> result<std::string> {
+    // GetModuleFileNameW without a size hint truncates and reports
+    // ERROR_INSUFFICIENT_BUFFER, so the buffer doubles until the call fits or
+    // the path exceeds the 32767-character Win32 limit.
+    std::wstring wide;
+    for (std::size_t capacity{512}; capacity <= 32768U; capacity *= 2U) {
+        wide.resize(capacity);
+        const auto length{::GetModuleFileNameW(
+            nullptr, wide.data(), static_cast<DWORD>(wide.size()))};
+        if (length == 0U) {
+            return std::unexpected{make_error(
+                error_code::io_error,
+                "failed to read the executable path from the process image")};
+        }
+        if (length < static_cast<DWORD>(wide.size())) {
+            wide.resize(length);
+            break;
+        }
+        if (capacity == 32768U) {
+            return std::unexpected{make_error(
+                error_code::io_error,
+                "the executable path does not fit in 32767 characters")};
+        }
+    }
+    if (wide.empty()) {
+        return std::unexpected{
+            make_error(error_code::io_error,
+                       "failed to read the executable path from the process "
+                       "image")};
+    }
+    const int bytes{::WideCharToMultiByte(CP_UTF8, 0, wide.data(),
+                                          static_cast<int>(wide.size()),
+                                          nullptr, 0, nullptr, nullptr)};
+    if (bytes <= 0) {
+        return std::unexpected{
+            make_error(error_code::io_error,
+                       "failed to convert the executable path to UTF-8")};
+    }
+    std::string utf8(static_cast<std::size_t>(bytes), '\0');
+    if (::WideCharToMultiByte(CP_UTF8, 0, wide.data(),
+                              static_cast<int>(wide.size()), utf8.data(), bytes,
+                              nullptr, nullptr) != bytes) {
+        return std::unexpected{
+            make_error(error_code::io_error,
+                       "failed to convert the executable path to UTF-8")};
+    }
+    return utf8;
 }
 
 auto process_alive(std::uint64_t pid) noexcept -> bool {
