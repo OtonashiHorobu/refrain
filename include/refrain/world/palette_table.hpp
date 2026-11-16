@@ -2,7 +2,7 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 //
-// World-level palette string table (RWF pre-release v1). Block/biome palette
+// World-level palette string table (RWF v1). Block/biome palette
 // entries store u32 ids; the table maps ids to canonical strings and is stored
 // as the `palette` object in the world object store. The table is append-only
 // within one world; import sorts strings for deterministic ids.
