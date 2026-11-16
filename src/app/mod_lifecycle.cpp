@@ -112,6 +112,7 @@ auto mod_lifecycle::resolve_composition() -> result<mod::composition> {
             .host_side = options_.side,
             .required_services = required,
             .discovery = options_.discovery,
+            .auto_scan = options_.auto_scan,
         })};
     if (!composition) {
         return std::unexpected{std::move(composition.error())};
@@ -380,6 +381,15 @@ auto mod_lifecycle::commit() -> result<mod_commit_result> {
 
 void mod_lifecycle::abort() noexcept { owner_.abort_staged(); }
 
+namespace {
+
+[[nodiscard]] auto lists_id(const std::vector<std::string> &ids,
+                            std::string_view id) -> bool {
+    return std::find(ids.begin(), ids.end(), id) != ids.end();
+}
+
+} // namespace
+
 auto make_mod_lifecycle_port(mod_lifecycle &lifecycle) -> mod_lifecycle_port {
     mod_lifecycle_port port{};
     port.apply = [&lifecycle](const mod_lifecycle_request &request)
@@ -409,6 +419,26 @@ auto make_mod_lifecycle_port(mod_lifecycle &lifecycle) -> mod_lifecycle_port {
         switch (request.action) {
         case mod_lifecycle_action::install:
             staged = lifecycle.stage_catalog();
+            if (staged && !request.id.empty() &&
+                lifecycle.host().find(request.id) == nullptr &&
+                !lists_id(staged->change.added, request.id) &&
+                !lists_id(staged->change.reloaded, request.id)) {
+                // The command layer committed the receipt, but the catalog
+                // rules the running composition was resolved with do not
+                // select the mod, so the staged change is empty. Publishing
+                // it would report a composition change that did not happen;
+                // drop it and name the reason instead.
+                lifecycle.abort();
+                return std::unexpected{make_error(
+                    error_code::unsupported,
+                    fmt::format(
+                        "the install receipt of '{}' is not part of the "
+                        "resolved composition: the gamepack does not select "
+                        "it and auto-scan is off, so the running composition "
+                        "cannot include it; enable auto-scan or list the mod "
+                        "in the gamepack and restart the server",
+                        request.id))};
+            }
             break;
         case mod_lifecycle_action::uninstall:
             staged = lifecycle.stage_removal(request.id, request.version);

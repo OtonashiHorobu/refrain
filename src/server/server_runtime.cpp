@@ -31,6 +31,7 @@
 #include <refrain/server/entity_broadcaster.hpp>
 #include <refrain/server/inventory_sync.hpp>
 #include <refrain/server/maintenance_service.hpp>
+#include <refrain/server/mod_lifecycle_inputs.hpp>
 #include <refrain/server/mod_management_settings.hpp>
 #include <refrain/server/play_gateway.hpp>
 #include <refrain/server/player_store.hpp>
@@ -477,11 +478,61 @@ auto run_server(const server_run_options &options,
     } else {
         registries = std::move(*loaded_registries);
     }
+    // Hot mod lifecycle: the one service allowed to stage a change of the
+    // running composition. It is built from the host the composition root
+    // loaded and the catalog inputs that root resolved (content-store roots
+    // and the effective auto-scan policy), so a staged catalog resolves
+    // exactly like the next server start would. The staging half runs on the
+    // command path; the publish is the tick-boundary commit at the top of the
+    // loop below and performs no package or store IO.
+    const auto lifecycle_inputs{refrain::server::take_mod_lifecycle_inputs()};
+    std::optional<refrain::app::mod_lifecycle> mod_lifecycle_service{};
+    std::string lifecycle_unavailable_reason{};
+    if (options.mod_host == nullptr) {
+        lifecycle_unavailable_reason =
+            "the runtime was started without a loaded mod host, so the "
+            "running composition cannot be changed";
+    } else if (!options.mod_host->loaded()) {
+        lifecycle_unavailable_reason =
+            "the mod host has not loaded a composition, so the running "
+            "composition cannot be changed";
+    } else if (lifecycle_inputs.has_value() || !options.content_store.empty()) {
+        refrain::app::mod_lifecycle_options lifecycle_options{};
+        if (lifecycle_inputs.has_value()) {
+            lifecycle_options.store_roots = lifecycle_inputs->store_roots;
+            lifecycle_options.auto_scan = lifecycle_inputs->auto_scan;
+        }
+        lifecycle_options.store_root = options.content_store;
+        if (lifecycle_options.store_roots.empty() &&
+            !options.content_store.empty()) {
+            // Embedders and tests that build the options directly do not go
+            // through the composition-root handoff; the content store is then
+            // the whole catalog.
+            lifecycle_options.store_roots.push_back(options.content_store);
+        }
+        lifecycle_options.side = "server";
+        // A staged change must keep every provider key the running
+        // composition resolved: the tick loop and the other mods depend on
+        // them, so a catalog that drops one is refused instead of staged.
+        for (const auto &provider :
+             options.mod_host->active_composition().providers) {
+            lifecycle_options.required_services.push_back(provider.service);
+        }
+        lifecycle_options.discovery =
+            refrain::mod::discover_options{.require_mods_dir = false};
+        mod_lifecycle_service.emplace(*options.mod_host,
+                                      std::move(lifecycle_options));
+    } else {
+        lifecycle_unavailable_reason =
+            "the server was started without a mod content store, so the "
+            "running composition cannot be re-resolved from installed "
+            "receipts";
+    }
     // One mod management service behind the console `mods ...` command and
     // the in-game `/mods` tree, so both frontends report the same results.
     // The hot lifecycle port is the only place that may change the running
-    // composition; this build has no staged composition epochs yet, so it
-    // answers `unsupported` with the reason instead of simulating a change.
+    // composition; the command layer keeps its gates, durable store
+    // transactions and audit.
     refrain::app::mod_management_context management{};
     management.store = options.content_store;
     management.policy = management_settings->policy;
@@ -490,9 +541,12 @@ auto run_server(const server_run_options &options,
     management.hot_install = management_settings->hot_install;
     management.hot_reload = management_settings->hot_reload;
     management.loaded = loaded_composition_snapshot(options);
-    management.lifecycle.unavailable_reason =
-        "the hot lifecycle registry (staged composition epochs, in-flight "
-        "drain and loader unload callbacks) is not available in this build";
+    if (mod_lifecycle_service) {
+        management.lifecycle =
+            refrain::app::make_mod_lifecycle_port(*mod_lifecycle_service);
+    } else {
+        management.lifecycle.unavailable_reason = lifecycle_unavailable_reason;
+    }
     refrain::app::mod_management mods_management{std::move(management)};
     log_mods.info(
         "mod management is available with hot install {}, hot reload {} and "
@@ -502,6 +556,19 @@ auto run_server(const server_run_options &options,
         management_settings->operators.size(),
         options.content_store.empty() ? std::string{"no content store"}
                                       : options.content_store);
+    if (mod_lifecycle_service) {
+        log_mods.info(
+            "the hot lifecycle is wired to {} catalog root(s) with auto-scan "
+            "{}",
+            mod_lifecycle_service->options().store_roots.size(),
+            mod_lifecycle_service->options().auto_scan.value_or(
+                options.mod_host->active_composition().spec.auto_scan)
+                ? "on"
+                : "off");
+    } else {
+        log_mods.info("the hot lifecycle is unavailable: {}",
+                      lifecycle_unavailable_reason);
+    }
 
     auto command_environment{
         std::make_shared<refrain::server::command_environment>()};

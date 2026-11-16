@@ -11,6 +11,7 @@
 
 #include <chrono>
 #include <cstddef>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -42,6 +43,13 @@ struct mod_lifecycle_options {
     std::string side{"server"};
     /// `[providers]` keys the host cannot start without.
     std::vector<std::string> required_services{};
+    /// Override the gamepack `auto_scan` flag when the catalog is re-resolved.
+    /// Unset keeps the flag recorded in the running composition, so a staged
+    /// change resolves against the same catalog rules the current composition
+    /// was resolved with. A server started with `--auto-scan` passes the
+    /// effective value here; without it a newly installed receipt is not part
+    /// of the composition and the staged change is empty.
+    std::optional<bool> auto_scan{};
     mod::discover_options discovery{};
     /// Operator identity recorded with every action (console, player name).
     std::string actor{"console"};

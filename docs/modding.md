@@ -537,9 +537,12 @@ run with hot changes can be told apart from an identical static composition.
 `mod_lifecycle_port`. The command layer keeps parsing, permission checks,
 durable store transactions and audit; the port stages the running-composition
 half and reports that the change publishes at the next tick boundary. The
-composition root wires the port into `mod_management_context.lifecycle`; with
-an empty port the `mods` commands still report that the running composition was
-not changed.
+server composition root builds the service from the running host and the
+catalog it resolved (content-store roots and the effective auto-scan policy)
+and wires the port into `mod_management_context.lifecycle`; the runtime commits
+staged changes at the next tick boundary. A server without a loaded host or a
+content store leaves the port empty, and the `mods` commands then report that
+the running composition was not changed instead of simulating one.
 
 ## Trust, signatures and updates
 
@@ -645,7 +648,9 @@ the hot lifecycle gates (`[lifecycle] hot_install`, `hot_reload`) and the list
 of player uuids allowed to run the in-game command (`[admin] operators`). Both
 hot gates default off: installing or uninstalling changes the content store at
 once, but the running composition picks the change up on the next start unless
-the gate is enabled.
+the gate is enabled. A hot install only publishes a mod the composition
+resolves: with auto-scan off the gamepack has to list it, otherwise the receipt
+stays installed for the next start.
 
 `install`, `uninstall` and the trust changes require the literal `confirm`
 argument; `--dry-run` reports without writing store state. Every operation,

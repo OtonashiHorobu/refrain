@@ -152,9 +152,10 @@ struct runtime_provider {
                                   provider->storage, provider->runtime,
                                   provider->config_store)};
         // The mod management surface reads its policy and hot gates from the
-        // host configuration directory, and reports the loaded composition
-        // from the live host. Both stay host-owned; the runtime only reads
-        // them.
+        // host configuration directory and snapshots the loaded composition
+        // from the live host. The host stays host-owned; the runtime reads the
+        // composition and stages a hot change through it, so it must outlive
+        // the tick loop.
         options.config_dir = abi::to_string(config->config_dir);
         options.mod_host = provider->host;
         // The runtime contract is frozen and carries no game-data fields. The

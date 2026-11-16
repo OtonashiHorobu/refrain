@@ -437,6 +437,51 @@ the lifecycle registry at a tick boundary; a build without that registry
 answers `unsupported`, naming the missing layer, instead of pretending the
 composition changed.
 
+### Hot lifecycle
+
+The server builds the lifecycle service from the composition it is running and
+from the catalog the start resolved: the same content-store roots, install
+receipts and effective auto-scan policy. A staged change therefore follows the
+same rules as the next start would, and the running composition only changes
+when those rules resolve the mod into it. With `auto_scan` off and the mod not
+listed by the gamepack, the install command keeps the receipt for the next
+start and refuses with the reason instead of joining the running composition;
+enable auto-scan or list the mod.
+
+A staged change is published at a tick boundary. The registry switch is atomic
+and no package or store IO happens there: reading and verifying the package,
+opening a library and building the replacement providers all happen on the
+command path before the change is staged. Until that boundary the running
+composition keeps calling the current generation.
+
+- `hot_install = true` makes `mods install` and `mods uninstall` stage their
+  running-composition half after the store transaction. The store change is
+  durable either way; a staging refusal leaves the receipt installed for the
+  next start instead of rolling the store back.
+- `hot_reload = true` makes `mods reload <id>` rebuild the active generation as
+  the next one. After the commit, handles from the previous generation fail as
+  stale; a call that started before the switch is drained for up to five
+  seconds before the loader's unload hook runs.
+- With a gate off nothing is staged. `mods install`/`mods uninstall` still
+  change the content store and report `restart required`; `mods reload` is
+  refused with the gate named. The change lands on the next start.
+
+A successful reload or uninstall does not disconnect players and does not
+unload chunks: the world keeps ticking with the same entities, chunks and
+simulation state. What changes from the next tick on is which provider
+implementations the tick loop and the other mods reach. Content and registry
+data a mod contributed were read at start; rebuilding its code generation does
+not re-read them. A native library is never unloaded while the process runs, so
+reloaded code accumulates retired mappings (eight generations by default before
+a further reload is refused).
+
+Not every mod can be hot-switched. A change is refused with the reason named
+when the mod runs statically linked code or provides a core service the running
+process owns (`refrain:sim`, `refrain:world`, `refrain:storage`,
+`refrain:net.protocol` or `refrain:runtime`). A mod that another active mod
+still requires cannot be uninstalled. The refusal is audited, and the store
+change stays durable for the next start.
+
 Every operation writes one line through the `mod-audit` logger with the actor
 (console, or the player uuid), the action, the mod id and version, the package
 digest, the signer key id, the policy in force and the result. Refused and
