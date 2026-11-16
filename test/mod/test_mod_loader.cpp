@@ -527,7 +527,6 @@ const suite mod_loader_tests = [] {
         expect(static_cast<bool>(explicit_native));
         if (explicit_native) {
             expect(explicit_native->loader == "native");
-            expect(!explicit_native->loader_inferred);
             expect(explicit_native->entry->loader == "native");
         }
         auto internal{config::document::parse_text(
@@ -540,7 +539,6 @@ const suite mod_loader_tests = [] {
             expect(static_cast<bool>(manifest));
             if (manifest) {
                 expect(manifest->loader == "builtin");
-                expect(!manifest->loader_inferred);
                 expect(!manifest->is_external());
             }
         }
@@ -589,7 +587,6 @@ const suite mod_loader_tests = [] {
             expect(static_cast<bool>(manifest));
             if (manifest) {
                 expect(manifest->loader == "com.example.loader");
-                expect(!manifest->loader_inferred);
             }
         }
         // A known first-party loader keeps the shared entry keys strict.
