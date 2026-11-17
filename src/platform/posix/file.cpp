@@ -53,6 +53,19 @@ namespace {
     return make_error(error_code::io_error, std::move(message));
 }
 
+/// Map a failed read open to the public read errors: a symlink refused by
+/// O_NOFOLLOW is `permission_denied` (the caller explicitly asked not to follow
+/// it); everything else is an `io_error` naming the path.
+[[nodiscard]] auto open_read_failure(std::string_view path, bool follow_symlink)
+    -> error {
+    if (!follow_symlink && errno == ELOOP) {
+        return make_error(error_code::permission_denied,
+                          "refusing to follow symlink '" + std::string{path} +
+                              "'");
+    }
+    return io_failure("failed to open for reading", path);
+}
+
 /// Unique sibling name. The sequence is atomic because `atomic_replace` is
 /// documented as concurrency-safe: a duplicated
 /// name would let two threads write the same temporary file and destroy the
@@ -196,6 +209,100 @@ auto native_path(std::string_view utf8_path) -> std::filesystem::path {
 
 auto native_string(std::string_view utf8_path) -> native_path_string {
     return std::string{utf8_path};
+}
+
+struct read_only_file::impl {
+    int descriptor{-1};
+    std::uint64_t size{0};
+    std::string path;
+
+    ~impl() {
+        if (descriptor >= 0) {
+            (void)::close(descriptor);
+        }
+    }
+};
+
+read_only_file::read_only_file() noexcept = default;
+read_only_file::~read_only_file() = default;
+read_only_file::read_only_file(read_only_file &&other) noexcept = default;
+auto read_only_file::operator=(read_only_file &&other) noexcept
+    -> read_only_file & = default;
+
+read_only_file::read_only_file(std::unique_ptr<impl> state) noexcept
+    : impl_{std::move(state)} {}
+
+auto read_only_file::open(std::string_view utf8_path, bool follow_symlink)
+    -> result<read_only_file> {
+    if (utf8_path.empty()) {
+        return std::unexpected{make_error(error_code::invalid_argument,
+                                          "cannot open an empty path")};
+    }
+    const std::string path{utf8_path};
+    // O_NONBLOCK makes a FIFO open return instead of waiting for a writer; the
+    // fstat() below then rejects the descriptor as non-regular. It is a no-op
+    // for regular files. O_NOFOLLOW is what makes the symlink refusal atomic
+    // with the open: the kernel refuses a link at the final component with
+    // ELOOP rather than opening its target.
+    int flags{O_RDONLY | O_CLOEXEC | O_NONBLOCK};
+    if (!follow_symlink) {
+        flags |= O_NOFOLLOW;
+    }
+    const int descriptor = open_retry(path.c_str(), flags, 0);
+    if (descriptor < 0) {
+        return std::unexpected{open_read_failure(path, follow_symlink)};
+    }
+    struct stat status{};
+    if (::fstat(descriptor, &status) != 0) {
+        const auto failure{io_failure("failed to query the opened file", path)};
+        (void)::close(descriptor);
+        return std::unexpected{failure};
+    }
+    if (!S_ISREG(status.st_mode)) {
+        (void)::close(descriptor);
+        errno = 0; // no OS error: the descriptor is simply not a regular file
+        return std::unexpected{io_failure(
+            "cannot read a non-regular file (directory, FIFO or device)",
+            path)};
+    }
+    auto state{std::make_unique<impl>()};
+    state->descriptor = descriptor;
+    state->size = status.st_size > 0
+                      ? static_cast<std::uint64_t>(status.st_size)
+                      : std::uint64_t{0};
+    state->path = path;
+    return read_only_file{std::move(state)};
+}
+
+auto read_only_file::valid() const noexcept -> bool {
+    return impl_ != nullptr && impl_->descriptor >= 0;
+}
+
+auto read_only_file::size() const noexcept -> std::uint64_t {
+    return impl_ != nullptr ? impl_->size : std::uint64_t{0};
+}
+
+auto read_only_file::read(std::span<std::byte> out) -> result<std::size_t> {
+    if (!valid()) {
+        return std::unexpected{
+            make_error(error_code::not_initialized, "file handle is closed")};
+    }
+    std::size_t done{0};
+    while (done < out.size()) {
+        const auto count =
+            ::read(impl_->descriptor, out.data() + done, out.size() - done);
+        if (count < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            return std::unexpected{io_failure("failed to read", impl_->path)};
+        }
+        if (count == 0) {
+            break; // end of file
+        }
+        done += static_cast<std::size_t>(count);
+    }
+    return done;
 }
 
 auto atomic_replace(std::string_view path, std::span<const std::byte> data)
