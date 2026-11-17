@@ -33,6 +33,7 @@
 #include <refrain/mod/host.hpp>
 #include <refrain/mod/provider_cache.hpp>
 #include <refrain/mod/static_mod.hpp>
+#include <refrain/permissions/admin.hpp>
 #include <refrain/server/game_data.hpp>
 #include <refrain/server/provider_protocol.hpp>
 #include <refrain/server/provider_transport.hpp>
@@ -137,6 +138,10 @@ void collect_service(const refrain::mod::host &host, std::string_view service,
     collect_service(host, "refrain:permissions", services.permissions,
                     services.permissions_self, services.permissions_provider,
                     services.permissions_generation);
+    // The base resolver publishes its management surface for this process; the
+    // runtime hands it to the command layer so `/permissions` can change and
+    // persist the policy. A wrapper-only composition leaves it null.
+    services.permissions_admin = refrain::permissions::active_admin();
     return services;
 }
 

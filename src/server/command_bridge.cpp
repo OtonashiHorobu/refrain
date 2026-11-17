@@ -65,7 +65,7 @@ namespace {
     -> command::player_source {
     const auto key{identity_key(identity)};
     env->remember_key(key, identity.connection, identity.id.to_string(),
-                      std::string{identity.world});
+                      std::string{identity.name}, std::string{identity.world});
     auto online = [env]() -> std::vector<std::string> {
         std::vector<std::string> names{};
         if (env->listener == nullptr) {
@@ -231,11 +231,12 @@ auto command_environment::mode_of(std::uint64_t connection) const
 
 void command_environment::remember_key(std::uint64_t key,
                                        std::uint64_t connection,
-                                       std::string uuid,
+                                       std::string uuid, std::string name,
                                        std::string world_name) {
     const std::lock_guard lock{mode_mutex};
     key_to_connection[key] = connection;
     identity_uuids[key] = std::move(uuid);
+    identity_names[key] = std::move(name);
     identity_worlds[key] = std::move(world_name);
 }
 
@@ -285,6 +286,89 @@ auto command_environment::gamemode_name(std::uint64_t key) const
         return "spectator";
     }
     return "survival";
+}
+
+auto command_environment::find_online_player(std::string_view name_or_uuid)
+    const -> std::optional<permissions_online_player> {
+    if (name_or_uuid.empty()) {
+        return std::nullopt;
+    }
+    const auto ascii_lower = [](char character) {
+        return character >= 'A' && character <= 'Z'
+                   ? static_cast<char>(character - 'A' + 'a')
+                   : character;
+    };
+    const auto equals_ignoring_case = [&ascii_lower](std::string_view left,
+                                                     std::string_view right) {
+        if (left.size() != right.size()) {
+            return false;
+        }
+        for (std::size_t index{0}; index < left.size(); ++index) {
+            if (ascii_lower(left[index]) != ascii_lower(right[index])) {
+                return false;
+            }
+        }
+        return true;
+    };
+    struct joined_player {
+        permissions_online_player value{};
+        std::uint64_t connection{0};
+    };
+    // The identity maps remember every player the bridge has seen; only a
+    // connection the listener still lists as in play counts as online.
+    std::vector<joined_player> joined{};
+    {
+        const std::lock_guard lock{mode_mutex};
+        joined.reserve(identity_names.size());
+        for (const auto &[key, name] : identity_names) {
+            joined_player player{};
+            player.value.name = name;
+            player.value.uuid = identity_uuids.at(key);
+            if (const auto world_name{identity_worlds.find(key)};
+                world_name != identity_worlds.end()) {
+                player.value.world = world_name->second;
+            }
+            const auto connection{key_to_connection.find(key)};
+            if (connection == key_to_connection.end()) {
+                continue;
+            }
+            player.connection = connection->second;
+            if (const auto mode{modes.find(player.connection)};
+                mode != modes.end()) {
+                switch (mode->second) {
+                case net::game_mode::survival:
+                    player.value.gamemode = "survival";
+                    break;
+                case net::game_mode::creative:
+                    player.value.gamemode = "creative";
+                    break;
+                case net::game_mode::adventure:
+                    player.value.gamemode = "adventure";
+                    break;
+                case net::game_mode::spectator:
+                    player.value.gamemode = "spectator";
+                    break;
+                }
+            }
+            joined.push_back(std::move(player));
+        }
+    }
+    std::vector<std::uint64_t> live{};
+    if (listener != nullptr) {
+        live = listener->active_connections();
+    }
+    for (const auto &player : joined) {
+        if (listener != nullptr &&
+            std::ranges::find(live, player.connection) == live.end()) {
+            continue;
+        }
+        if (equals_ignoring_case(player.value.name, name_or_uuid) ||
+            (!player.value.uuid.empty() &&
+             equals_ignoring_case(player.value.uuid, name_or_uuid))) {
+            return player.value;
+        }
+    }
+    return std::nullopt;
 }
 
 auto command_environment::query_permission(const command::source &source,
@@ -413,7 +497,117 @@ void register_mod_commands(
     mods.then(trust);
 }
 
+/// Word parser for the subject of a `/permissions` command. It accepts the
+/// same single word a player-name argument accepts and completes it with the
+/// console and the online player names, the two subjects an operator normally
+/// names.
+class subject_argument final : public command::argument_parser {
+  public:
+    [[nodiscard]] auto descriptor() const
+        -> command::parser_descriptor override {
+        command::parser_descriptor descriptor{};
+        descriptor.kind = command::parser_kind::string;
+        descriptor.string = command::string_mode::single_word;
+        return descriptor;
+    }
+
+    [[nodiscard]] auto parse(command::reader &input) const
+        -> command::parse_result override {
+        const auto word{input.read_word()};
+        if (word.empty()) {
+            return std::unexpected{
+                command::make_argument_error("expected a subject", 0)};
+        }
+        return command::argument_value{word};
+    }
+
+    void suggest(std::string_view remaining, const command::source &src,
+                 command::suggestion_builder &out) const override {
+        static_cast<void>(remaining);
+        out.add("console", "the server console holds every node");
+        for (const auto &name : src.online_players()) {
+            out.add(name);
+        }
+    }
+};
+
+/// Register the `/permissions` tree. Every leaf is gated by
+/// `refrain.permissions.admin`; its declared fallback is the admin level, so a
+/// composition without the permission service keeps the command usable for an
+/// operator source and the executor still reports that no policy is active.
+void register_permissions_commands_impl(
+    const std::shared_ptr<command_environment> &environment) {
+    auto &dispatcher{environment->dispatcher};
+    const auto gate = [](command::node_ref node) {
+        return node.require_node("refrain.permissions.admin",
+                                 command::level::admin);
+    };
+    const auto run =
+        [environment](
+            command::context &context,
+            std::vector<std::string_view> tokens) -> refrain::result<int> {
+        permissions_actor actor{};
+        const auto &identity{context.source().identity()};
+        if (identity.player) {
+            actor.kind = permissions_actor_kind::player;
+            if (const auto uuid{environment->uuid_for(identity.key)};
+                uuid.has_value()) {
+                actor.uuid = *uuid;
+            }
+        }
+        actor.name = std::string{context.source().name()};
+        const auto report{execute_permissions_command(environment->permissions,
+                                                      tokens, actor)};
+        for (const auto &line : report.lines) {
+            context.reply(line);
+        }
+        if (!report.ok) {
+            // `fail` already delivers the message through the source sink; the
+            // returned value only marks the execution as failed, so the bridge
+            // does not send the reason a second time.
+            context.fail(report.error);
+        }
+        return 1;
+    };
+    const auto leaf = [&run](command::node_ref node,
+                             std::string_view subcommand) -> command::node_ref {
+        return node.executes(
+            [run,
+             subcommand](command::context &context) -> refrain::result<int> {
+                return run(context, {subcommand});
+            });
+    };
+    auto permissions{gate(dispatcher.literal("permissions"))};
+    permissions.executes(
+        [run](command::context &context) -> refrain::result<int> {
+            return run(context, {});
+        });
+    for (const auto subcommand : {"check", "grant", "revoke"}) {
+        auto node{gate(dispatcher.literal(subcommand))};
+        auto subject{dispatcher.argument("subject", subject_argument{})};
+        auto target{dispatcher.argument("node", command::word_arg())};
+        target.executes([run, subcommand](
+                            command::context &context) -> refrain::result<int> {
+            return run(context, {subcommand, context.string("subject"),
+                                 context.string("node")});
+        });
+        subject.then(target);
+        node.then(subject);
+        permissions.then(node);
+    }
+    permissions.then(leaf(gate(dispatcher.literal("groups")), "groups"));
+    permissions.then(leaf(gate(dispatcher.literal("reload")), "reload"));
+}
+
 } // namespace
+
+void register_permissions_commands(
+    std::shared_ptr<command_environment> environment) {
+    if (!environment) {
+        return;
+    }
+    register_permissions_commands_impl(environment);
+}
 
 void register_runtime_commands(
     std::shared_ptr<command_environment> environment) {
@@ -801,6 +995,7 @@ void register_runtime_commands(
 
     register_world_commands(environment);
     register_mod_commands(environment);
+    register_permissions_commands_impl(environment);
 }
 
 auto make_command_bridge(std::shared_ptr<command_environment> environment)

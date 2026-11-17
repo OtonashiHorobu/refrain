@@ -426,6 +426,15 @@ auto node_set::match(std::string_view node) const noexcept -> rule_match {
     return result;
 }
 
+auto node_set::remove(const node_rule &rule) -> bool {
+    const auto found{std::ranges::find(rules_, rule)};
+    if (found == rules_.end()) {
+        return false;
+    }
+    rules_.erase(found);
+    return true;
+}
+
 auto is_uuid(std::string_view text) noexcept -> bool {
     if (text.size() != 36) {
         return false;
@@ -595,6 +604,90 @@ auto parse_policy(const core::config::document &document) -> result<policy> {
     return policy_value;
 }
 
+namespace {
+
+/// The rule sets of one subject, in the order `evaluate()` applies them: the
+/// identity the query names first, then the profile-name fallback.
+struct subject_rule_set_pair {
+    const subject_rules *primary{nullptr};
+    const subject_rules *secondary{nullptr};
+};
+
+[[nodiscard]] auto subject_rule_sets(const policy &policy_value,
+                                     const subject_view &subject)
+    -> subject_rule_set_pair {
+    // A player can be configured by uuid and, as a fallback, by profile name.
+    // Both rule sets apply when both exist, so a name-based grant cannot
+    // override a uuid-based deny.
+    const auto primary_key{make_subject_key(subject.kind, subject.id)};
+    subject_rule_set_pair pair{};
+    pair.primary = find_subject_rules(policy_value, primary_key);
+    if (subject.kind == subject_kind::player && !subject.profile_name.empty()) {
+        const auto name_key{
+            make_subject_key(subject.kind, subject.profile_name)};
+        if (!name_key.empty() && name_key != primary_key) {
+            pair.secondary = find_subject_rules(policy_value, name_key);
+        }
+    }
+    return pair;
+}
+
+/// One rule of one set that matched the query node.
+struct set_match {
+    rule_match match{rule_match::none};
+    const node_rule *rule{nullptr};
+};
+
+/// Match one concrete node against one rule set: a deny anywhere in the set
+/// wins over the set's grants, so the first matching deny is reported and a
+/// matching grant is only remembered until the set is exhausted.
+[[nodiscard]] auto match_set(const node_set &set, std::string_view node)
+    -> set_match {
+    set_match outcome{};
+    for (const auto &rule : set.rules()) {
+        if (!node_matches_rule(rule.node, node)) {
+            continue;
+        }
+        if (rule.deny) {
+            return set_match{.match = rule_match::deny, .rule = &rule};
+        }
+        if (outcome.rule == nullptr) {
+            outcome = set_match{.match = rule_match::grant, .rule = &rule};
+        }
+    }
+    return outcome;
+}
+
+/// One rule set of a query in the order an explanation scans it.
+struct scan_entry {
+    const node_set *set{nullptr};
+    decision_source grant{decision_source::subject_grant};
+    decision_source deny{decision_source::subject_deny};
+    std::string group{};
+};
+
+void append_subject_sets(const policy &policy_value, const subject_rules *rules,
+                         std::vector<scan_entry> &entries) {
+    if (rules == nullptr) {
+        return;
+    }
+    for (const auto &group : rules->groups) {
+        const auto found{policy_value.groups.find(group)};
+        if (found == policy_value.groups.end()) {
+            continue;
+        }
+        entries.push_back(scan_entry{.set = &found->second,
+                                     .grant = decision_source::group_grant,
+                                     .deny = decision_source::group_deny,
+                                     .group = group});
+    }
+    entries.push_back(scan_entry{.set = &rules->nodes,
+                                 .grant = decision_source::subject_grant,
+                                 .deny = decision_source::subject_deny});
+}
+
+} // namespace
+
 auto evaluate(const policy &policy_value, const subject_view &subject,
               std::string_view node, std::uint32_t op_level)
     -> permission_result {
@@ -605,26 +698,14 @@ auto evaluate(const policy &policy_value, const subject_view &subject,
         return permission_result::allowed;
     }
 
-    // A player can be configured by uuid and, as a fallback, by profile name.
-    // Both rule sets apply when both exist, so a name-based grant cannot
-    // override a uuid-based deny.
-    const auto primary_key{make_subject_key(subject.kind, subject.id)};
-    const auto *primary{find_subject_rules(policy_value, primary_key)};
-    const subject_rules *secondary{nullptr};
-    if (subject.kind == subject_kind::player && !subject.profile_name.empty()) {
-        const auto name_key{
-            make_subject_key(subject.kind, subject.profile_name)};
-        if (!name_key.empty() && name_key != primary_key) {
-            secondary = find_subject_rules(policy_value, name_key);
-        }
-    }
-
-    auto matched{match_subject(policy_value, subject, primary, node, op_level)};
+    const auto rule_sets{subject_rule_sets(policy_value, subject)};
+    auto matched{match_subject(policy_value, subject, rule_sets.primary, node,
+                               op_level)};
     if (matched == rule_match::deny) {
         return permission_result::denied;
     }
-    const auto secondary_match{
-        match_subject(policy_value, subject, secondary, node, op_level)};
+    const auto secondary_match{match_subject(
+        policy_value, subject, rule_sets.secondary, node, op_level)};
     if (secondary_match == rule_match::deny) {
         return permission_result::denied;
     }
@@ -636,6 +717,99 @@ auto evaluate(const policy &policy_value, const subject_view &subject,
         return permission_result::allowed;
     }
     return permission_result::denied;
+}
+
+auto rule_text(const node_rule &rule) -> std::string {
+    return rule.deny ? fmt::format("!{}", rule.node) : rule.node;
+}
+
+auto explain(const policy &policy_value, const subject_view &subject,
+             std::string_view node, std::uint32_t op_level)
+    -> decision_explanation {
+    decision_explanation explanation{};
+    explanation.result = evaluate(policy_value, subject, node, op_level);
+    if (!valid_node(node)) {
+        explanation.source = decision_source::invalid_node;
+        return explanation;
+    }
+    if (subject.kind == subject_kind::console) {
+        explanation.source = decision_source::console;
+        return explanation;
+    }
+
+    // Scan the sets in the order the evaluator applies them. The scan only
+    // names the deciding rule; `evaluate()` above is what answers the query.
+    const auto rule_sets{subject_rule_sets(policy_value, subject)};
+    std::vector<scan_entry> entries{};
+    append_subject_sets(policy_value, rule_sets.primary, entries);
+    const auto apply_global_sets = [&entries, &policy_value, op_level,
+                                    &subject] {
+        if (is_operator_subject(policy_value, subject, op_level)) {
+            entries.push_back(scan_entry{.set = &policy_value.op_nodes,
+                                         .grant = decision_source::op_grant,
+                                         .deny = decision_source::op_deny});
+        }
+        entries.push_back(scan_entry{.set = &policy_value.default_nodes,
+                                     .grant = decision_source::default_grant,
+                                     .deny = decision_source::default_deny});
+    };
+    apply_global_sets();
+    append_subject_sets(policy_value, rule_sets.secondary, entries);
+
+    if (explanation.result == permission_result::denied) {
+        for (const auto &entry : entries) {
+            const auto matched{match_set(*entry.set, node)};
+            if (matched.match != rule_match::deny) {
+                continue;
+            }
+            explanation.source = entry.deny;
+            explanation.rule = rule_text(*matched.rule);
+            explanation.group = entry.group;
+            return explanation;
+        }
+        explanation.source = decision_source::fallback_deny;
+        return explanation;
+    }
+
+    for (const auto &entry : entries) {
+        const auto matched{match_set(*entry.set, node)};
+        if (matched.match == rule_match::none) {
+            continue;
+        }
+        explanation.source =
+            matched.match == rule_match::deny ? entry.deny : entry.grant;
+        explanation.rule = rule_text(*matched.rule);
+        explanation.group = entry.group;
+        return explanation;
+    }
+    explanation.source = decision_source::fallback_grant;
+    return explanation;
+}
+
+auto list_groups(const policy &policy_value) -> std::vector<group_listing> {
+    std::vector<group_listing> groups{};
+    groups.reserve(policy_value.groups.size());
+    for (const auto &[name, set] : policy_value.groups) {
+        group_listing listing{};
+        listing.name = name;
+        listing.nodes.reserve(set.rules().size());
+        for (const auto &rule : set.rules()) {
+            listing.nodes.push_back(rule_text(rule));
+        }
+        groups.push_back(std::move(listing));
+    }
+    for (const auto &[subject_key, rules] : policy_value.subjects) {
+        for (const auto &group : rules.groups) {
+            const auto found{std::ranges::find_if(
+                groups, [&group](const group_listing &listing) {
+                    return listing.name == group;
+                })};
+            if (found != groups.end()) {
+                found->members.push_back(subject_key);
+            }
+        }
+    }
+    return groups;
 }
 
 } // namespace refrain::permissions

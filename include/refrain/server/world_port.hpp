@@ -32,6 +32,10 @@ namespace refrain::kernel {
 class service_registry;
 } // namespace refrain::kernel
 
+namespace refrain::permissions {
+class admin;
+} // namespace refrain::permissions
+
 namespace refrain::server {
 
 /// Datapack inputs of the spawn-area fill. Kept beside the port because the
@@ -102,6 +106,11 @@ struct server_service_handles {
     const refrain_services_permissions_vtable *permissions{nullptr};
     void *permissions_self{nullptr};
     std::string permissions_provider{};
+    /// Management surface of the active base resolver, when it is the built-in
+    /// provider. The runtime hands it to the command layer so `/permissions`
+    /// can change and persist the policy; null when the composition has no
+    /// built-in permission provider.
+    refrain::permissions::admin *permissions_admin{nullptr};
     /// Committed registry generation of the permission table at boot.
     std::uint64_t permissions_generation{0};
 };

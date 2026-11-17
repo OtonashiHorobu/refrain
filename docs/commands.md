@@ -178,6 +178,14 @@ a registration decision; the reference's permission levels are available as
 `command::level`. The complete node table of the built-in tree is in
 [Running a server](running.md#in-game-commands).
 
+The built-in command tree also consumes the policy for administration:
+`/permissions` declares `refrain.permissions.admin` on every node and its
+executors call the host-side management surface of the base resolver. A grant or
+revoke changes the policy, persists it and advances the revision, so the tree
+snapshot, the completion list and the execution check of every player refresh on
+their next tick. The audit record of each change is described in
+[Running a server](running.md#permission-administration).
+
 ## World and player command batch
 
 The first vanilla command batch registers on the runtime tree and follows the
@@ -301,6 +309,7 @@ commands are delivered in the batches named in the notes.
 | `/pardon-ip` | planned | batch 5: remaining administration |
 | `/particle` | planned | batch 2: blocks and entities |
 | `/perf` | planned | batch 5: remaining administration |
+| `/permissions` | implemented | Server command outside the reference root set: `check`, `grant`, `revoke`, `groups` and `reload` administer the built-in permission policy under the `refrain.permissions.admin` node; the console frontend uses `permissions ...`. See [Running a server](running.md#permission-administration). |
 | `/place` | planned | batch 2: blocks and entities |
 | `/playsound` | planned | batch 2: blocks and entities |
 | `/posteffect` | planned | batch 1: player and world basics |
@@ -351,7 +360,9 @@ commands are delivered in the batches named in the notes.
 | `/whitelist` | planned | batch 5: remaining administration |
 | `/worldborder` | planned | batch 4: execute and functions |
 
-Two server commands are not part of the reference's root set: `/mods` manages
-the installed mod packages (gated by the `refrain.mods.admin` permission node)
-and `/hardcore` toggles the hardcore flag of the open world.
+Three server commands are not part of the reference's root set: `/mods`
+manages the installed mod packages (gated by the `refrain.mods.admin` permission
+node), `/permissions` administers the built-in permission policy (gated by
+`refrain.permissions.admin`) and `/hardcore` toggles the hardcore flag of the
+open world.
 

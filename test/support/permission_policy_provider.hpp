@@ -7,15 +7,20 @@
 // so a test exercises the same path the composition root binds: contract query
 // -> command filter -> tree, completion and execution. `reload()` publishes a
 // new policy file text and bumps the revision, which is what a policy change
-// does in a running server.
+// does in a running server. The provider also implements the host-side
+// `permissions::admin` interface in memory, so the command tests exercise
+// grant, revoke, groups and reload without a configuration file.
 
 #pragma once
 
 #include <refrain/contracts/abi.hpp>
 #include <refrain/contracts/services/permissions_abi.h>
 #include <refrain/core/config.hpp>
+#include <refrain/core/error.hpp>
+#include <refrain/permissions/admin.hpp>
 #include <refrain/permissions/policy.hpp>
 
+#include <algorithm>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -60,6 +65,29 @@ class permission_policy_provider {
         return true;
     }
 
+    /// Management surface over the same policy value, for the `/permissions`
+    /// command tests. A change bumps the revision like a persisted change.
+    [[nodiscard]] auto admin() noexcept -> refrain::permissions::admin * {
+        return &admin_;
+    }
+
+    /// Replace the policy the next `admin()->reload()` publishes. Returns false
+    /// when the text does not parse.
+    [[nodiscard]] auto stage_reload(std::string_view config_text) -> bool {
+        auto document{refrain::core::config::document::parse_text(
+            config_text, "permissions.toml")};
+        if (!document) {
+            return false;
+        }
+        auto parsed{refrain::permissions::parse_policy(*document)};
+        if (!parsed) {
+            return false;
+        }
+        impl_->staged = std::move(*parsed);
+        impl_->staged_valid = true;
+        return true;
+    }
+
     /// Queries answered since construction or the last `clear_queries()`.
     [[nodiscard]] auto queries() const
         -> const std::vector<recorded_permission_query> & {
@@ -95,6 +123,119 @@ class permission_policy_provider {
         refrain::permissions::policy policy{};
         std::uint64_t revision{1};
         std::vector<recorded_permission_query> queries{};
+        refrain::permissions::policy staged{};
+        bool staged_valid{false};
+    };
+
+    /// In-memory management surface: the same policy value the ABI queries
+    /// read, with a revision bump per change. `reload()` publishes the policy
+    /// staged through `stage_reload()`.
+    class admin_impl final : public refrain::permissions::admin {
+      public:
+        explicit admin_impl(state &impl) : impl_{impl} {}
+
+        [[nodiscard]] auto
+        explain(const refrain::permissions::subject_view &subject,
+                std::string_view node, std::uint32_t op_level) const
+            -> refrain::permissions::decision_explanation override {
+            return refrain::permissions::explain(impl_.policy, subject, node,
+                                                 op_level);
+        }
+
+        [[nodiscard]] auto snapshot() const
+            -> refrain::permissions::policy_snapshot override {
+            return refrain::permissions::policy_snapshot{
+                .value = impl_.policy,
+                .revision = impl_.revision,
+                .persistent = true,
+            };
+        }
+
+        [[nodiscard]] auto grant(std::string_view subject,
+                                 std::string_view rule)
+            -> refrain::result<refrain::permissions::policy_change> override {
+            return change(subject, rule, true);
+        }
+
+        [[nodiscard]] auto revoke(std::string_view subject,
+                                  std::string_view rule)
+            -> refrain::result<refrain::permissions::policy_change> override {
+            return change(subject, rule, false);
+        }
+
+        [[nodiscard]] auto groups() const
+            -> std::vector<refrain::permissions::group_listing> override {
+            return refrain::permissions::list_groups(impl_.policy);
+        }
+
+        [[nodiscard]] auto reload()
+            -> refrain::result<refrain::permissions::reload_outcome> override {
+            const auto previous{impl_.revision};
+            if (!impl_.staged_valid) {
+                return refrain::permissions::reload_outcome{
+                    .changed = false,
+                    .previous_revision = previous,
+                    .revision = previous,
+                };
+            }
+            impl_.policy = std::move(impl_.staged);
+            impl_.staged = {};
+            impl_.staged_valid = false;
+            ++impl_.revision;
+            return refrain::permissions::reload_outcome{
+                .changed = true,
+                .previous_revision = previous,
+                .revision = impl_.revision,
+            };
+        }
+
+        [[nodiscard]] auto revision() const -> std::uint64_t override {
+            return impl_.revision;
+        }
+
+        [[nodiscard]] auto persistent() const -> bool override { return true; }
+
+      private:
+        [[nodiscard]] auto change(std::string_view subject,
+                                  std::string_view rule, bool add)
+            -> refrain::result<refrain::permissions::policy_change> {
+            auto parsed{
+                refrain::permissions::parse_rule(rule, "permission rule")};
+            if (!parsed) {
+                return std::unexpected{std::move(parsed.error())};
+            }
+            if (!refrain::permissions::valid_subject_key(subject)) {
+                return std::unexpected{
+                    refrain::make_error(refrain::error_code::invalid_argument,
+                                        "not a configurable subject")};
+            }
+            auto &rules{impl_.policy.subjects[std::string{subject}]};
+            const auto present{
+                std::ranges::find(rules.nodes.rules(), *parsed) !=
+                rules.nodes.rules().end()};
+            if (present == add) {
+                return refrain::permissions::policy_change{
+                    .changed = false,
+                    .revision = impl_.revision,
+                    .subject = std::string{subject},
+                    .rule = refrain::permissions::rule_text(*parsed),
+                };
+            }
+            if (add) {
+                rules.nodes.add(*parsed);
+            } else {
+                static_cast<void>(rules.nodes.remove(*parsed));
+            }
+            ++impl_.revision;
+            return refrain::permissions::policy_change{
+                .changed = true,
+                .revision = impl_.revision,
+                .subject = std::string{subject},
+                .rule = refrain::permissions::rule_text(*parsed),
+            };
+        }
+
+        state &impl_;
     };
 
     [[nodiscard]] static auto
@@ -160,6 +301,7 @@ class permission_policy_provider {
     }
 
     std::unique_ptr<state> impl_{std::make_unique<state>()};
+    admin_impl admin_{*impl_};
 };
 
 } // namespace refrain::test_support

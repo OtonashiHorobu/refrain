@@ -369,11 +369,60 @@ gamepack that does not select `refrain.permissions`) keeps the vanilla
 op-level semantics: every command node declares a fallback level next to its
 node, and a player at or above that level may use the command.
 
-The service publishes a monotonic revision for caches and re-reads the file
-when the permission commands ask it to; until those land, an edit takes effect
-on the next start. A policy change advances the revision, which invalidates the
-command-tree cache and makes the server resend the tree to every player in
-play.
+The service publishes a monotonic revision for caches. The administration
+commands below re-read the file or change one rule at runtime, and every policy
+change advances the revision, which invalidates the command-tree cache and makes
+the server resend the tree to every player in play without a restart.
+
+### Permission administration
+
+The console line `permissions ...` and the in-game `/permissions` tree share one
+implementation, so both frontends print the same lines, report the same errors
+and write the same audit records. Every in-game node requires the
+`refrain.permissions.admin` permission and falls back to the admin level in a
+composition without the service; the console holds every node and can always run
+the commands.
+
+| Command | Effect |
+|---|---|
+| `permissions check <subject> <node>` | Answer allowed, denied or not-handled for one subject and node, name the deciding rule set (console, grant, deny, group, operator, public default or fallback) and print the player's world and game mode context |
+| `permissions grant <subject> <node>` | Add one rule to the subject's `[grants]` entry, write the configuration file and report the new revision |
+| `permissions revoke <subject> <node>` | Remove one rule from the subject's `[grants]` entry, write the configuration file and report the new revision |
+| `permissions groups` | List every `[groups]` entry with its rules and the subjects that joined it |
+| `permissions reload` | Re-read `config/permissions.toml` and report the old and new revision |
+
+A `<subject>` is `console`, an online player name (resolved to the player's
+canonical uuid), or one configured subject key: `player:<uuid>`,
+`player:<profile name>`, `entity:<uuid>` or `plugin:<mod id>`. An unknown bare
+name is an error; use a `player:<uuid>` key to grant a player who is not online.
+A `<node>` is a rule: a concrete node, a namespace wildcard such as
+`refrain.command.*`, a bare `*`, or one of those prefixed with `!` for an
+explicit deny. Granting a rule that is already present and revoking one that is
+absent report the unchanged revision and write nothing.
+
+A change edits the loaded configuration file and replaces it atomically before
+it becomes visible to queries. Comments, table order and every unrelated entry
+stay byte-for-byte intact; a document that expresses its grants as root-level
+dotted keys is refused rather than rewritten, and the running policy then stays
+unchanged. A provider built without a mounted `permissions` namespace serves the
+built-in policy and refuses changes with `unsupported`, so the in-memory policy
+and the durable file can never diverge. A failed write also leaves the running
+policy and the revision untouched.
+
+The configuration store mounted the namespace at startup and keeps its own
+in-memory copy. The administration commands read and write the file directly, so
+do not edit the same file through `config <ns> set` / `config save` while using
+them; `permissions reload` re-reads whatever is on disk, and `config reload
+permissions` refreshes the store copy after an administration change.
+
+Every changing command appends one audit record through the
+`permissions-audit` logger: the actor (console or player name and uuid), the
+action, the subject, the node, the result and the resulting revision. Read-only
+`check` and `groups` are not audited. The record never contains a filesystem
+path. Write access to `config/permissions.toml` is therefore equivalent to
+permission administration: keep it operator-owned, and remember that a `!`
+deny for `refrain.permissions.admin` removes a player's access to this command
+tree even if the command itself was granted earlier.
 
 A CLI flag that names the same setting is an explicit override and wins over
 both the TOML file and imported properties.
@@ -418,6 +467,7 @@ The server announces a small command tree after joining:
 | `/msg <player> <message>` | whisper to one player (also `/tell` and `/w`) |
 | `/save-all [flush]` | flush dirty chunks and the clock state to the store |
 | `/mods <command>` | list, verify, install, uninstall, reload, reload content data or manage the trust state of mods (requires `refrain.mods.admin`; see [Mod management](#mod-management)) |
+| `/permissions <command>` | check, grant, revoke, list groups or reload the permission policy (requires `refrain.permissions.admin`; see [Permission administration](#permission-administration)) |
 
 Every in-game command declares a stable permission node. The policy decides who
 holds it; the fallback level is what a composition without the permission
@@ -444,6 +494,7 @@ nodes and may run every console command.
 | `/msg <player> <message>`, `/tell`, `/w` | `refrain.command.msg` | everyone |
 | `/save-all [flush]` | `refrain.command.save-all` | owner |
 | `/mods <command>` | `refrain.mods.admin` | admin |
+| `/permissions <command>` | `refrain.permissions.admin` | admin |
 
 The tree snapshot and the completion list omit a node the player's subject may
 not use, and the same check rejects the command at execution, so the three
@@ -486,6 +537,7 @@ The console reads the same commands without a permission check; its table:
 | `time pause` / `time resume` | stop or resume the daylight clock |
 | `weather clear\|rain\|thunder [duration]` | switch the weather for a number of ticks |
 | `mods <command>` | list, verify, install, uninstall, reload, reload content data or manage the trust state of mods (see [Mod management](#mod-management)) |
+| `permissions <command>` | check, grant, revoke, list groups or reload the permission policy (see [Permission administration](#permission-administration)) |
 | `palette-gc` | rebuild the world palette while the world is quiesced |
 | `schedules` | list periodic maintenance tasks and their counters |
 | `help` | list commands |

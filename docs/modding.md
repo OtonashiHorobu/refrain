@@ -422,7 +422,13 @@ node also declares a vanilla ladder fallback, which decides when no provider is
 active; the complete node table is in
 [Running a server](running.md#in-game-commands). A command denied by the policy
 is absent from the tree and from completion, and the execution answers with the
-missing node text.
+missing node text. Management commands use a feature namespace instead of the
+command namespace: the permission administration commands require
+`refrain.permissions.admin`, and the built-in permission service administers its
+own policy through a host-side API that the contract does not expose. A chain
+wrapper can answer queries and add nodes in front of the base resolver, but it
+cannot change the base policy; a composition without the built-in mod has no
+`/permissions` management surface and refuses changes as unsupported.
 
 A mod declares its nodes by using them: there is no registration call, only the
 namespace convention above. To query from mod code, look the provider up

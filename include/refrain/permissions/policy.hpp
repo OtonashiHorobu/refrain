@@ -98,6 +98,9 @@ class node_set {
 
     void add(node_rule rule) { rules_.push_back(std::move(rule)); }
 
+    /// Remove one identical rule; true when it was present.
+    auto remove(const node_rule &rule) -> bool;
+
     /// Match one concrete node. Any matching deny reports `deny`; otherwise a
     /// matching grant reports `grant`; no match reports `none`.
     [[nodiscard]] auto match(std::string_view node) const noexcept
@@ -179,5 +182,68 @@ struct subject_view {
 [[nodiscard]] auto evaluate(const policy &policy, const subject_view &subject,
                             std::string_view node, std::uint32_t op_level)
     -> services::permissions::permission_result;
+
+/// Rule text of one configured rule, with the `!` prefix of a deny.
+[[nodiscard]] auto rule_text(const node_rule &rule) -> std::string;
+
+/// Which part of a policy decided an answer. It is diagnostic only: the
+/// command frontend names the source to the operator, and `evaluate()` does not
+/// track it on the query path.
+enum class decision_source : std::uint8_t {
+    /// The console subject holds every node before any rule is read.
+    console = 0,
+    /// An explicit grant in the subject's own node set.
+    subject_grant,
+    /// An explicit deny in the subject's own node set.
+    subject_deny,
+    /// A grant in a group the subject joined.
+    group_grant,
+    /// A deny in a group the subject joined.
+    group_deny,
+    /// A grant in `[op].nodes` for an operator subject.
+    op_grant,
+    /// A deny in `[op].nodes` for an operator subject.
+    op_deny,
+    /// A grant in `[defaults].nodes`.
+    default_grant,
+    /// A deny in `[defaults].nodes`.
+    default_deny,
+    /// `[defaults].default = "op"` allowed an operator.
+    fallback_grant,
+    /// `[defaults].default` denied a node no rule matched.
+    fallback_deny,
+    /// The query named a node the grammar rejects; the resolver fails closed.
+    invalid_node,
+};
+
+/// One query answer plus the rule that decided it. `rule` is empty when the
+/// decision came from the console rule or from the configured fallback, and
+/// `group` is set only for a decision taken through a group.
+struct decision_explanation {
+    services::permissions::permission_result result{
+        services::permissions::permission_result::denied};
+    decision_source source{decision_source::fallback_deny};
+    std::string rule{};
+    std::string group{};
+};
+
+/// Explain one query against a policy: the same answer `evaluate()` returns,
+/// together with the rule and the rule set that produced it.
+[[nodiscard]] auto explain(const policy &policy, const subject_view &subject,
+                           std::string_view node, std::uint32_t op_level)
+    -> decision_explanation;
+
+/// One group of the configured policy. `nodes` are the group's rule texts in
+/// configuration order; `members` are the configured subject keys that join the
+/// group, sorted.
+struct group_listing {
+    std::string name{};
+    std::vector<std::string> nodes{};
+    std::vector<std::string> members{};
+};
+
+/// Every `[groups]` entry of a policy, sorted by name.
+[[nodiscard]] auto list_groups(const policy &policy)
+    -> std::vector<group_listing>;
 
 } // namespace refrain::permissions

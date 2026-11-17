@@ -747,9 +747,13 @@ add_library(Refrain::App ALIAS refrain-app)
 file(GLOB REFRAIN_SERVER_RUNTIME_SOURCES CONFIGURE_DEPENDS
      "${PROJECT_SOURCE_DIR}/src/server/*.cpp")
 refrain_add_library(refrain-server-runtime ${REFRAIN_SERVER_RUNTIME_SOURCES})
+# The command layer administers the built-in permission resolver through the
+# host-side `permissions::admin` interface and its policy helpers; the runtime
+# still receives the provider itself from the composition root.
 target_link_libraries(refrain-server-runtime PUBLIC refrain-app refrain-net
                                        refrain-session refrain-worldgen
-                                               refrain-command)
+                                               refrain-command
+                                       PRIVATE refrain-permissions)
 add_library(Refrain::ServerRuntime ALIAS refrain-server-runtime)
 
 # --- tools -----------------------------------------------------------------
