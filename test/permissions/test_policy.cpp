@@ -10,6 +10,8 @@
 #include <refrain/core/config.hpp>
 #include <refrain/core/error.hpp>
 
+#include <fmt/format.h>
+
 #include <boost/ut.hpp>
 
 #include <string>
@@ -415,6 +417,99 @@ min_level = "one"
 default = 1
 )")
                    .find("string") != std::string::npos);
+    };
+
+    "policy/default nodes give every subject the public command surface"_test =
+        [] {
+            const auto policy{parse_ok(R"(
+[defaults]
+default = "deny"
+nodes = ["refrain.command.help", "refrain.command.list"]
+)")};
+            expect(policy.default_nodes.rules().size() == 2U);
+            expect(answer(policy, "refrain.command.help") ==
+                   permission_result::allowed);
+            expect(answer(policy, subject_kind::player, other_uuid,
+                          "refrain.command.list", 0,
+                          "Alex") == permission_result::allowed);
+            // Everything the default list does not name stays denied.
+            expect(answer(policy, "refrain.command.gamemode") ==
+                   permission_result::denied);
+            expect(answer(policy, subject_kind::plugin, "com.example.mymod",
+                          "refrain.command.help") ==
+                   permission_result::allowed);
+        };
+
+    "policy/a deny in the default nodes beats a subject grant"_test = [] {
+        const auto policy{parse_ok(R"(
+[defaults]
+nodes = ["!refrain.command.stop"]
+[grants]
+"player:069a79f4-44e9-4726-a5be-fca90e38aaf5" = ["refrain.command.*"]
+)")};
+        expect(answer(policy, "refrain.command.teleport") ==
+               permission_result::allowed);
+        expect(answer(policy, "refrain.command.stop") ==
+               permission_result::denied);
+    };
+
+    "policy/an operator from the ops list holds the op nodes at level zero"_test =
+        [] {
+            const auto policy{parse_ok(R"(
+[defaults]
+default = "deny"
+[op]
+min_level = 1
+nodes = ["refrain.mods.admin"]
+[ops]
+players = ["069a79f4-44e9-4726-a5be-fca90e38aaf5", "Alex"]
+)")};
+            expect(policy.operators.size() == 2U);
+            // The uuid entry counts even though the query op level is zero.
+            expect(answer(policy, "refrain.mods.admin", 0) ==
+                   permission_result::allowed);
+            expect(answer(policy, subject_kind::player, other_uuid,
+                          "refrain.mods.admin", 0,
+                          "Alex") == permission_result::allowed);
+            expect(answer(policy, subject_kind::player, other_uuid,
+                          "refrain.mods.admin") == permission_result::denied);
+            // The op node set only grants what it lists.
+            expect(answer(policy, "refrain.command.gamemode", 0) ==
+                   permission_result::denied);
+        };
+
+    "policy/an ops player still wins the op fallback"_test = [] {
+        const auto policy{parse_ok(R"(
+[defaults]
+default = "op"
+[ops]
+players = ["Alex"]
+)")};
+        expect(answer(policy, subject_kind::player, other_uuid, "a.b", 0,
+                      "Alex") == permission_result::allowed);
+        expect(answer(policy, "a.b", 0) == permission_result::denied);
+    };
+
+    "policy/an ops entry that is not a player identity is rejected"_test = [] {
+        for (const auto *entry : {"\"not a name\"", "\"player:Alex\"",
+                                  "\"069A79F4-44E9-4726-A5BE-FCA90E38AAF5\""}) {
+            const auto message{parse_error(fmt::format(R"(
+[ops]
+players = [{}]
+)",
+                                                       entry))};
+            expect(message.find("ops.players") != std::string::npos) << message;
+        }
+        expect(parse_error(R"(
+[ops]
+unknown = []
+)")
+                   .find("unknown") != std::string::npos);
+        expect(parse_error(R"(
+[ops]
+players = "Alex"
+)")
+                   .find("array") != std::string::npos);
     };
 
     "policy/key checks are order independent"_test = [] {

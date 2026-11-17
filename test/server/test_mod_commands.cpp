@@ -3,10 +3,12 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 
 // Console and in-game mod management frontends: the console `mods ...`
-// dispatch, the `/mods` command tree registration, the operator permission,
-// the explicit denial for a non-operator and the audit actor identity.
+// dispatch, the `/mods` command tree registration, the `refrain.mods.admin`
+// permission gate, the explicit denial for a player without it, and the audit
+// actor identity.
 
 #include <refrain/app/mod_management.hpp>
+#include <refrain/permissions/policy.hpp>
 #include <refrain/server/command_bridge.hpp>
 #include <refrain/server/console_commands.hpp>
 
@@ -14,6 +16,8 @@
 #include <refrain/core/time.hpp>
 #include <refrain/sim/world.hpp>
 #include <refrain/world/store.hpp>
+
+#include <support/permission_policy_provider.hpp>
 
 #include <boost/ut.hpp>
 
@@ -113,8 +117,10 @@ struct management_fixture {
 class recording_player final : public command::source {
   public:
     recording_player(std::string name, std::uint64_t key,
-                     std::vector<std::string> &replies)
-        : name_{std::move(name)}, key_{key}, replies_{replies} {}
+                     std::vector<std::string> &replies,
+                     command::permission_level ladder = command::level::admin)
+        : name_{std::move(name)}, key_{key}, replies_{replies},
+          ladder_{ladder} {}
 
     [[nodiscard]] auto identity() const noexcept
         -> command::source_identity override {
@@ -123,7 +129,7 @@ class recording_player final : public command::source {
 
     [[nodiscard]] auto permission() const noexcept
         -> command::permission_level override {
-        return command::level::admin;
+        return ladder_;
     }
 
     void reply(std::string_view message) override {
@@ -134,6 +140,7 @@ class recording_player final : public command::source {
     std::string name_;
     std::uint64_t key_;
     std::vector<std::string> &replies_;
+    command::permission_level ladder_;
 };
 
 template <typename TTree>
@@ -298,25 +305,85 @@ const suite mod_console_tests = [] {
         };
 };
 
+namespace {
+
+constexpr std::string_view operator_uuid_text{
+    "11111111-1111-1111-1111-111111111111"};
+constexpr std::string_view guest_uuid_text{
+    "22222222-2222-2222-2222-222222222222"};
+
+/// Policy with the public command surface, one operator from `[ops].players`
+/// and every node for an operator.
+[[nodiscard]] auto operator_policy_text() -> std::string {
+    return "[defaults]\n"
+           "default = \"deny\"\n"
+           "nodes = [\"refrain.command.help\", \"refrain.command.list\"]\n"
+           "\n[op]\n"
+           "min_level = 1\n"
+           "nodes = [\"*\"]\n"
+           "\n[ops]\n"
+           "players = [\"" +
+           std::string{operator_uuid_text} + "\"]\n";
+}
+
+/// Policy that grants one player the mod administration node directly, with
+/// no operator list involved.
+[[nodiscard]] auto granted_policy_text() -> std::string {
+    return "[defaults]\n"
+           "default = \"deny\"\n"
+           "nodes = [\"refrain.command.help\", \"refrain.command.list\"]\n"
+           "\n[grants]\n\"player:" +
+           std::string{operator_uuid_text} + "\" = [\"refrain.mods.admin\"]\n";
+}
+
+/// Policy with only the public command surface: no operator and no grant.
+[[nodiscard]] auto public_policy_text() -> std::string {
+    return "[defaults]\n"
+           "default = \"deny\"\n"
+           "nodes = [\"refrain.command.help\", \"refrain.command.list\"]\n";
+}
+
+/// Bind one policy provider to the environment and return the provider so the
+/// test can publish a new policy later.
+[[nodiscard]] auto
+bind_policy(const std::shared_ptr<server::command_environment> &environment,
+            refrain::test_support::permission_policy_provider &provider)
+    -> bool {
+    if (!provider.reload(operator_policy_text())) {
+        return false;
+    }
+    server::bind_permissions(environment, provider.vtable(), provider.self());
+    return true;
+}
+
+[[nodiscard]] auto identity_of(std::string_view uuid_text,
+                               std::string_view name, std::uint64_t connection)
+    -> net::player_identity {
+    // The identity borrows both strings; the literals at every call site
+    // outlive the test.
+    return net::player_identity{
+        .connection = connection,
+        .id = sample_uuid(uuid_text),
+        .name = name,
+        .world = "minecraft:overworld",
+    };
+}
+
+} // namespace
+
 const suite mod_command_tree_tests = [] {
     "mod command tree/registers /mods and its subcommands for an operator"_test =
         [] {
             management_fixture fixture{};
             auto service{fixture.service()};
-            const auto operator_uuid{
-                sample_uuid("11111111-1111-1111-1111-111111111111")};
-            const auto operator_key{server::player_identity_key(operator_uuid)};
             auto environment{std::make_shared<server::command_environment>()};
             environment->mods = &service;
-            environment->mod_admin =
-                [operator_key](const command::source &source) {
-                    return !source.identity().player ||
-                           source.identity().key == operator_key;
-                };
             server::register_runtime_commands(environment);
 
             std::vector<std::string> replies{};
-            recording_player op{"Alice", operator_key, replies};
+            // No permission provider: the declared op-level fallback of the
+            // tree is what an operator at the admin level passes.
+            recording_player op{"Alice", 7U, replies};
             auto tree{environment->dispatcher.tree(op)};
             expect(tree != nullptr);
             if (!tree) {
@@ -335,45 +402,48 @@ const suite mod_command_tree_tests = [] {
             expect(has_element(tree_child_names(*tree, "reload"), "id"));
         };
 
-    "mod command tree/hides /mods from a non-operator"_test = [] {
+    "mod command tree/hides /mods from a player below the fallback level"_test =
+        [] {
+            management_fixture fixture{};
+            auto service{fixture.service()};
+            auto environment{std::make_shared<server::command_environment>()};
+            environment->mods = &service;
+            server::register_runtime_commands(environment);
+
+            std::vector<std::string> replies{};
+            recording_player guest{"Bob", 7U, replies,
+                                   command::level::gamemode};
+            auto tree{environment->dispatcher.tree(guest)};
+            expect(tree != nullptr);
+            if (tree) {
+                expect(!tree_has_literal(*tree, "mods"));
+                // The public command surface is still there.
+                expect(tree_has_literal(*tree, "help"));
+                expect(tree_has_literal(*tree, "list"));
+            }
+        };
+
+    "mod command tree/the declared node is the mod admin permission"_test = [] {
         management_fixture fixture{};
         auto service{fixture.service()};
-        const auto operator_key{server::player_identity_key(
-            sample_uuid("11111111-1111-1111-1111-111111111111"))};
         auto environment{std::make_shared<server::command_environment>()};
         environment->mods = &service;
-        environment->mod_admin = [operator_key](const command::source &source) {
-            return !source.identity().player ||
-                   source.identity().key == operator_key;
-        };
         server::register_runtime_commands(environment);
-
-        std::vector<std::string> replies{};
-        recording_player guest{"Bob", 7U, replies};
-        auto tree{environment->dispatcher.tree(guest)};
-        expect(tree != nullptr);
-        if (tree) {
-            expect(!tree_has_literal(*tree, "mods"));
-        }
+        const auto declared{environment->dispatcher.permission_of("mods")};
+        expect(declared.node == app::mod_admin_permission) << declared.node;
+        expect(declared.fallback == command::level::admin);
     };
 
     "mod command tree/an operator runs /mods list through the shared service"_test =
         [] {
             management_fixture fixture{};
             auto service{fixture.service()};
-            const auto operator_key{server::player_identity_key(
-                sample_uuid("11111111-1111-1111-1111-111111111111"))};
             auto environment{std::make_shared<server::command_environment>()};
             environment->mods = &service;
-            environment->mod_admin =
-                [operator_key](const command::source &source) {
-                    return !source.identity().player ||
-                           source.identity().key == operator_key;
-                };
             server::register_runtime_commands(environment);
 
             std::vector<std::string> replies{};
-            recording_player op{"Alice", operator_key, replies};
+            recording_player op{"Alice", 7U, replies};
             auto executed{environment->dispatcher.execute("mods list", op)};
             expect(static_cast<bool>(executed)) << "dispatch failed";
             if (!executed) {
@@ -388,112 +458,214 @@ const suite mod_command_tree_tests = [] {
             expect(fixture.audit.front().actor_name == "Alice");
         };
 
-    "mod command tree/a non-operator is rejected by the tree"_test = [] {
-        management_fixture fixture{};
-        auto service{fixture.service()};
-        const auto operator_key{server::player_identity_key(
-            sample_uuid("11111111-1111-1111-1111-111111111111"))};
-        auto environment{std::make_shared<server::command_environment>()};
-        environment->mods = &service;
-        environment->mod_admin = [operator_key](const command::source &source) {
-            return !source.identity().player ||
-                   source.identity().key == operator_key;
+    "mod command tree/a player below the fallback level cannot execute"_test =
+        [] {
+            management_fixture fixture{};
+            auto service{fixture.service()};
+            auto environment{std::make_shared<server::command_environment>()};
+            environment->mods = &service;
+            server::register_runtime_commands(environment);
+            std::vector<std::string> replies{};
+            recording_player guest{"Bob", 7U, replies,
+                                   command::level::gamemode};
+            const auto executed{
+                environment->dispatcher.execute("mods list", guest)};
+            expect(!executed);
+            if (!executed) {
+                expect(executed.error().code ==
+                       refrain::error_code::parse_error);
+            }
+            expect(fixture.audit.empty());
         };
-        server::register_runtime_commands(environment);
-        std::vector<std::string> replies{};
-        recording_player guest{"Bob", 7U, replies};
-        const auto executed{
-            environment->dispatcher.execute("mods list", guest)};
-        expect(!executed);
-        if (!executed) {
-            expect(executed.error().code == refrain::error_code::parse_error);
-        }
-    };
 };
 
 const suite mod_game_bridge_tests = [] {
-    "mod game bridge/answers an explicit denial to a non-operator"_test = [] {
+    "mod game bridge/the tree is gated by the permission node, not a list"_test =
+        [] {
+            management_fixture fixture{};
+            auto service{fixture.service()};
+            auto environment{std::make_shared<server::command_environment>()};
+            environment->mods = &service;
+            refrain::test_support::permission_policy_provider provider{};
+            expect(bind_policy(environment, provider));
+            auto bridge{server::make_command_bridge(environment)};
+            provider.clear_queries();
+
+            // An operator from [ops].players holds the node without being in
+            // the old operator allowlist: the command is announced and runs.
+            const auto operator_identity{
+                identity_of(operator_uuid_text, "Alice", 1)};
+            const auto operator_tree{bridge.tree(operator_identity)};
+            expect(operator_tree != nullptr);
+            if (operator_tree != nullptr) {
+                expect(tree_has_literal(*operator_tree, "mods"));
+            }
+            // Completion below the root is offered to the operator.
+            const auto suggestions{
+                bridge.suggest(operator_identity, "mods ", 5)};
+            std::vector<std::string> offered{};
+            offered.reserve(suggestions.entries.size());
+            for (const auto &entry : suggestions.entries) {
+                offered.push_back(entry.text);
+            }
+            expect(!offered.empty());
+            expect(has_element(offered, "list"));
+            // The query carries the player subject and its context: profile
+            // uuid, profile name, world and game mode.
+            bool saw_node{false};
+            for (const auto &query : provider.queries()) {
+                if (query.node != app::mod_admin_permission) {
+                    continue;
+                }
+                saw_node = true;
+                expect(query.kind ==
+                       refrain::services::permissions::subject_kind::player);
+                expect(query.id == std::string{operator_uuid_text});
+                expect(query.profile_name == "Alice");
+                expect(query.world == "minecraft:overworld");
+                expect(query.gamemode == "creative");
+                expect(query.op_level == 0U);
+            }
+            expect(saw_node) << "the tree query did not ask for the node";
+            const auto feedback{bridge.execute(operator_identity, "mods list")};
+            expect(feedback.handled);
+            expect(feedback.success) << feedback.message;
+            expect(fixture.audit.size() == 1U);
+            expect(fixture.audit.front().actor_kind == "player");
+            expect(fixture.audit.front().actor_uuid ==
+                   std::string{operator_uuid_text});
+        };
+
+    "mod game bridge/a granted player holds the node without any operator list"_test =
+        [] {
+            management_fixture fixture{};
+            auto service{fixture.service()};
+            auto environment{std::make_shared<server::command_environment>()};
+            environment->mods = &service;
+            refrain::test_support::permission_policy_provider provider{};
+            expect(provider.reload(granted_policy_text()));
+            server::bind_permissions(environment, provider.vtable(),
+                                     provider.self());
+            auto bridge{server::make_command_bridge(environment)};
+
+            const auto identity{identity_of(operator_uuid_text, "Alice", 1)};
+            const auto tree{bridge.tree(identity)};
+            expect(tree != nullptr);
+            if (tree != nullptr) {
+                expect(tree_has_literal(*tree, "mods"));
+            }
+            expect(bridge.execute(identity, "mods list").success);
+            expect(fixture.audit.size() == 1U);
+        };
+
+    "mod game bridge/a player without the node is hidden and denied"_test = [] {
         management_fixture fixture{};
         auto service{fixture.service()};
-        const auto operator_uuid{
-            sample_uuid("11111111-1111-1111-1111-111111111111")};
-        const auto operator_key{server::player_identity_key(operator_uuid)};
         auto environment{std::make_shared<server::command_environment>()};
         environment->mods = &service;
-        environment->mod_admin = [operator_key](const command::source &source) {
-            return !source.identity().player ||
-                   source.identity().key == operator_key;
-        };
+        refrain::test_support::permission_policy_provider provider{};
+        expect(provider.reload(public_policy_text()));
+        server::bind_permissions(environment, provider.vtable(),
+                                 provider.self());
         auto bridge{server::make_command_bridge(environment)};
-        const net::player_identity guest{
-            .connection = 2,
-            .id = sample_uuid("22222222-2222-2222-2222-222222222222"),
-            .name = "Bob",
-            .world = {},
-        };
+        const auto guest{identity_of(guest_uuid_text, "Bob", 2)};
+
+        const auto tree{bridge.tree(guest)};
+        expect(tree != nullptr);
+        if (tree != nullptr) {
+            expect(!tree_has_literal(*tree, "mods"));
+            // The public command surface is still announced.
+            expect(tree_has_literal(*tree, "help"));
+            expect(tree_has_literal(*tree, "list"));
+        }
+
         const auto feedback{bridge.execute(guest, "mods list")};
         expect(feedback.handled);
         expect(!feedback.success);
-        expect(feedback.message.find("refrain.mods.admin") != std::string::npos)
+        expect(feedback.message.find(app::mod_admin_permission) !=
+               std::string::npos)
             << feedback.message;
         expect(fixture.audit.empty());
+
+        // Completion offers nothing below the hidden root.
+        const auto suggestions{bridge.suggest(guest, "mods ", 5)};
+        expect(suggestions.entries.empty());
     };
 
     "mod game bridge/the tree cache does not leak the operator tree"_test = [] {
         management_fixture fixture{};
         auto service{fixture.service()};
-        const net::player_identity operator_identity{
-            .connection = 1,
-            .id = sample_uuid("11111111-1111-1111-1111-111111111111"),
-            .name = "Alice",
-            .world = {},
-        };
-        const auto operator_key{
-            server::player_identity_key(operator_identity.id)};
         auto environment{std::make_shared<server::command_environment>()};
         environment->mods = &service;
-        environment->mod_admin = [operator_key](const command::source &source) {
-            return !source.identity().player ||
-                   source.identity().key == operator_key;
-        };
+        refrain::test_support::permission_policy_provider provider{};
+        expect(bind_policy(environment, provider));
         auto bridge{server::make_command_bridge(environment)};
+
+        const auto operator_identity{
+            identity_of(operator_uuid_text, "Alice", 1)};
         const auto operator_tree{bridge.tree(operator_identity)};
         expect(operator_tree != nullptr);
-        if (!operator_tree) {
-            return;
+        if (operator_tree != nullptr) {
+            expect(tree_has_literal(*operator_tree, "mods"));
         }
-        expect(tree_has_literal(*operator_tree, "mods"));
-        const auto guest_tree{bridge.tree(net::player_identity{
-            .connection = 2,
-            .id = sample_uuid("22222222-2222-2222-2222-222222222222"),
-            .name = "Bob",
-            .world = {},
-        })};
+        const auto guest_identity{identity_of(guest_uuid_text, "Bob", 2)};
+        const auto guest_tree{bridge.tree(guest_identity)};
         expect(guest_tree != nullptr);
-        if (guest_tree) {
+        if (guest_tree != nullptr) {
             expect(!tree_has_literal(*guest_tree, "mods"));
+            expect(guest_tree != operator_tree);
         }
+    };
+
+    "mod game bridge/a policy revision rebuilds the cached tree"_test = [] {
+        management_fixture fixture{};
+        auto service{fixture.service()};
+        auto environment{std::make_shared<server::command_environment>()};
+        environment->mods = &service;
+        refrain::test_support::permission_policy_provider provider{};
+        expect(bind_policy(environment, provider));
+        auto bridge{server::make_command_bridge(environment)};
+
+        const auto guest_identity{identity_of(guest_uuid_text, "Bob", 2)};
+        const auto before{bridge.tree(guest_identity)};
+        expect(before != nullptr);
+        if (before != nullptr) {
+            expect(!tree_has_literal(*before, "mods"));
+        }
+        const auto revision_before{provider.revision()};
+        const auto bridge_revision_before{bridge.revision()};
+
+        // Grant the node to the guest: the policy revision advances and the
+        // next tree request must not reuse the snapshot built before it.
+        expect(provider.reload("[defaults]\n"
+                               "default = \"deny\"\n"
+                               "nodes = [\"refrain.command.help\", "
+                               "\"refrain.command.list\"]\n"
+                               "\n[grants]\n\"player:" +
+                               std::string{guest_uuid_text} +
+                               "\" = [\"refrain.mods.admin\"]\n"));
+        expect(provider.revision() > revision_before);
+        expect(bridge.revision() != bridge_revision_before);
+        const auto after{bridge.tree(guest_identity)};
+        expect(after != nullptr);
+        expect(after != before);
+        if (after != nullptr) {
+            expect(tree_has_literal(*after, "mods"));
+        }
+        expect(bridge.execute(guest_identity, "mods list").success);
     };
 
     "mod game bridge/an operator executes /mods and the audit carries the "
     "uuid"_test = [] {
         management_fixture fixture{};
         auto service{fixture.service()};
-        const net::player_identity operator_identity{
-            .connection = 1,
-            .id = sample_uuid("11111111-1111-1111-1111-111111111111"),
-            .name = "Alice",
-            .world = {},
-        };
-        const auto operator_key{
-            server::player_identity_key(operator_identity.id)};
         auto environment{std::make_shared<server::command_environment>()};
         environment->mods = &service;
-        environment->mod_admin = [operator_key](const command::source &source) {
-            return !source.identity().player ||
-                   source.identity().key == operator_key;
-        };
+        refrain::test_support::permission_policy_provider provider{};
+        expect(bind_policy(environment, provider));
         auto bridge{server::make_command_bridge(environment)};
+        const auto operator_identity{
+            identity_of(operator_uuid_text, "Alice", 1)};
         const auto feedback{bridge.execute(operator_identity, "mods list")};
         expect(feedback.handled);
         expect(feedback.success) << feedback.message;
@@ -501,7 +673,7 @@ const suite mod_game_bridge_tests = [] {
         expect(fixture.audit.front().actor_kind == "player");
         expect(fixture.audit.front().actor_name == "Alice");
         expect(fixture.audit.front().actor_uuid ==
-               "11111111-1111-1111-1111-111111111111");
+               std::string{operator_uuid_text});
         expect(fixture.audit.front().action == "list");
     };
 
@@ -516,21 +688,13 @@ const suite mod_game_bridge_tests = [] {
                 .lines = {"staged the reload for the next tick"}};
         };
         auto service{fixture.service()};
-        const net::player_identity operator_identity{
-            .connection = 1,
-            .id = sample_uuid("11111111-1111-1111-1111-111111111111"),
-            .name = "Alice",
-            .world = {},
-        };
-        const auto operator_key{
-            server::player_identity_key(operator_identity.id)};
         auto environment{std::make_shared<server::command_environment>()};
         environment->mods = &service;
-        environment->mod_admin = [operator_key](const command::source &source) {
-            return !source.identity().player ||
-                   source.identity().key == operator_key;
-        };
+        refrain::test_support::permission_policy_provider provider{};
+        expect(bind_policy(environment, provider));
         auto bridge{server::make_command_bridge(environment)};
+        const auto operator_identity{
+            identity_of(operator_uuid_text, "Alice", 1)};
         const auto feedback{bridge.execute(operator_identity,
                                            "mods reload refrain.test.manager")};
         expect(feedback.handled);
@@ -542,12 +706,10 @@ const suite mod_game_bridge_tests = [] {
             expect(requests.front().id == "refrain.test.manager");
             expect(requests.front().version == "1.0.0");
         }
-        // The same operation is audited with the player identity, so the
-        // console and the in-game frontends leave the same trace.
         expect(fixture.audit.size() == 1U);
         expect(fixture.audit.front().actor_kind == "player");
         expect(fixture.audit.front().actor_uuid ==
-               "11111111-1111-1111-1111-111111111111");
+               std::string{operator_uuid_text});
         expect(fixture.audit.front().action == "reload");
         expect(fixture.audit.front().result == "ok");
     };

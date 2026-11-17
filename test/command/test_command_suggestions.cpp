@@ -283,11 +283,15 @@ class source_impl final : public refrain::command::source {
         refrain::command::dispatcher dispatcher;
         dispatcher.literal("public").executes(
             [](refrain::command::context &) { return 1; });
-        dispatcher.literal("secret").executes(
-            [](refrain::command::context &) { return 1; });
-        dispatcher.set_visibility_filter(
-            [](const refrain::command::source &, std::string_view name) {
-                return name != "secret";
+        dispatcher.literal("secret")
+            .require_node("refrain.command.secret")
+            .executes([](refrain::command::context &) { return 1; });
+        dispatcher.set_permission_filter(
+            [](const refrain::command::source &,
+               const refrain::command::node_permission &permission) {
+                return permission.node == "refrain.command.secret"
+                           ? refrain::command::permission_decision::denied
+                           : refrain::command::permission_decision::allowed;
             });
         source_impl source;
         auto all = dispatcher.suggest("", 0, source);

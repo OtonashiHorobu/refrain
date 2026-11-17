@@ -6,8 +6,8 @@
 
 #include <refrain/core/config.hpp>
 #include <refrain/core/io.hpp>
+#include <refrain/core/log.hpp>
 #include <refrain/data/path.hpp>
-#include <refrain/net/base.hpp>
 
 #include <fmt/format.h>
 
@@ -22,6 +22,8 @@ namespace {
 
 constexpr std::string_view policy_filename{"mods.toml"};
 constexpr std::string_view admin_filename{"mods_admin.toml"};
+
+constexpr refrain::log::logger log_mods{"mods"};
 
 /// Read an optional boolean key. A missing key keeps the safe default (off);
 /// an existing key of the wrong type is a configuration error, because a typo
@@ -70,9 +72,8 @@ auto load_mod_management_settings(std::string_view config_dir)
         settings.policy_source = policy_path;
     }
 
-    // Hot gates and the in-game operator list. A missing file keeps both
-    // gates off and grants no player the command; the console is always
-    // allowed.
+    // Hot gates. A missing file keeps every gate off; who may run `/mods` is
+    // decided by the `refrain.mods.admin` permission node, not by this file.
     const auto admin_path{refrain::data::join_path(config_dir, admin_filename)};
     if (!refrain::core::io::exists(admin_path)) {
         return settings;
@@ -103,18 +104,15 @@ auto load_mod_management_settings(std::string_view config_dir)
         !read) {
         return std::unexpected{read.error()};
     }
-    const auto operators{document->get_strings("admin.operators")};
-    settings.operators.reserve(operators.size());
-    for (const auto &entry : operators) {
-        auto parsed{refrain::net::uuid::parse(entry)};
-        if (!parsed) {
-            return std::unexpected{refrain::make_error(
-                refrain::error_code::parse_error,
-                fmt::format("{}: admin.operators entry '{}' is not a player "
-                            "uuid",
-                            admin_path, entry))};
-        }
-        settings.operators.push_back(parsed->to_string());
+    // A leftover `[admin]` table from before the permission service is not
+    // read: importing the old list would silently grant operator rights the
+    // permission policy does not express. The operator keeps the file for its
+    // lifecycle gates and grants the node in `config/permissions.toml`.
+    if (document->contains_at(std::array<std::string_view, 1>{"admin"})) {
+        log_mods.warn(
+            "{}: the [admin] table is ignored, grant refrain.mods.admin in "
+            "config/permissions.toml to allow a player to run /mods",
+            admin_path);
     }
     settings.admin_source = admin_path;
     return settings;
