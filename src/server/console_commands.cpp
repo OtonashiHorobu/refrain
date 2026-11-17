@@ -365,12 +365,25 @@ console_commands::console_commands(console_dependencies dependencies,
 
 void console_commands::execute(std::string_view line,
                                const refrain::core::tick_info &tick) {
-    auto &world{*dependencies_.world};
     if (line == "stop") {
         log_server.info("stopping the server");
         dependencies_.stop->store(true, std::memory_order_release);
         return;
     }
+    // Permission administration is backed by the permission service, not the
+    // world, and a console test may construct the command set without a world.
+    if (line == "permissions" || line.starts_with("permissions ")) {
+        const auto tokens{split_console_line(line)};
+        execute_console_permissions_command(
+            std::span<const std::string_view>{tokens}.subspan(1),
+            dependencies_.permissions);
+        return;
+    }
+    if (dependencies_.world == nullptr) {
+        log_server.warn("the world is unavailable");
+        return;
+    }
+    auto &world{*dependencies_.world};
     if (line == "palette-gc") {
         // Quiesced maintenance: this runs on the sim thread, so no tick or
         // console command overlaps it. Drain the writer first; the rebuild
@@ -680,12 +693,6 @@ void console_commands::execute(std::string_view line,
         execute_mods_command(
             std::span<const std::string_view>{tokens}.subspan(1),
             dependencies_.mods);
-        return;
-    }
-    if (!tokens.empty() && tokens[0] == "permissions") {
-        execute_console_permissions_command(
-            std::span<const std::string_view>{tokens}.subspan(1),
-            dependencies_.permissions);
         return;
     }
     if ((tokens.size() == 1 || tokens.size() == 2) && tokens[0] == "jump") {
