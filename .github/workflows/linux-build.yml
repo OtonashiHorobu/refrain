@@ -382,14 +382,25 @@ jobs:
           source build/Release/generators/conanrun.sh
           work="$(mktemp -d)"
           trap 'rm -rf "$work"' EXIT
-          mkdir -p "$work/config" "$work/world"
+          mkdir -p "$work/config" "$work/data/data/minecraft/worldgen"
           printf 'port = 0\n' >"$work/config/network.toml"
-          # Start from the checkout root so the composition and the tracked
-          # tables are discovered exactly like a release start.
+          # Synthetic fixture: the runtime smokes use a pre-generated RWF world
+          # and a staged game-data marker, so no datapack download happens in
+          # CI. This mirrors the first-run smoke in scripts/ci.sh.
+          printf '{\n  "schema": "refrain.game-data/1",\n  "game_version": "26.3",\n  "data_version": 5023,\n  "datapack": "data",\n  "source": "ci staged synthetic datapack"\n}\n' \
+            >"$work/data/MANIFEST.json"
+          python3 "$GITHUB_WORKSPACE/tools/make_test_world.py" gen \
+            --out "$work/anvil" --seed 1234
+          ./build/Release/bin/refrain-tools world import \
+            --from "$work/anvil" --to "$work/world" >/dev/null
+          # The composition and the tracked tables are discovered from the
+          # executable's directory chain, exactly like a release start.
           (
             cd "$work"
             exec "$GITHUB_WORKSPACE/build/Release/bin/refrain-server" \
               --gamepack "$GITHUB_WORKSPACE/gamepack/gamepack.toml" \
+              --accept-eula --eula-file "$work/eula.toml" \
+              --data-dir "$work/data" --no-data-download \
               --world world --config-dir config --ticks 0 </dev/null
           ) >"$work/console.log" 2>&1 &
           pid=$!
