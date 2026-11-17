@@ -140,7 +140,7 @@ case "$PROFILE" in
             || die "dynamic profile failed to start the composition"
         grep -q "with mod profile dynamic" "$WORK/server.txt" \
             || die "startup log does not name profile 'dynamic'"
-        grep -q '\[host\]: loaded 12 mods' "$WORK/server.txt" \
+        grep -q '\[host\]: loaded 13 mods' "$WORK/server.txt" \
             || die "dynamic profile loaded an unexpected mod count"
         grep -q 'loaded mod refrain.data.vanilla 1.0.0 with ABI 1, code' \
             "$WORK/server.txt" \
@@ -150,7 +150,7 @@ case "$PROFILE" in
         "$TOOLS" mods load -g gamepack/gamepack.toml --image "$IMAGE" \
             >"$WORK/mods-load.txt" \
             || die "dynamic profile failed the mod-host load smoke"
-        grep -q 'mod host: 12 mod(s) loaded' "$WORK/mods-load.txt" \
+        grep -q 'mod host: 13 mod(s) loaded' "$WORK/mods-load.txt" \
             || die "dynamic mod-host smoke loaded an unexpected mod count"
         ;;
     *)
