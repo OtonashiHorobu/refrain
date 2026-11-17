@@ -212,7 +212,7 @@ struct fixture {
             std::ofstream stream{dir / "network.toml",
                                  std::ios::binary | std::ios::trunc};
             stream << "bind_host = \"127.0.0.1\"\nport = 0\n"
-                      "online_mode = false\n";
+                      "online_mode = false\nmax_connections = 512\n";
         }
         auto store{refrain::core::config::store::empty()};
         static_cast<void>(store.mount(

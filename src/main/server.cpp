@@ -250,20 +250,36 @@ constexpr std::array<default_config_file, 8> k_default_config_files{{
              "[logging]\n"
              "level = \"info\"\n"},
     {.name = "network.toml",
-     .text = "# Refrain network configuration, named like the vanilla\n"
-             "# server.properties keys it corresponds to.\n"
-             "\n"
-             "# Address to bind; empty binds every interface.\n"
-             "bind_host = \"0.0.0.0\"\n"
-             "port = 25565\n"
-             "online_mode = true\n"
-             "compression_threshold = 256\n"
-             "view_distance = 10\n"
-             "simulation_distance = 10\n"
-             "\n"
-             "[status]\n"
-             "motd = \"A Refrain Server\"\n"
-             "max_players = 20\n"},
+     .text =
+         "# Refrain network configuration, named like the vanilla\n"
+         "# server.properties keys it corresponds to.\n"
+         "\n"
+         "# Address to bind; empty binds every interface.\n"
+         "bind_host = \"0.0.0.0\"\n"
+         "port = 25565\n"
+         "online_mode = true\n"
+         "compression_threshold = 256\n"
+         "view_distance = 10\n"
+         "simulation_distance = 10\n"
+         "\n"
+         "# A connection that does not finish login within this deadline is\n"
+         "# closed; the same budget applies to status and configuration.\n"
+         "login_timeout_ms = 30000\n"
+         "# Frame bytes one unauthenticated connection may buffer before it\n"
+         "# reaches play.\n"
+         "pre_play_buffer_bytes = 65536\n"
+         "# Play packets and bytes one connection may queue for the tick\n"
+         "# loop, and the totals across every connection.\n"
+         "max_inbound_packets = 256\n"
+         "max_inbound_bytes = 1048576\n"
+         "max_inbound_packets_total = 8192\n"
+         "max_inbound_bytes_total = 8388608\n"
+         "# Play packets per second one connection may submit; 0 disables.\n"
+         "rate_limit = 500\n"
+         "\n"
+         "[status]\n"
+         "motd = \"A Refrain Server\"\n"
+         "max_players = 20\n"},
     {.name = "world.toml",
      .text = "# Refrain world configuration.\n"
              "\n"
@@ -1398,6 +1414,37 @@ int main(int argc, char **argv) {
         }
         log_config.info("loaded {} configuration namespaces from '{}'",
                         config_store.names().size(), config_dir);
+    }
+
+    // The distance limits are part of a contract: the network layer narrows
+    // them to a byte width and the gameplay layer clamps a client request
+    // between 2 and the configured value. Checking the effective values once
+    // here, after the TOML, the imported properties and the CLI overrides are
+    // merged, stops a bad configuration before any subsystem starts instead of
+    // letting it reach that clamp. The network server repeats the check, so an
+    // embedding that bypasses this host still fails closed.
+    if (auto network_view{config_store.module("network")}) {
+        const auto enforce_distance =
+            [&network_view](std::string_view key) -> refrain::status {
+            if (!network_view->contains(key)) {
+                return refrain::status_ok();
+            }
+            constexpr std::int64_t minimum{2};
+            constexpr std::int64_t maximum{32};
+            const auto value{network_view->get_int64(key, minimum)};
+            if (value < minimum || value > maximum) {
+                return std::unexpected{refrain::make_error(
+                    refrain::error_code::invalid_argument,
+                    fmt::format("network.{} must be between {} and {}", key,
+                                minimum, maximum))};
+            }
+            return refrain::status_ok();
+        };
+        for (const auto *key : {"view_distance", "simulation_distance"}) {
+            if (auto checked{enforce_distance(key)}; !checked) {
+                return report_error(checked.error());
+            }
+        }
     }
 
     std::string resolved_world_path{world_path.empty() ? config_world_path

@@ -116,6 +116,94 @@ const suite tests = [] {
         (*client)->stop();
         (*server)->stop();
     };
+
+    "net/transport refuses an inbound connection above its limit"_test = [] {
+        std::mutex mutex;
+        std::condition_variable changed;
+        std::size_t accepted{0};
+        bool second_closed{false};
+
+        auto server = net::transport::open(net::transport_handler{
+            .on_open =
+                [&](std::uint64_t) {
+                    const std::lock_guard lock{mutex};
+                    ++accepted;
+                    changed.notify_all();
+                },
+            .on_data = [](std::uint64_t, std::span<const std::byte>) {},
+            .on_close = [](std::uint64_t, std::string_view) {},
+            .on_error = [](std::string_view) {},
+        });
+        expect(server.has_value());
+        if (!server) {
+            return;
+        }
+        // The ceiling is applied in the accept path, before a session or a
+        // receive buffer is committed to the peer.
+        (*server)->set_connection_limit(1);
+        const auto bound{
+            (*server)->listen(net::endpoint{.host = "127.0.0.1", .port = 0})};
+        expect(bound.has_value());
+        if (!bound) {
+            (*server)->stop();
+            return;
+        }
+        const auto port{(*server)->local_port()};
+
+        auto first = net::transport::open(net::transport_handler{
+            .on_open = [](std::uint64_t) {},
+            .on_data = [](std::uint64_t, std::span<const std::byte>) {},
+            .on_close = [](std::uint64_t, std::string_view) {},
+            .on_error = [](std::string_view) {},
+        });
+        expect(first.has_value());
+        if (!first) {
+            (*server)->stop();
+            return;
+        }
+        const auto first_id{(*first)->connect(
+            net::endpoint{.host = "127.0.0.1", .port = port})};
+        expect(first_id.has_value());
+        {
+            std::unique_lock lock{mutex};
+            changed.wait_for(lock, std::chrono::seconds{5},
+                             [&] { return accepted == 1U; });
+            expect(accepted == 1U);
+        }
+
+        auto second = net::transport::open(net::transport_handler{
+            .on_open = [](std::uint64_t) {},
+            .on_data = [](std::uint64_t, std::span<const std::byte>) {},
+            .on_close =
+                [&](std::uint64_t, std::string_view) {
+                    const std::lock_guard lock{mutex};
+                    second_closed = true;
+                    changed.notify_all();
+                },
+            .on_error = [](std::string_view) {},
+        });
+        expect(second.has_value());
+        if (!second) {
+            (*first)->stop();
+            (*server)->stop();
+            return;
+        }
+        const auto second_id{(*second)->connect(
+            net::endpoint{.host = "127.0.0.1", .port = port})};
+        expect(second_id.has_value());
+        {
+            std::unique_lock lock{mutex};
+            changed.wait_for(lock, std::chrono::seconds{5},
+                             [&] { return second_closed; });
+            expect(second_closed);
+            expect(accepted == 1U);
+        }
+        expect((*server)->connection_count() == 1U);
+
+        (*first)->stop();
+        (*second)->stop();
+        (*server)->stop();
+    };
 };
 
 } // namespace

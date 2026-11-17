@@ -213,7 +213,126 @@ suite<"server/inventory-sync"> inventory_sync_tests = [] {
             expect(gateway.cursor_items[0].item.count == 5U);
         };
 
-    "a creative slot overwrites the inventory and resends the menu"_test = [] {
+    "a creative slot writes through the menu mapping and resends the menu"_test =
+        [] {
+            auto bytes{refrain::core::io::read_file(
+                std::string{REFRAIN_SOURCE_DIR} +
+                "/content/vanilla/26.3/tables.rvtb")};
+            if (!bytes) {
+                expect(false) << "tables.rvtb is missing";
+                return;
+            }
+            auto opened{data::vanilla_tables::open(*bytes)};
+            if (!opened) {
+                expect(false) << "tables.rvtb is invalid";
+                return;
+            }
+            const auto stone{item_protocol_id(*opened, "minecraft:stone")};
+            expect(stone != 0U);
+
+            sim::player_table table{};
+            session::play_session players{table};
+            join(players);
+            support::fake_play_gateway gateway{};
+            gateway.active = {1};
+            inventory_sync sync{gateway, &*opened};
+            sync.tick(players);
+
+            gateway.container_content.clear();
+            // Menu slot 36 is the first hotbar slot, which is inventory
+            // index 0; the protocol slot is not an inventory index.
+            gateway.creative_slots.push_back(net::creative_slot_event{
+                .connection = 1,
+                .slot = 36,
+                .item_id = stone,
+                .count = 7,
+            });
+            sync.tick(players);
+
+            expect(players.inventory_of(1)->at(0).item == "minecraft:stone");
+            expect(players.inventory_of(1)->at(0).count == 7U);
+            expect(gateway.container_content.size() == 1U);
+            expect(gateway.container_content[0].items[36].count == 7U);
+        };
+
+    "a creative slot writes the main inventory through the menu mapping"_test =
+        [] {
+            auto bytes{refrain::core::io::read_file(
+                std::string{REFRAIN_SOURCE_DIR} +
+                "/content/vanilla/26.3/tables.rvtb")};
+            if (!bytes) {
+                expect(false) << "tables.rvtb is missing";
+                return;
+            }
+            auto opened{data::vanilla_tables::open(*bytes)};
+            if (!opened) {
+                expect(false) << "tables.rvtb is invalid";
+                return;
+            }
+            const auto stone{item_protocol_id(*opened, "minecraft:stone")};
+            expect(stone != 0U);
+
+            sim::player_table table{};
+            session::play_session players{table};
+            join(players);
+            support::fake_play_gateway gateway{};
+            gateway.active = {1};
+            inventory_sync sync{gateway, &*opened};
+            sync.tick(players);
+            gateway.creative_slots.push_back(net::creative_slot_event{
+                .connection = 1,
+                .slot = 9,
+                .item_id = stone,
+                .count = 3,
+            });
+            sync.tick(players);
+
+            // Menu slot 9 is the first main-inventory slot, inventory index 9.
+            expect(players.inventory_of(1)->at(9).item == "minecraft:stone");
+            expect(players.inventory_of(1)->at(9).count == 3U);
+        };
+
+    "a creative slot from a survival player leaves the inventory unchanged"_test =
+        [] {
+            auto bytes{refrain::core::io::read_file(
+                std::string{REFRAIN_SOURCE_DIR} +
+                "/content/vanilla/26.3/tables.rvtb")};
+            if (!bytes) {
+                expect(false) << "tables.rvtb is missing";
+                return;
+            }
+            auto opened{data::vanilla_tables::open(*bytes)};
+            if (!opened) {
+                expect(false) << "tables.rvtb is invalid";
+                return;
+            }
+            const auto stone{item_protocol_id(*opened, "minecraft:stone")};
+            expect(stone != 0U);
+
+            sim::player_table table{};
+            session::play_session players{table};
+            join(players);
+            expect(players.set_game_mode(1, sim::game_mode_survival));
+            support::fake_play_gateway gateway{};
+            gateway.active = {1};
+            inventory_sync sync{gateway, &*opened};
+            sync.tick(players);
+            gateway.container_content.clear();
+            gateway.creative_slots.push_back(net::creative_slot_event{
+                .connection = 1,
+                .slot = 36,
+                .item_id = stone,
+                .count = 7,
+            });
+            sync.tick(players);
+
+            // The authoritative game-mode record gates the event even if the
+            // network layer had missed it.
+            expect(players.inventory_of(1)->at(0).count == 0U);
+            expect(gateway.container_content.empty());
+        };
+
+    "a creative slot above the item stack limit is dropped"_test = [] {
         auto bytes{
             refrain::core::io::read_file(std::string{REFRAIN_SOURCE_DIR} +
                                          "/content/vanilla/26.3/tables.rvtb")};
@@ -226,7 +345,9 @@ suite<"server/inventory-sync"> inventory_sync_tests = [] {
             expect(false) << "tables.rvtb is invalid";
             return;
         }
+        const auto sword{item_protocol_id(*opened, "minecraft:diamond_sword")};
         const auto stone{item_protocol_id(*opened, "minecraft:stone")};
+        expect(sword != 0U);
         expect(stone != 0U);
 
         sim::player_table table{};
@@ -236,20 +357,26 @@ suite<"server/inventory-sync"> inventory_sync_tests = [] {
         gateway.active = {1};
         inventory_sync sync{gateway, &*opened};
         sync.tick(players);
-
         gateway.container_content.clear();
+        // A diamond sword stacks to one, so seven is oversized; stone stacks
+        // to 64, so 100 is oversized as well. Neither slot may change.
         gateway.creative_slots.push_back(net::creative_slot_event{
             .connection = 1,
-            .slot = 0,
-            .item_id = stone,
+            .slot = 36,
+            .item_id = sword,
             .count = 7,
+        });
+        gateway.creative_slots.push_back(net::creative_slot_event{
+            .connection = 1,
+            .slot = 37,
+            .item_id = stone,
+            .count = 100,
         });
         sync.tick(players);
 
-        expect(players.inventory_of(1)->at(0).item == "minecraft:stone");
-        expect(players.inventory_of(1)->at(0).count == 7U);
-        expect(gateway.container_content.size() == 1U);
-        expect(gateway.container_content[0].items[36].count == 7U);
+        expect(players.inventory_of(1)->at(0).count == 0U);
+        expect(players.inventory_of(1)->at(1).count == 0U);
+        expect(gateway.container_content.empty());
     };
 
     "a damaged enchanted tool survives a menu click and the wire"_test = [] {

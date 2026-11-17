@@ -39,6 +39,7 @@
 #include <openssl/crypto.h>
 #include <openssl/err.h>
 #include <openssl/evp.h>
+#include <openssl/rand.h>
 #include <openssl/rsa.h>
 #include <openssl/x509.h>
 #endif
@@ -187,6 +188,83 @@ void secure_zero(std::span<std::byte> bytes) noexcept {
         cursor[index] = std::byte{0};
     }
 #endif
+}
+
+auto constant_time_equal(std::span<const std::byte> left,
+                         std::span<const std::byte> right) noexcept -> bool {
+    // Fold the length difference into the accumulator and compare the common
+    // prefix without a branch: an early exit would leak the position of the
+    // first mismatch through timing.
+    auto difference{left.size() ^ right.size()};
+    const auto common{std::min(left.size(), right.size())};
+    for (std::size_t index{0}; index < common; ++index) {
+        difference |= std::to_integer<std::size_t>(left[index] ^ right[index]);
+    }
+    return difference == 0;
+}
+
+auto random_bytes(std::span<std::byte> out) -> status {
+#if REFRAIN_WITH_OPENSSL
+    if (out.empty()) {
+        return status_ok();
+    }
+    // RAND_bytes takes an int; a caller never needs more than the token or a
+    // UUID, but a chunked loop keeps the contract for larger spans.
+    std::size_t offset{0};
+    while (offset < out.size()) {
+        const auto chunk{std::min<std::size_t>(
+            out.size() - offset,
+            static_cast<std::size_t>(std::numeric_limits<int>::max()))};
+        if (::RAND_bytes(reinterpret_cast<unsigned char *>(out.data() + offset),
+                         static_cast<int>(chunk)) != 1) {
+            return std::unexpected{make_error(
+                error_code::unknown,
+                "the cryptographic random generator is unavailable")};
+        }
+        offset += chunk;
+    }
+    return status_ok();
+#else
+    (void)out;
+    return std::unexpected{unsupported_error()};
+#endif
+}
+
+secret_buffer::secret_buffer(std::vector<std::byte> bytes)
+    : bytes_{std::move(bytes)} {}
+
+secret_buffer::secret_buffer(secret_buffer &&other) noexcept
+    : bytes_{std::move(other.bytes_)} {
+    // A moved-from vector is empty by contract; wipe it anyway so a standard
+    // library that keeps the allocation does not hold live secret bytes.
+    other.wipe();
+}
+
+auto secret_buffer::operator=(secret_buffer &&other) noexcept
+    -> secret_buffer & {
+    if (this != &other) {
+        wipe();
+        bytes_ = std::move(other.bytes_);
+        other.wipe();
+    }
+    return *this;
+}
+
+secret_buffer::~secret_buffer() { wipe(); }
+
+void secret_buffer::assign(std::span<const std::byte> bytes) {
+    wipe();
+    bytes_.assign(bytes.begin(), bytes.end());
+}
+
+void secret_buffer::assign(std::vector<std::byte> bytes) {
+    wipe();
+    bytes_ = std::move(bytes);
+}
+
+void secret_buffer::wipe() noexcept {
+    secure_zero(bytes_);
+    bytes_.clear();
 }
 
 auto to_signed_hex(std::span<const std::byte> bytes) -> std::string {

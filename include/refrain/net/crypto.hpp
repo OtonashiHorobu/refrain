@@ -79,6 +79,77 @@ inline constexpr std::size_t aes_block_bytes = 16;
 /// operating system) are gone.
 void secure_zero(std::span<std::byte> bytes) noexcept;
 
+/// Compare two byte strings without an early exit.
+///
+/// Returns true only when both spans have the same length and the same bytes.
+/// The byte loop always covers the shorter span and the length difference is
+/// folded into the result, so the number of executed comparisons does not
+/// reveal where the first differing byte is. Length itself is not secret; the
+/// login verify token is a fixed four-byte value, so the common path compares
+/// exactly four bytes.
+[[nodiscard]] auto
+constant_time_equal(std::span<const std::byte> left,
+                    std::span<const std::byte> right) noexcept -> bool;
+
+/// Fill `out` from the process CSPRNG.
+///
+/// The bytes come from the cryptographic random generator that the platform
+/// provides (OpenSSL's default provider, which seeds from the operating system
+/// entropy source). Use it for tokens, session ids and any other value an
+/// attacker must not predict; never for world generation or gameplay
+/// randomness, which must stay reproducible from the world seed.
+///
+/// Returns `unsupported` when the build has no cryptographic library and
+/// `unknown` when the generator fails. A caller that needs the bytes for a
+/// security decision must fail closed on either error.
+[[nodiscard]] auto random_bytes(std::span<std::byte> out) -> status;
+
+/// Owning byte buffer for secret material.
+///
+/// The destructor and `wipe()` overwrite the stored bytes with `secure_zero()`
+/// before releasing them, so a shared secret or a decrypted challenge does not
+/// stay in freed heap memory after the object dies. The class is move-only:
+/// a copy would create a second allocation whose lifetime the sender does not
+/// control. `span()` borrows the current contents and is invalidated by
+/// `wipe()`, `assign()` and destruction, like any container view.
+///
+/// Zeroization is not observable through the API; a test can retain a span
+/// over the storage and read the zeros after `wipe()`, because the allocation
+/// is kept until the object is destroyed.
+class secret_buffer {
+  public:
+    secret_buffer() = default;
+    explicit secret_buffer(std::vector<std::byte> bytes);
+    secret_buffer(secret_buffer &&other) noexcept;
+    auto operator=(secret_buffer &&other) noexcept -> secret_buffer &;
+    ~secret_buffer();
+
+    secret_buffer(const secret_buffer &) = delete;
+    auto operator=(const secret_buffer &) -> secret_buffer & = delete;
+
+    /// Replace the contents with `bytes`. The previous contents are wiped
+    /// first, so a failed or repeated assignment never leaves the old secret
+    /// behind.
+    void assign(std::span<const std::byte> bytes);
+    void assign(std::vector<std::byte> bytes);
+
+    /// Overwrite the contents with zero and release them from the buffer. The
+    /// allocation is retained so the wiped bytes are the ones a retained span
+    /// already points at.
+    void wipe() noexcept;
+
+    [[nodiscard]] auto empty() const noexcept -> bool { return bytes_.empty(); }
+    [[nodiscard]] auto size() const noexcept -> std::size_t {
+        return bytes_.size();
+    }
+    [[nodiscard]] auto span() const noexcept -> std::span<const std::byte> {
+        return bytes_;
+    }
+
+  private:
+    std::vector<std::byte> bytes_{};
+};
+
 /// SHA-1 digest of the concatenation of the viewed bytes.
 ///
 /// Returns `unsupported` when the build has no OpenSSL or the provider refuses
