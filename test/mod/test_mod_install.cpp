@@ -40,13 +40,20 @@
 
 namespace {
 
+namespace fs = std::filesystem;
+
+/// Compare two paths independently of the platform's directory separator.
+[[nodiscard]] auto same_path(std::string_view left, std::string_view right)
+    -> bool {
+    return fs::path{std::string{left}}.lexically_normal().generic_string() ==
+           fs::path{std::string{right}}.lexically_normal().generic_string();
+}
+
 using namespace boost::ut;
 
 namespace mod = refrain::mod;
 namespace io = refrain::core::io;
 namespace data = refrain::data;
-
-namespace fs = std::filesystem;
 
 using refrain::error_code;
 using refrain::data::content_store;
@@ -1376,7 +1383,7 @@ const suite mod_catalog_tests = [] {
             expect(candidate.version == "1.0.0");
             expect(candidate.kind == mod::package_kind::rfmod);
             expect(candidate.origin == mod::mod_origin::user);
-            expect(candidate.path == installed->receipt_path);
+            expect(same_path(candidate.path, installed->receipt_path));
             expect(hex_of(candidate.manifest_hash) ==
                    hex_of(installed->manifest_digest));
             expect(!candidate.is_external());
