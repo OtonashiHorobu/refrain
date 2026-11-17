@@ -362,6 +362,17 @@ class world_port {
         -> std::string_view = 0;
     [[nodiscard]] virtual auto intern_block(std::string key)
         -> sim::block_state_id = 0;
+    /// True when the column that holds the block is resident in this port's
+    /// world. A gameplay rule that must not act on a column the runtime has not
+    /// loaded (block breaking is the first one) asks this instead of loading
+    /// the column as a side effect of reading one block. A port that keeps its
+    /// columns in the provider process cannot answer from here and reports
+    /// true, leaving the decision to the provider's `block_at`.
+    [[nodiscard]] virtual auto
+    column_loaded(const sim::chunk_pos &pos) const noexcept -> bool {
+        static_cast<void>(pos);
+        return true;
+    }
 
     // --- chunks ------------------------------------------------------------
 

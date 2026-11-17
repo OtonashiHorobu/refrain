@@ -1983,6 +1983,7 @@ auto world::state_hash() const -> data::digest32 {
         append_u32(std::bit_cast<std::uint32_t>(player.pitch));
         append_u32(player.on_ground ? 1U : 0U);
         append_u32(player.game_mode);
+        append_u32(player.selected_slot);
         append_u32(std::bit_cast<std::uint32_t>(player.health));
         append_u32(static_cast<std::uint32_t>(player.food_level));
         append_u32(std::bit_cast<std::uint32_t>(player.saturation));

@@ -112,6 +112,11 @@ struct player_state {
     std::uint32_t game_mode{0};
     std::int32_t view_distance{10};
     std::vector<item_stack> inventory{};
+    /// Selected hotbar slot, `0..8`. The held stack is
+    /// `inventory[selected_slot]` when the inventory has that many slots; the
+    /// client reports the slot with `set_carried_item` and the server's break
+    /// rules read the held tool from it.
+    std::uint8_t selected_slot{0};
 
     // --- movement input and prediction -------------------------------------
 

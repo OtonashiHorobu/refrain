@@ -224,7 +224,6 @@ class bot_session {
     template <typename Packet, typename Encoder>
     void send_packet(std::uint16_t packet_id, const Packet &packet,
                      Encoder encode) {
-        const std::lock_guard send_lock{send_mutex_};
         std::vector<std::byte> body;
         writer out{body};
         out.write_varint(packet_id);
@@ -233,6 +232,12 @@ class bot_session {
             fail_locked(written.error().message);
             return;
         }
+        send_body(body);
+    }
+
+    /// Frame and send one already encoded body (VarInt packet id included).
+    void send_body(std::span<const std::byte> body) {
+        const std::lock_guard send_lock{send_mutex_};
         std::vector<std::byte> frame;
         if (auto framed{encoder_.encode(body, frame)}; !framed) {
             std::lock_guard lock{mutex_};
@@ -422,11 +427,7 @@ class bot_session {
         if (packet_id == play_cb::level_chunk_with_light::packet_id) {
             std::lock_guard lock{mutex_};
             ++chunks_;
-            if (joined_ && chunks_ >= options_.wait_chunks &&
-                messages_.size() >= options_.wait_messages) {
-                done_ = true;
-                condition_.notify_one();
-            }
+            finish_if_ready_locked();
             return;
         }
         if (packet_id == play_cb::system_chat::packet_id) {
@@ -438,11 +439,7 @@ class bot_session {
             }
             std::lock_guard lock{mutex_};
             messages_.push_back(message_packet.content.text);
-            if (joined_ && chunks_ >= options_.wait_chunks &&
-                messages_.size() >= options_.wait_messages) {
-                done_ = true;
-                condition_.notify_one();
-            }
+            finish_if_ready_locked();
             return;
         }
         if (packet_id == play_cb::keep_alive::packet_id) {
@@ -492,14 +489,29 @@ class bot_session {
             {
                 std::lock_guard lock{mutex_};
                 joined_ = true;
-                if (options_.wait_chunks == 0 && options_.wait_messages == 0) {
-                    done_ = true;
-                    condition_.notify_one();
-                }
+                actions_finished_ = options_.play_actions.empty();
+                finish_if_ready_locked();
             }
             play_sb::player_loaded loaded{};
             send_packet(play_sb::player_loaded::packet_id, loaded,
                         play_sb::encode_player_loaded);
+            if (!options_.play_actions.empty()) {
+                workers_.start([this] {
+                    log::set_thread_name("bot-actions");
+                    for (const auto &action : options_.play_actions) {
+                        if (action.delay.count() > 0) {
+                            std::this_thread::sleep_for(action.delay);
+                        }
+                        if (!running_.load(std::memory_order_relaxed)) {
+                            return;
+                        }
+                        send_body(action.body);
+                    }
+                    std::lock_guard lock{mutex_};
+                    actions_finished_ = true;
+                    finish_if_ready_locked();
+                });
+            }
             if (!options_.command.empty()) {
                 if (options_.command_delay.count() == 0) {
                     send_command();
@@ -616,6 +628,16 @@ class bot_session {
                     play_sb::encode_move_player_pos_rot);
     }
 
+    /// Set done when the join condition and the play-action script have both
+    /// finished. The caller holds `mutex_`.
+    void finish_if_ready_locked() {
+        if (joined_ && actions_finished_ && chunks_ >= options_.wait_chunks &&
+            messages_.size() >= options_.wait_messages) {
+            done_ = true;
+            condition_.notify_one();
+        }
+    }
+
     void fail(std::string message) {
         std::lock_guard lock{mutex_};
         fail_locked(std::move(message));
@@ -643,6 +665,9 @@ class bot_session {
     std::mutex send_mutex_{};
     std::condition_variable condition_{};
     bool done_{false};
+    /// False while the play-action helper thread still has packets to send; a
+    /// scripted client is not done joining until its input was delivered.
+    bool actions_finished_{true};
     bool joined_{false};
     std::size_t packets_{0};
     std::size_t chunks_{0};

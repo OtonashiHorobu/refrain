@@ -70,6 +70,10 @@ struct server_run_options {
     net::player_event player_leave{};
     net::session_verifier verify_session{};
     std::function<void(std::uint64_t)> on_tick{};
+    /// Called once from the tick loop's thread after the listener has bound,
+    /// with the port it actually listens on. A host that leaves the configured
+    /// port at zero reads the ephemeral port here instead of searching the log.
+    std::function<void(std::uint16_t)> on_listening{};
     /// Host-owned store used by the console `/config` commands and the
     /// shutdown save. Null disables both.
     core::config::store *config{nullptr};

@@ -186,8 +186,11 @@ suite player_table_tests = [] {
         bob->game_mode = 1;
         expect(data::to_hex(world->state_hash()) != moved_hash);
         const auto mode_hash{data::to_hex(world->state_hash())};
-        expect(world->add_item(*bob, "minecraft:stone", 5).has_value());
+        bob->selected_slot = 4;
         expect(data::to_hex(world->state_hash()) != mode_hash);
+        const auto slot_hash{data::to_hex(world->state_hash())};
+        expect(world->add_item(*bob, "minecraft:stone", 5).has_value());
+        expect(data::to_hex(world->state_hash()) != slot_hash);
         const auto inventory_hash{data::to_hex(world->state_hash())};
         alice->yaw = 90.0F;
         expect(data::to_hex(world->state_hash()) != inventory_hash);
@@ -225,6 +228,27 @@ suite player_table_tests = [] {
         std::error_code error;
         fs::remove_all(first_directory, error);
         fs::remove_all(second_directory, error);
+    };
+
+    "sim/a player record starts on the first hotbar slot"_test = [] {
+        sim::player_table table{};
+        const auto added{table.add(sim::player_table::registration{
+            .connection = 1, .name = "Alice", .world = "overworld"})};
+        expect(added.has_value());
+        if (!added) {
+            return;
+        }
+        auto *record{table.find(*added)};
+        expect(record != nullptr);
+        if (record == nullptr) {
+            return;
+        }
+        expect(record->selected_slot == 0U);
+        // The slot is plain record state: the gameplay layer writes it, the
+        // record owns it, and it does not change when the inventory grows.
+        record->selected_slot = 8;
+        expect(record->selected_slot == 8U);
+        expect(table.find_by_connection(1)->selected_slot == 8U);
     };
 
     "sim/tick applies gravity to every player record"_test = [] {

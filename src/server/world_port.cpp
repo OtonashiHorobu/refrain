@@ -447,6 +447,11 @@ class direct_world_port final : public world_port {
         return world().registry().intern(std::move(key));
     }
 
+    auto column_loaded(const sim::chunk_pos &pos) const noexcept
+        -> bool override {
+        return world().find_chunk(pos) != nullptr;
+    }
+
     auto chunk_load(const sim::chunk_pos &pos)
         -> result<sim::chunk *> override {
         auto loaded{world().ensure_chunk(pos)};

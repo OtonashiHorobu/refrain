@@ -151,8 +151,6 @@ struct server_settings {
     std::string registry_catalog_path{};
     std::shared_ptr<const std::vector<std::vector<std::byte>>> spawn_chunks{};
     std::function<bool(std::uint64_t, std::int32_t, std::int32_t, std::int32_t)>
-        break_block{};
-    std::function<bool(std::uint64_t, std::int32_t, std::int32_t, std::int32_t)>
         place_block{};
     std::string session_server{"https://sessionserver.mojang.com"};
     std::int32_t auth_timeout_ms{5000};
@@ -308,6 +306,10 @@ struct server::impl {
     player_input_handler input_hook{};
     flight_handler flight_hook{};
     teleport_confirm_handler teleport_confirm_hook{};
+    held_slot_handler held_slot_hook{};
+    break_action_handler start_destroy_block_hook{};
+    break_action_handler stop_destroy_block_hook{};
+    break_action_handler abort_destroy_block_hook{};
     attack_handler attack_hook{};
     animation_handler animation_hook{};
     player_event play_ready_hook{};
@@ -412,6 +414,9 @@ struct server::impl {
                                  std::string_view message);
     void send_entity_event(std::uint64_t id, std::int32_t entity_id,
                            std::uint8_t event);
+    void send_block_destroy_stage(std::uint64_t id, std::int32_t entity_id,
+                                  std::int32_t x, std::int32_t y,
+                                  std::int32_t z, std::int32_t stage);
     void send_system_chat(std::uint64_t id, std::string_view text);
     void execute_chat_command(std::uint64_t id, std::string_view command);
     void broadcast_system_chat(std::string_view text);
@@ -2162,6 +2167,15 @@ void server::send_entity_event(std::uint64_t connection, std::int32_t entity_id,
     }
 }
 
+void server::send_block_destroy_stage(std::uint64_t connection,
+                                      std::int32_t entity_id, std::int32_t x,
+                                      std::int32_t y, std::int32_t z,
+                                      std::int32_t stage) {
+    if (impl_) {
+        impl_->send_block_destroy_stage(connection, entity_id, x, y, z, stage);
+    }
+}
+
 auto server::player_names() const -> std::vector<player_name> {
     if (!impl_) {
         return {};
@@ -2314,6 +2328,20 @@ void server::impl::send_entity_event(std::uint64_t id, std::int32_t entity_id,
     play_cb::entity_event packet{.entity_id = entity_id, .event = event};
     send_packet(id, play_cb::entity_event::packet_id, packet,
                 play_cb::encode_entity_event);
+}
+
+void server::impl::send_block_destroy_stage(std::uint64_t id,
+                                            std::int32_t entity_id,
+                                            std::int32_t x, std::int32_t y,
+                                            std::int32_t z,
+                                            std::int32_t stage) {
+    play_cb::block_destruction packet{
+        .id = entity_id,
+        .pos = pack_block_position(x, y, z),
+        .progress = static_cast<std::int8_t>(stage),
+    };
+    send_packet(id, play_cb::block_destruction::packet_id, packet,
+                play_cb::encode_block_destruction);
 }
 
 void server::impl::send_initial_chunks(std::uint64_t id) {
@@ -2563,15 +2591,35 @@ void server::impl::handle_play(std::uint64_t id,
             return;
         }
         const auto [x, y, z] = unpack_block_position(packet.position);
-        // Only START_DESTROY_BLOCK changes the world; the other actions
-        // stop or abort a prediction that the client resolves locally.
-        if (packet.action == 0 && config.break_block &&
-            config.break_block(id, x, y, z)) {
-            play_cb::block_update update{.position = packet.position,
-                                         .state = 0};
-            send_packet(id, play_cb::block_update::packet_id, update,
-                        play_cb::encode_block_update);
+        const break_action_event event{
+            .connection = id, .x = x, .y = y, .z = z};
+        // The three block-break actions go to the gameplay layer, which owns
+        // the progress state and the world change. CHANGE_DESTROY_DIRECTION
+        // only decides the animation direction of the reference's level event
+        // and has no gameplay effect here; the drop and use actions are
+        // handled by their own packets.
+        switch (packet.action) {
+        case 0: // START_DESTROY_BLOCK
+            if (start_destroy_block_hook) {
+                start_destroy_block_hook(event);
+            }
+            break;
+        case 2: // ABORT_DESTROY_BLOCK
+            if (abort_destroy_block_hook) {
+                abort_destroy_block_hook(event);
+            }
+            break;
+        case 3: // STOP_DESTROY_BLOCK
+            if (stop_destroy_block_hook) {
+                stop_destroy_block_hook(event);
+            }
+            break;
+        default:
+            break;
         }
+        // The acknowledgement releases the client's predicted block change; it
+        // is sent for every player action so a prediction the server ignored
+        // does not stay pending.
         play_cb::block_changed_ack ack{.sequence = packet.sequence};
         send_packet(id, play_cb::block_changed_ack::packet_id, ack,
                     play_cb::encode_block_changed_ack);
@@ -2847,10 +2895,21 @@ void server::impl::handle_play(std::uint64_t id,
             reject(id, "malformed or unexpected packet");
             return;
         }
+        // The reference ignores a slot outside the hotbar instead of asking
+        // the client to revert; the value never reaches gameplay state.
+        constexpr std::int16_t hotbar_slots{9};
+        if (packet.slot < 0 || packet.slot >= hotbar_slots) {
+            log_net.warn("connection {} tried to select hotbar slot {}", id,
+                         packet.slot);
+            return;
+        }
         if (!with_connection(id, [&packet](connection_state_data &data) {
                 data.held_slot = static_cast<std::uint32_t>(packet.slot);
             })) {
             return;
+        }
+        if (held_slot_hook) {
+            held_slot_hook(id, static_cast<std::uint8_t>(packet.slot));
         }
         return;
     }
@@ -3511,7 +3570,6 @@ auto server::start(server_inputs inputs, core::config::view view)
     config.seed = inputs.seed;
     config.registry_catalog_path = std::move(inputs.registry_catalog_path);
     config.spawn_chunks = std::move(inputs.spawn_chunks);
-    config.break_block = std::move(inputs.break_block);
     config.place_block = std::move(inputs.place_block);
 
     if (!inputs.protocol) {
@@ -3537,6 +3595,10 @@ auto server::start(server_inputs inputs, core::config::view view)
     state->input_hook = std::move(inputs.input);
     state->flight_hook = std::move(inputs.flight);
     state->teleport_confirm_hook = std::move(inputs.teleport_confirm);
+    state->held_slot_hook = std::move(inputs.held_slot);
+    state->start_destroy_block_hook = std::move(inputs.start_destroy_block);
+    state->stop_destroy_block_hook = std::move(inputs.stop_destroy_block);
+    state->abort_destroy_block_hook = std::move(inputs.abort_destroy_block);
     state->attack_hook = std::move(inputs.attack);
     state->animation_hook = std::move(inputs.animation);
     state->play_ready_hook = std::move(inputs.play_ready);

@@ -222,10 +222,31 @@ const suite tests = [] {
             net::unpack_block_position(net::pack_block_position(0, 64, 0))};
         expect(origin == net::block_position{.x = 0, .y = 64, .z = 0});
 
-        const auto corner{net::unpack_block_position(
-            net::pack_block_position(0x3FFFFFF, 0xFFF, 0x3FFFFFF))};
-        expect(corner ==
-               net::block_position{.x = 0x3FFFFFF, .y = 0xFFF, .z = 0x3FFFFFF});
+        // The three fields are two's-complement on the wire, so negative
+        // coordinates must decode negative. A decoder that masks the fields
+        // instead reports a block on the far side of the world.
+        const auto negative{
+            net::unpack_block_position(net::pack_block_position(-1, -1, -1))};
+        expect(negative == net::block_position{.x = -1, .y = -1, .z = -1});
+
+        const auto far{net::unpack_block_position(
+            net::pack_block_position(-30'000'000, -64, 12'345'678))};
+        expect(far == net::block_position{
+                          .x = -30'000'000, .y = -64, .z = 12'345'678});
+
+        // The representable ends of each field round trip as themselves.
+        for (const auto x :
+             {std::int32_t{33'554'431}, std::int32_t{-33'554'432}}) {
+            for (const auto z :
+                 {std::int32_t{33'554'431}, std::int32_t{-33'554'432}}) {
+                for (const auto y :
+                     {std::int32_t{2'047}, std::int32_t{-2'048}}) {
+                    expect(net::unpack_block_position(
+                               net::pack_block_position(x, y, z)) ==
+                           net::block_position{.x = x, .y = y, .z = z});
+                }
+            }
+        }
     };
 };
 
