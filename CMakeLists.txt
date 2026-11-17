@@ -121,6 +121,17 @@ if(NOT REFRAIN_VERSION)
     set(REFRAIN_VERSION "${PROJECT_VERSION}")
 endif()
 set(REFRAIN_VERSION "${REFRAIN_VERSION}" CACHE STRING "Refrain release version")
+# `project(VERSION)` accepts numeric components only, while the Conan package
+# version carries a pre-release suffix. Both must name the same release, so a
+# version whose numeric components differ from the project version is a
+# configuration error instead of a binary and an exported package that claim
+# different API versions.
+if(NOT REFRAIN_VERSION MATCHES "^${PROJECT_VERSION}([-+][0-9A-Za-z.+-]*)?$")
+    message(FATAL_ERROR
+            "REFRAIN_VERSION '${REFRAIN_VERSION}' does not carry the CMake "
+            "project version '${PROJECT_VERSION}' as its numeric components; "
+            "update conanfile.py and CMakeLists.txt together")
+endif()
 set(REFRAIN_BRANCH "${REFRAIN_BRANCH}" CACHE STRING "Git branch name")
 set(REFRAIN_COMMIT "${REFRAIN_COMMIT}" CACHE STRING "Git commit hash")
 set(REFRAIN_OUTPUT_DIR "${CMAKE_BINARY_DIR}/bin" CACHE STRING "Runtime output dir")
@@ -1060,9 +1071,13 @@ configure_package_config_file(
     cmake/RefrainConfig.cmake.in
     "${CMAKE_BINARY_DIR}/RefrainConfig.cmake"
     INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/Refrain)
+# The package version is the release version, not just the numeric project
+# components: a 0.1.0-alpha build must not present itself to find_package() as
+# the final 0.1.0 package. The basic version file handles the pre-release
+# suffix because the check and the comparison in it are string operations.
 write_basic_package_version_file(
     "${CMAKE_BINARY_DIR}/RefrainConfigVersion.cmake"
-    VERSION ${PROJECT_VERSION}
+    VERSION ${REFRAIN_VERSION}
     COMPATIBILITY SameMajorVersion)
 install(FILES "${CMAKE_BINARY_DIR}/RefrainConfig.cmake"
               "${CMAKE_BINARY_DIR}/RefrainConfigVersion.cmake"

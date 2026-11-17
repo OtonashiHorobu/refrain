@@ -127,11 +127,10 @@ def pinned_dependencies() -> dict[str, str]:
     """Top-level dependencies from conanfile.py with *default* options.
 
     Mirrors `tools/vendor_check.py::conanfile_requirements`: requirements
-    behind an option that defaults to False (e.g. the deferred `steam-audio`
-    client stack under `options.client`) are not part of the default graph and
-    must not be audited as if they were. Conditions that do not test a recipe
-    option (e.g. `options.with_io_uring and settings.os == "Linux"`) keep both
-    branches, matching vendor_check.
+    behind an option that defaults to False are not part of the default graph
+    and must not be audited as if they were. Conditions that do not test a
+    recipe option (e.g. `options.with_io_uring and settings.os == "Linux"`)
+    keep both branches, matching vendor_check.
     """
     tree = ast.parse(open(os.path.join(ROOT, "conanfile.py"),
                           encoding="utf-8").read())
