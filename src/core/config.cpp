@@ -14,7 +14,6 @@
 #include <charconv>
 #include <cstddef>
 #include <cstdint>
-#include <filesystem>
 #include <map>
 #include <memory>
 #include <ranges>
@@ -832,8 +831,20 @@ namespace {
         return flat_table{};
     }
     if (!required) {
-        std::error_code error;
-        if (!std::filesystem::exists(path, error)) {
+        // A missing optional layer is an empty layer; a layer that exists but
+        // cannot be inspected (permission denied, a parent that is not a
+        // directory) is a failure, not "absent". `status_at` reports those
+        // filesystem errors instead of folding them into a boolean, so a
+        // configuration file that is present but unreadable never silently
+        // falls back to defaults.
+        auto status{io::status_at(path)};
+        if (!status) {
+            return std::unexpected{
+                make_error(status.error().code,
+                           "config: cannot inspect '" + std::string{path} +
+                               "': " + status.error().message)};
+        }
+        if (!status->exists) {
             return flat_table{};
         }
     }
