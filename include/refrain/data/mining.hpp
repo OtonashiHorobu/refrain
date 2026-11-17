@@ -86,6 +86,14 @@ struct tool_mining {
 class block_mining_table {
   public:
     block_mining_table() = default;
+    // The name index owns the records and the dense id lookup stores pointers
+    // into that map; a copy would leave the pointers in the copy pointing at
+    // the source table's nodes. The table is moved into its owner instead.
+    block_mining_table(const block_mining_table &) = delete;
+    auto operator=(const block_mining_table &) -> block_mining_table & = delete;
+    block_mining_table(block_mining_table &&) noexcept = default;
+    auto operator=(block_mining_table &&) noexcept
+        -> block_mining_table & = default;
 
     /// Copy the block mining records of an opened vanilla table. A container
     /// without mining sections produces an empty table.
