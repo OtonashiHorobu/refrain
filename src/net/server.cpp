@@ -2967,6 +2967,27 @@ void server::impl::send_keepalive(std::uint64_t id) {
                 play_cb::encode_keep_alive);
 }
 
+namespace {
+
+/// True when every component of a teleport confirmation is finite.
+///
+/// The confirmed position becomes the authoritative player position and a
+/// chunk coordinate, and the rotation becomes an entity angle; both
+/// conversions are undefined for a NaN and overflow for an infinity. The
+/// reference refuses a movement report with an invalid component and
+/// disconnects the client, and a confirmation is the same class of client
+/// input, so it is refused at the boundary before any connection or player
+/// state is written.
+[[nodiscard]] auto
+finite_teleport_confirmation(const play_sb::accept_teleportation &packet)
+    -> bool {
+    return std::isfinite(packet.x) && std::isfinite(packet.y) &&
+           std::isfinite(packet.z) && std::isfinite(packet.y_rot) &&
+           std::isfinite(packet.x_rot);
+}
+
+} // namespace
+
 void server::impl::handle_play(std::uint64_t id,
                                std::span<const std::byte> body) {
     reader in{body};
@@ -2981,6 +3002,15 @@ void server::impl::handle_play(std::uint64_t id,
         if (auto decoded{play_sb::decode_accept_teleportation(in, packet)};
             !decoded) {
             reject(id, "malformed or unexpected packet");
+            return;
+        }
+        if (!finite_teleport_confirmation(packet)) {
+            log_net.warn(
+                "refused the teleport confirmation of connection {} because "
+                "the reported position is not finite",
+                id);
+            send_play_disconnect(id, "Invalid player movement");
+            close(id);
             return;
         }
         teleport_confirm_event event{};

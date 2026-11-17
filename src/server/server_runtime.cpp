@@ -31,6 +31,7 @@
 #include <refrain/server/console_commands.hpp>
 #include <refrain/server/console_service.hpp>
 #include <refrain/server/content_reload_inputs.hpp>
+#include <refrain/server/entity_broadcast.hpp>
 #include <refrain/server/entity_broadcaster.hpp>
 #include <refrain/server/inventory_sync.hpp>
 #include <refrain/server/maintenance_service.hpp>
@@ -133,6 +134,18 @@ constexpr std::uint64_t max_console_file_bytes = 1ULL * 1024ULL * 1024ULL;
         break;
     }
     return name + " died";
+}
+
+/// Chunk coordinate of a player position for the chunk tracker.
+///
+/// A finite position can still lie outside the addressable world; the clamp
+/// keeps the cast inside its integer range. The movement and teleport
+/// boundaries reject such a report, so this only protects a record a console
+/// command or a provider placed outside the envelope.
+[[nodiscard]] auto view_chunk(double value) -> std::int32_t {
+    const auto clamped{
+        std::clamp(value, -world_horizontal_limit, world_horizontal_limit)};
+    return static_cast<std::int32_t>(std::floor(clamped / 16.0));
 }
 
 /// Process-wide lifecycle flags shared with the console and watchdog threads.
@@ -927,9 +940,7 @@ auto run_server(const server_run_options &options,
             [&views, view_distance](std::uint64_t connection,
                                     const sim::player_state &record) {
                 static_cast<void>(views.update(
-                    connection,
-                    static_cast<std::int32_t>(std::floor(record.x / 16.0)),
-                    static_cast<std::int32_t>(std::floor(record.z / 16.0)),
+                    connection, view_chunk(record.x), view_chunk(record.z),
                     std::min(record.view_distance, view_distance)));
             };
         if (auto *sim_level{world.sim_world()}; sim_level != nullptr) {
@@ -972,16 +983,20 @@ auto run_server(const server_run_options &options,
         }
         // A provider-owned simulation decides movement itself; the
         // runtime only applies the projection so visibility and chunk
-        // streaming keep following the player.
+        // streaming keep following the player. A non-finite report has no
+        // position the projection can hold, so it is dropped before the store
+        // sees it.
+        if (!finite_position(event.x, event.y, event.z, event.yaw,
+                             event.pitch)) {
+            return;
+        }
         static_cast<void>(players.update_position(event.connection, event.x,
                                                   event.y, event.z, event.yaw,
                                                   event.pitch));
         if (const auto *player{players.player_of(event.connection)};
             player != nullptr) {
             static_cast<void>(views.update(
-                event.connection,
-                static_cast<std::int32_t>(std::floor(player->x / 16.0)),
-                static_cast<std::int32_t>(std::floor(player->z / 16.0)),
+                event.connection, view_chunk(player->x), view_chunk(player->z),
                 std::min(player->view_distance, view_distance)));
         }
     };
@@ -1024,6 +1039,22 @@ auto run_server(const server_run_options &options,
     network_inputs.teleport_confirm =
         [&players, &views, view_distance, &world,
          &mining](const refrain::net::teleport_confirm_event &event) {
+            // The reported position becomes the authoritative record and a
+            // chunk coordinate below. A non-finite component or a position
+            // outside the addressable world has no valid conversion, so the
+            // confirmation is dropped before anything is written. The network
+            // layer disconnects such a client before this callback runs; a
+            // transport provider or an embedding can still deliver the event.
+            if (!finite_position(event.x, event.y, event.z, event.yaw,
+                                 event.pitch) ||
+                !addressable_position(event.x, event.y, event.z)) {
+                log_net.warn(
+                    "refused the teleport confirmation of connection {} "
+                    "because the reported position is not finite or outside "
+                    "the world",
+                    event.connection);
+                return;
+            }
             if (mining) {
                 mining->reset(event.connection);
             }
@@ -1044,9 +1075,8 @@ auto run_server(const server_run_options &options,
                     record->fall_distance = 0.0;
                     record->ground_y = event.y;
                     static_cast<void>(views.update(
-                        event.connection,
-                        static_cast<std::int32_t>(std::floor(record->x / 16.0)),
-                        static_cast<std::int32_t>(std::floor(record->z / 16.0)),
+                        event.connection, view_chunk(record->x),
+                        view_chunk(record->z),
                         std::min(record->view_distance, view_distance)));
                 }
                 return;
@@ -1069,11 +1099,9 @@ auto run_server(const server_run_options &options,
                 players.set_view_distance(event.connection, clamped_distance));
             const auto player{players.player_of(event.connection)};
             if (player != nullptr) {
-                static_cast<void>(views.update(
-                    event.connection,
-                    static_cast<std::int32_t>(std::floor(player->x / 16.0)),
-                    static_cast<std::int32_t>(std::floor(player->z / 16.0)),
-                    clamped_distance));
+                static_cast<void>(
+                    views.update(event.connection, view_chunk(player->x),
+                                 view_chunk(player->z), clamped_distance));
             }
         };
     network_inputs.attack = [&players, &broadcaster, &active_listener,

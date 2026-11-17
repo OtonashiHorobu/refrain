@@ -6,6 +6,8 @@
 
 #include <boost/ut.hpp>
 
+#include <limits>
+
 using namespace boost::ut;
 using namespace refrain::server;
 
@@ -66,6 +68,51 @@ suite<"server/entity-broadcast"> entity_broadcast_tests = [] {
         const auto move{
             choose_entity_move(at(0.0, 64.0, 0.0), at(16.0, 64.0, 0.0))};
         expect(move.kind == entity_move_kind::teleport);
+    };
+
+    "a non-finite reported position produces no entity packet"_test = [] {
+        const auto nan{std::numeric_limits<double>::quiet_NaN()};
+        const auto inf{std::numeric_limits<double>::infinity()};
+        expect(
+            choose_entity_move(at(0.0, 64.0, 0.0), at(nan, 64.0, 0.0)).kind ==
+            entity_move_kind::none);
+        expect(
+            choose_entity_move(at(0.0, 64.0, 0.0), at(inf, 64.0, 0.0)).kind ==
+            entity_move_kind::none);
+        expect(choose_entity_move(at(0.0, 64.0, 0.0),
+                                  at(0.0, 64.0, 0.0, inf, 0.0F))
+                   .kind == entity_move_kind::none);
+        expect(choose_entity_move(at(0.0, 64.0, 0.0),
+                                  at(0.0, 64.0, 0.0, 0.0F, nan))
+                   .kind == entity_move_kind::none);
+    };
+
+    "a non-finite previous position falls back to a teleport"_test = [] {
+        const auto nan{std::numeric_limits<double>::quiet_NaN()};
+        expect(
+            choose_entity_move(at(nan, 64.0, 0.0), at(0.25, 64.0, 0.0)).kind ==
+            entity_move_kind::teleport);
+        expect(choose_entity_move(at(0.0, 64.0, 0.0), at(1.0e300, 64.0, 0.0))
+                   .kind == entity_move_kind::teleport);
+    };
+
+    "a finite position predicate rejects a non-finite component"_test = [] {
+        const auto nan{std::numeric_limits<double>::quiet_NaN()};
+        const auto inf{std::numeric_limits<double>::infinity()};
+        expect(finite_position(0.5, 64.0, 0.5, 0.0F, 0.0F));
+        expect(!finite_position(nan, 64.0, 0.5, 0.0F, 0.0F));
+        expect(!finite_position(0.5, inf, 0.5, 0.0F, 0.0F));
+        expect(!finite_position(0.5, 64.0, nan, 0.0F, 0.0F));
+        expect(!finite_position(0.5, 64.0, 0.5, inf, 0.0F));
+        expect(!finite_position(0.5, 64.0, 0.5, 0.0F, nan));
+        expect(addressable_position(0.5, 64.0, 0.5));
+        expect(addressable_position(world_horizontal_limit, 64.0,
+                                    -world_horizontal_limit));
+        expect(addressable_position(0.5, world_vertical_limit, 0.5));
+        expect(!addressable_position(world_horizontal_limit + 1.0, 64.0, 0.5));
+        expect(!addressable_position(0.5, 64.0, world_horizontal_limit + 1.0));
+        expect(!addressable_position(0.5, world_vertical_limit + 1.0, 0.5));
+        expect(!addressable_position(nan, 64.0, 0.5));
     };
 
     "the tracking range includes the boundary"_test = [] {

@@ -23,6 +23,32 @@ inline constexpr std::int64_t entity_move_limit = 32767;
 /// the value is configurable through `network.entity_tracking_range`.
 inline constexpr double entity_tracking_range_blocks = 64.0;
 
+/// Half-width of the addressable world, the reference's horizontal clamp for a
+/// client-reported coordinate.
+inline constexpr double world_horizontal_limit = 3.0e7;
+
+/// Half-height of the addressable position range, the reference's vertical
+/// clamp for a client-reported coordinate.
+inline constexpr double world_vertical_limit = 2.0e7;
+
+/// True when every reported position and view component is finite.
+///
+/// A non-finite component cannot be converted to a chunk coordinate, a
+/// movement delta or a rotation byte: the conversion is undefined for a NaN
+/// and overflows its integer type for an infinity. Every consumer refuses the
+/// report before the first conversion.
+[[nodiscard]] auto finite_position(double x, double y, double z, float yaw,
+                                   float pitch) -> bool;
+
+/// True when a reported position is finite and inside the addressable world.
+///
+/// A finite value outside the envelope still overflows a chunk-coordinate
+/// conversion, and the reference clamps a client-reported coordinate to the
+/// same range before it applies it. A report outside the envelope describes a
+/// place the server can never have assigned, so consumers refuse it instead of
+/// clamping it.
+[[nodiscard]] auto addressable_position(double x, double y, double z) -> bool;
+
 enum class entity_move_kind {
     none,
     teleport,

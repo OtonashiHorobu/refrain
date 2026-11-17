@@ -13,6 +13,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <random>
 #include <span>
 #include <string>
@@ -349,6 +350,31 @@ suite<"server/entity-broadcaster"> entity_broadcaster_tests = [] {
 
         expect(gateway.sent.empty());
     };
+
+    "a record outside the addressable world is skipped by the broadcast"_test =
+        [] {
+            sim::player_table table{};
+            session::play_session players{table};
+            join(players, 1, 0.0, 0.0);
+            join(players, 2, 32.0, 0.0);
+            support::fake_play_gateway gateway{};
+            entity_broadcaster broadcaster{gateway, 16};
+
+            broadcaster.tick(players);
+            expect(!gateway.sent.empty());
+            gateway.sent.clear();
+
+            // A provider that bypassed the movement and teleport boundaries
+            // left a position the visibility index cannot key. The record must
+            // not reach a chunk or movement conversion, so the tick emits
+            // nothing for it.
+            static_cast<void>(players.update_position(
+                2, std::numeric_limits<double>::quiet_NaN(), 64.0, 0.0, 0.0F,
+                0.0F));
+            broadcaster.tick(players);
+
+            expect(gateway.sent.empty());
+        };
 
     "players outside the tracking range never see each other"_test = [] {
         sim::player_table table{};
