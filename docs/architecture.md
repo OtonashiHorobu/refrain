@@ -226,12 +226,15 @@ position: `world::submit_player_move()` accepts it only when it is finite,
 inside the teleport-sized displacement gate, reachable through the block
 collision sweep (Y, then X, then Z, with step-up over partial shapes) and —
 for a body that is not flying — within the walking speed envelope and not
-higher than a jump can reach above the last ground contact. The runtime
-answers a rejected request with a teleport back to the authoritative position,
-and the client's acknowledgement of that teleport is adopted without a second
-validation. A provider-owned simulation keeps its own movement rules; the
-runtime then only projects the reported position for visibility and chunk
-streaming.
+higher than a jump can reach above the last ground contact. The reported body
+itself must be collision-free as well: a request whose player box overlaps a
+solid block is rejected even when the sweep stops within the position
+tolerance, so an accepted report can never become the next report's anchor
+inside a wall. The runtime answers a rejected request with a teleport back to
+the authoritative position, and the client's acknowledgement of that teleport
+is adopted without a second validation. A provider-owned simulation keeps its
+own movement rules; the runtime then only projects the reported position for
+visibility and chunk streaming.
 
 A record owned by a network connection is client-driven: the simulation only
 applies its validated requests and never predicts its motion between reports.
@@ -426,8 +429,11 @@ what lets the client interpolate the cycle between syncs; a joining client
 receives the same snapshot in its login burst. Weather follows the reference
 state machine: rain and thunder timers resample from the reference's uniform
 ranges, the rain and thunder levels ease by 0.01 per tick and the runtime
-broadcasts the level changes as game events. Clock and weather are persisted
-into the world's saved data on flush and restored on the next open.
+broadcasts the level changes as game events. A resample draw is keyed by the
+world seed and the level's game time rather than by a mutable stream, so two
+worlds with different seeds get different weather and a reload continues the
+sequence the running world had. Clock and weather are persisted into the
+world's saved data on flush and restored on the next open.
 
 ### Chunk residency
 

@@ -132,20 +132,27 @@ auto block_registry::size() const -> std::size_t {
 
 world::world(store_type store)
     : store_{std::move(store)},
-      entities_{std::make_unique<detail::entity_store>()}, light_{*this} {}
+      entities_{std::make_unique<detail::entity_store>()},
+      events_{std::make_unique<core::events::bus>()}, light_{*this} {}
 
 world::world(store_type &store, borrowed_tag)
     : store_{}, borrowed_{&store},
-      entities_{std::make_unique<detail::entity_store>()}, light_{*this} {}
+      entities_{std::make_unique<detail::entity_store>()},
+      events_{std::make_unique<core::events::bus>()}, light_{*this} {}
 
 world::world(world &&other) noexcept
     : store_{std::move(other.store_)}, borrowed_{other.borrowed_},
       registry_{std::move(other.registry_)}, chunks_{std::move(other.chunks_)},
       tickets_{std::move(other.tickets_)}, players_{std::move(other.players_)},
+      items_{std::move(other.items_)},
       light_table_{std::move(other.light_table_)},
-      entities_{std::move(other.entities_)}, rng_{other.rng_},
-      tick_{other.tick_}, pending_edits_{std::move(other.pending_edits_)},
-      light_{*this}, clock_{other.clock_} {
+      zstd_policy_{other.zstd_policy_}, entities_{std::move(other.entities_)},
+      spawn_{other.spawn_}, difficulty_{other.difficulty_},
+      hardcore_{other.hardcore_}, events_{std::move(other.events_)},
+      timers_{std::move(other.timers_)}, next_timer_id_{other.next_timer_id_},
+      rng_{other.rng_}, tick_{other.tick_},
+      pending_edits_{std::move(other.pending_edits_)}, light_{*this},
+      clock_{other.clock_} {
     other.borrowed_ = nullptr;
     light_.attach(*this);
 }
@@ -156,11 +163,22 @@ auto world::operator=(world &&other) noexcept -> world & {
         borrowed_ = other.borrowed_;
         other.borrowed_ = nullptr;
         registry_ = std::move(other.registry_);
+        // The classification cache is derived from the registry keys; the
+        // registry just changed, so every cached entry is stale.
+        collisions_.clear();
         chunks_ = std::move(other.chunks_);
         tickets_ = std::move(other.tickets_);
         players_ = std::move(other.players_);
+        items_ = std::move(other.items_);
         light_table_ = std::move(other.light_table_);
+        zstd_policy_ = other.zstd_policy_;
         entities_ = std::move(other.entities_);
+        spawn_ = other.spawn_;
+        difficulty_ = other.difficulty_;
+        hardcore_ = other.hardcore_;
+        events_ = std::move(other.events_);
+        timers_ = std::move(other.timers_);
+        next_timer_id_ = other.next_timer_id_;
         rng_ = other.rng_;
         tick_ = other.tick_;
         pending_edits_ = std::move(other.pending_edits_);
@@ -281,6 +299,12 @@ auto world::decode_chunk(storage_chunk storage, const chunk_pos &pos)
 }
 
 auto world::spawn_column_entities(chunk &column) -> status {
+    return spawn_column_entities(column, {});
+}
+
+auto world::spawn_column_entities(chunk &column,
+                                  std::span<const entity_id> entity_ids)
+    -> status {
     if (!column.entity_ids.empty()) {
         // A column that already holds ids was spawned before: spawning again
         // would create a second copy of the same structure entities.
@@ -290,17 +314,40 @@ auto world::spawn_column_entities(chunk &column) -> status {
                         column.pos.x, column.pos.z))};
     }
     const auto &records{column.storage.entities};
+    if (!entity_ids.empty() && entity_ids.size() != records.size()) {
+        return std::unexpected{make_error(
+            error_code::parse_error,
+            fmt::format("chunk ({}, {}) stored {} entities but {} runtime ids "
+                        "were preserved",
+                        column.pos.x, column.pos.z, records.size(),
+                        entity_ids.size()))};
+    }
     if (records.empty()) {
         return status_ok();
     }
     column.entity_ids.reserve(records.size());
-    for (const auto &record : records) {
-        auto id{players_.allocate_entity_id()};
-        if (!id) {
-            // Roll back the ids allocated for this column so a failed load
-            // leaves no orphaned entities behind.
-            despawn_column_entities(column);
-            return std::unexpected{std::move(id.error())};
+    for (std::size_t index{0}; index < records.size(); ++index) {
+        const auto &record{records[index]};
+        auto id{std::optional<entity_id>{}};
+        if (entity_ids.empty()) {
+            auto allocated{players_.allocate_entity_id()};
+            if (!allocated) {
+                // Roll back the ids allocated for this column so a failed load
+                // leaves no orphaned entities behind.
+                despawn_column_entities(column);
+                return std::unexpected{std::move(allocated.error())};
+            }
+            id = *allocated;
+        } else {
+            id = entity_ids[index];
+            if (*id == 0 || (index > 0 && *id <= entity_ids[index - 1])) {
+                despawn_column_entities(column);
+                return std::unexpected{make_error(
+                    error_code::parse_error,
+                    fmt::format("chunk ({}, {}) has out-of-order preserved "
+                                "entity ids",
+                                column.pos.x, column.pos.z))};
+            }
         }
         static_cast<void>(entities_->create(*id, record.id, record.x, record.y,
                                             record.z, record.yaw, record.pitch,
@@ -347,6 +394,12 @@ auto world::chunk_entities(const chunk_pos &pos) const
 }
 
 auto world::ensure_chunk(const chunk_pos &pos) -> result<chunk *> {
+    return load_chunk(pos, {});
+}
+
+auto world::load_chunk(const chunk_pos &pos,
+                       std::span<const entity_id> entity_ids)
+    -> result<chunk *> {
     if (auto *found{find_chunk(pos)}; found != nullptr) {
         return found;
     }
@@ -363,7 +416,8 @@ auto world::ensure_chunk(const chunk_pos &pos) -> result<chunk *> {
     }
     auto [position, inserted]{chunks_.emplace(pos, std::move(*decoded))};
     static_cast<void>(inserted);
-    if (auto spawned{spawn_column_entities(position->second)}; !spawned) {
+    if (auto spawned{spawn_column_entities(position->second, entity_ids)};
+        !spawned) {
         chunks_.erase(position);
         return std::unexpected{std::move(spawned.error())};
     }
@@ -528,7 +582,7 @@ auto world::set_blocks(std::span<const block_change> changes)
     if (!applied.empty()) {
         try {
             block_batch_event event{.changes = applied};
-            events_.publish(event);
+            events_->publish(event);
         } catch (...) {
             // A listener failure must not roll back applied block changes.
         }
@@ -984,9 +1038,16 @@ auto world::rebuild_palette_in_place(unsigned threads, int zstd_level)
     // must not turn the rebuild into a failure.
     std::vector<chunk_pos> positions;
     positions.reserve(chunks_.size());
+    // The reload has to reuse the logical ids of generated column entities:
+    // the rest of the simulation (clients, replay, the state hash) already
+    // knows those ids, and allocating new ones would change `state_hash()`
+    // even though nothing about the world changed.
+    std::map<chunk_pos, std::vector<entity_id>, chunk_order> column_entities;
     for (const auto &[pos, column] : chunks_) {
-        static_cast<void>(column);
         positions.push_back(pos);
+        if (!column.entity_ids.empty()) {
+            column_entities.emplace(pos, column.entity_ids);
+        }
     }
     std::sort(positions.begin(), positions.end(), chunk_order{});
 
@@ -1023,7 +1084,12 @@ auto world::rebuild_palette_in_place(unsigned threads, int zstd_level)
         return std::unexpected{std::move(level.error())};
     }
     for (const auto &pos : positions) {
-        auto loaded{ensure_chunk(pos)};
+        auto reused{std::span<const entity_id>{}};
+        if (const auto found{column_entities.find(pos)};
+            found != column_entities.end()) {
+            reused = found->second;
+        }
+        auto loaded{load_chunk(pos, reused)};
         if (!loaded) {
             // A reload failure leaves a partial runtime view; the store itself
             // stays valid. Prefer the maintenance error when there is one.
@@ -1101,6 +1167,10 @@ auto world::load_clock_state() -> status {
     if (auto projection{store_ref().level()}; projection) {
         clock_.set_game_time(projection->time);
         clock_.set_total_ticks(projection->time);
+        // The weather draws are keyed by the world seed; opening a stored
+        // world has to recover it before the first draw, otherwise a reloaded
+        // world would draw a different weather sequence than the running one.
+        clock_.seed(static_cast<std::uint64_t>(projection->seed));
     }
     return ::refrain::sim::read_world_clock(store_ref().objects(), clock_);
 }
@@ -1198,7 +1268,7 @@ void world::tick() noexcept {
     // down the sim tick, and the bus contract is single-threaded.
     try {
         tick_event event{.tick = tick_};
-        events_.publish(event);
+        events_->publish(event);
     } catch (...) {
         // The listener failed; the tick itself completed.
     }
@@ -1231,7 +1301,12 @@ void world::tick() noexcept {
     }
 }
 
-void world::seed(std::uint64_t value) noexcept { rng_.seed(value); }
+void world::seed(std::uint64_t value) noexcept {
+    rng_.seed(value);
+    // Weather draws are keyed by the world seed, so the clock has to carry the
+    // same seed the simulation does.
+    clock_.seed(value);
+}
 
 auto world::random() noexcept -> rng & { return rng_; }
 
@@ -1424,8 +1499,14 @@ void world::tick_entities() noexcept {
         if (value.vy <= 0.0) {
             // Collision: the entity is a point at its feet; clamp to
             // the first solid block crossed in this tick (no AABB sweep yet).
-            const auto start{static_cast<std::int32_t>(std::floor(before_y))};
-            const auto end{static_cast<std::int32_t>(std::floor(value.y))};
+            // Both scan bounds are derived through the clamped block helper:
+            // the block model only covers the build range, and an entity can
+            // be spawned (or fall) far outside it. Deriving the rows from a
+            // clamped Y makes the narrowing conversion defined and bounds the
+            // downward scan to the build height instead of the whole distance
+            // between two unclamped coordinates.
+            const auto start{static_cast<std::int32_t>(block_y_of(before_y))};
+            const auto end{static_cast<std::int32_t>(block_y_of(value.y))};
             for (auto block_y{start}; block_y >= end; --block_y) {
                 const auto block{block_at(
                     block_pos{static_cast<std::int32_t>(std::floor(value.x)),
@@ -1687,20 +1768,21 @@ auto world::player_box(double x, double y, double z) noexcept -> player_aabb {
 }
 
 auto world::player_box_collides(const player_aabb &box) const noexcept -> bool {
+    // Vertical body coordinates can lie outside the modeled build range (the
+    // void, a console command, a modified client). Block lookups only exist
+    // inside that range and the narrowing conversion of a huge double is
+    // undefined, so the Y rows are derived through the clamped block helper: a
+    // body above or below the range overlaps no block.
+    const auto min_y{static_cast<std::int32_t>(block_y_of(box.min_y))};
+    const auto max_y{
+        static_cast<std::int32_t>(block_y_of(box.max_y - collision_epsilon))};
     const auto min_x{static_cast<std::int32_t>(std::floor(box.min_x))};
     const auto max_x{
         static_cast<std::int32_t>(std::floor(box.max_x - collision_epsilon))};
-    const auto min_y{static_cast<std::int32_t>(std::floor(box.min_y))};
-    const auto max_y{
-        static_cast<std::int32_t>(std::floor(box.max_y - collision_epsilon))};
     const auto min_z{static_cast<std::int32_t>(std::floor(box.min_z))};
     const auto max_z{
         static_cast<std::int32_t>(std::floor(box.max_z - collision_epsilon))};
     for (std::int32_t y{min_y}; y <= max_y; ++y) {
-        if (y < std::numeric_limits<std::int16_t>::min() ||
-            y > std::numeric_limits<std::int16_t>::max()) {
-            continue;
-        }
         for (std::int32_t z{min_z}; z <= max_z; ++z) {
             for (std::int32_t x{min_x}; x <= max_x; ++x) {
                 const auto &shape{collision_of(
@@ -1730,11 +1812,7 @@ auto world::player_box_grounded(const player_aabb &box) const noexcept -> bool {
     const auto max_z{
         static_cast<std::int32_t>(std::floor(box.max_z - collision_epsilon))};
     const auto support_y{
-        static_cast<std::int32_t>(std::floor(box.min_y - collision_epsilon))};
-    if (support_y < std::numeric_limits<std::int16_t>::min() ||
-        support_y > std::numeric_limits<std::int16_t>::max()) {
-        return false;
-    }
+        static_cast<std::int32_t>(block_y_of(box.min_y - collision_epsilon))};
     const auto top{static_cast<double>(support_y)};
     for (std::int32_t z{min_z}; z <= max_z; ++z) {
         for (std::int32_t x{min_x}; x <= max_x; ++x) {
@@ -1884,13 +1962,23 @@ auto world::submit_player_move(player_state &player,
     }
     const auto spectator{player.game_mode == game_mode_spectator};
     if (!spectator) {
+        // The reported body itself must be collision-free. The sweep
+        // comparison below only bounds how far the report may end from the
+        // collision-resolved position, so a request that stops exactly at the
+        // tolerance boundary inside a wall would be accepted and become the
+        // next anchor; repeating it walks the body through the wall. A
+        // request whose own box overlaps a solid block is never a position the
+        // server can stand at.
+        if (player_box_collides(player_box(request.x, request.y, request.z))) {
+            return player_move_verdict::corrected;
+        }
         const auto feet{block_at(
             block_pos{static_cast<std::int32_t>(std::floor(anchor_x)),
-                      static_cast<std::int16_t>(std::floor(anchor_y + 0.1)),
+                      block_y_of(anchor_y + 0.1),
                       static_cast<std::int32_t>(std::floor(anchor_z))})};
         const auto body{block_at(
             block_pos{static_cast<std::int32_t>(std::floor(anchor_x)),
-                      static_cast<std::int16_t>(std::floor(anchor_y + 0.9)),
+                      block_y_of(anchor_y + 0.9),
                       static_cast<std::int32_t>(std::floor(anchor_z))})};
         const auto in_fluid{block_fluid(feet) != fluid_kind::none ||
                             block_fluid(body) != fluid_kind::none};

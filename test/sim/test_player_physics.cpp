@@ -13,6 +13,7 @@
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
+#include <limits>
 #include <string>
 #include <system_error>
 
@@ -344,6 +345,128 @@ suite player_physics_tests = [] {
             expect(!player->has_move_request);
         });
     };
+
+    "sim/player/submit rejects a request that stops inside a wall at the tolerance boundary"_test =
+        [] {
+            with_world([](sim::world &level) {
+                const auto stone{*level.registry().find("minecraft:stone")};
+                for (std::int16_t y{16}; y <= 18; ++y) {
+                    expect(level.set_block({1, y, 0}, stone).has_value());
+                }
+                // The body stands flush against the wall: its box ends exactly
+                // on the wall face at x=1.0.
+                auto *player{add_player(level, 0.7, 16.0, 0.5)};
+                expect(player != nullptr);
+                if (player == nullptr) {
+                    return;
+                }
+                level.tick();
+                expect(std::abs(player->x - 0.7) < 1.0e-9);
+                // The collision sweep stops at the wall face, exactly 0.25
+                // blocks from the requested position, so the tolerance alone
+                // would accept this report and make it the next anchor.
+                const auto verdict{level.submit_player_move(
+                    *player,
+                    sim::player_move_request{
+                        .x = 0.95, .y = 16.0, .z = 0.5, .on_ground = true})};
+                expect(verdict == sim::player_move_verdict::corrected);
+                expect(!player->has_move_request);
+                expect(std::abs(player->x - 0.7) < 1.0e-9);
+                // Repeating the inside-the-wall report cannot ratchet the
+                // anchor through the wall either.
+                for (int step{2}; step <= 6; ++step) {
+                    const auto target{0.7 + 0.25 * step};
+                    const auto repeated{level.submit_player_move(
+                        *player, sim::player_move_request{.x = target,
+                                                          .y = 16.0,
+                                                          .z = 0.5,
+                                                          .on_ground = true})};
+                    expect(repeated == sim::player_move_verdict::corrected)
+                        << step;
+                    expect(!player->has_move_request) << step;
+                    expect(std::abs(player->x - 0.7) < 1.0e-9) << step;
+                }
+            });
+        };
+
+    "sim/player/submit accepts a request flush against a wall"_test = [] {
+        with_world([](sim::world &level) {
+            const auto stone{*level.registry().find("minecraft:stone")};
+            for (std::int16_t y{16}; y <= 18; ++y) {
+                expect(level.set_block({1, y, 0}, stone).has_value());
+            }
+            auto *player{add_player(level, 0.5, 16.0, 0.5)};
+            expect(player != nullptr);
+            if (player == nullptr) {
+                return;
+            }
+            level.tick();
+            // The body ends exactly on the wall face; touching is not a
+            // penetration.
+            const auto verdict{level.submit_player_move(
+                *player,
+                sim::player_move_request{
+                    .x = 0.7, .y = 16.0, .z = 0.5, .on_ground = true})};
+            expect(verdict == sim::player_move_verdict::accepted);
+            level.tick();
+            expect(std::abs(player->x - 0.7) < 1.0e-9);
+        });
+    };
+
+    "sim/player/vertical positions clamp to the build range for block lookups"_test =
+        [] {
+            using limits = std::numeric_limits<double>;
+            const auto lowest{
+                static_cast<std::int16_t>(sim::world::build_min_y())};
+            const auto highest{
+                static_cast<std::int16_t>(sim::world::build_max_y())};
+            expect(sim::block_y_of(16.9) == 16);
+            expect(sim::block_y_of(static_cast<double>(highest) + 0.5) ==
+                   highest);
+            expect(sim::block_y_of(static_cast<double>(lowest) - 0.5) ==
+                   lowest);
+            expect(sim::block_y_of(1.0e30) == highest);
+            expect(sim::block_y_of(-1.0e30) == lowest);
+            expect(sim::block_y_of(limits::infinity()) == highest);
+            expect(sim::block_y_of(-limits::infinity()) == lowest);
+            expect(sim::block_y_of(limits::quiet_NaN()) == highest);
+        };
+
+    "sim/player/absurd heights do not overflow the block coordinate conversion"_test =
+        [] {
+            with_world([](sim::world &level) {
+                // A console placement can put a record far outside the build
+                // range; every block lookup below it has to clamp first.
+                auto *player{add_player(level, 0.5, 1.0e30, 0.5)};
+                expect(player != nullptr);
+                if (player == nullptr) {
+                    return;
+                }
+                level.set_player_position(*player, 0.5, -1.0e30, 0.5);
+                expect(!level.player_overlaps_solid(*player));
+                level.set_player_position(*player, 0.5, 1.0e30, 0.5);
+                expect(!level.player_overlaps_solid(*player));
+                const auto verdict{level.submit_player_move(
+                    *player,
+                    sim::player_move_request{
+                        .x = 0.5, .y = 1.0e30, .z = 0.5, .on_ground = false})};
+                expect(verdict == sim::player_move_verdict::accepted);
+                for (int tick{0}; tick < 5; ++tick) {
+                    level.tick();
+                }
+                expect(std::isfinite(player->y));
+                expect(player->health == 20.0F);
+                // A position just above the build ceiling falls normally; the
+                // block lookups underneath it saturate at the ceiling instead
+                // of converting an out-of-range coordinate.
+                level.set_player_position(*player, 0.5, 1100.0, 0.5);
+                for (int tick{0}; tick < 3; ++tick) {
+                    level.tick();
+                }
+                expect(player->y < 1100.0);
+                expect(player->y > 1000.0);
+            });
+        };
 
     "sim/player/submit rejects a two-block jump"_test = [] {
         with_world([](sim::world &level) {

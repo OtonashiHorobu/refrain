@@ -18,6 +18,7 @@
 #include <filesystem>
 #include <string>
 #include <system_error>
+#include <vector>
 
 namespace {
 
@@ -188,9 +189,118 @@ suite<"sim/world-clock"> world_clock_tests = [] {
         expect(left.thunder_time == right.thunder_time);
         expect(left.rain_level == right.rain_level);
     };
+    "the weather sequence is keyed by the seed"_test = [] {
+        sim::world_clock first{12345};
+        sim::world_clock second{54321};
+        sim::world_clock repeat{12345};
+        bool differs{false};
+        for (int tick{0}; tick < 200; ++tick) {
+            first.tick();
+            second.tick();
+            repeat.tick();
+            expect(repeat.weather().rain_time == first.weather().rain_time)
+                << tick;
+            expect(repeat.weather().thunder_time ==
+                   first.weather().thunder_time)
+                << tick;
+            if (first.weather().rain_time != second.weather().rain_time ||
+                first.weather().thunder_time != second.weather().thunder_time) {
+                differs = true;
+            }
+        }
+        expect(differs) << "two seeds must not share one weather sequence";
+    };
 };
 
 suite<"sim/world-clock/world"> world_clock_world_tests = [] {
+    "worlds created with different seeds do not share a weather sequence"_test =
+        [] {
+            world_fixture first_fixture{};
+            world_fixture second_fixture{};
+            const auto first_path{(first_fixture.directory / "world").string()};
+            const auto second_path{
+                (second_fixture.directory / "world").string()};
+            expect(
+                world::create_world(first_path, 111, "weather-a").has_value());
+            expect(
+                world::create_world(second_path, 222, "weather-b").has_value());
+            auto first{sim::world::open(first_path)};
+            auto second{sim::world::open(second_path)};
+            expect(first.has_value());
+            expect(second.has_value());
+            if (!first || !second) {
+                return;
+            }
+            // The first tick samples the pending rain and thunder delays.
+            first->tick();
+            second->tick();
+            const auto left{first->clock().weather()};
+            const auto right{second->clock().weather()};
+            expect(left.rain_time != right.rain_time ||
+                   left.thunder_time != right.thunder_time);
+        };
+
+    "a reopened world continues the weather sequence it was saved at"_test =
+        [] {
+            world_fixture fixture{};
+            const auto path{(fixture.directory / "world").string()};
+            expect(world::create_world(path, 424242, "weather").has_value());
+            std::vector<sim::weather_snapshot> expected{};
+            sim::weather_snapshot saved{};
+            {
+                auto opened{sim::world::open(path)};
+                expect(opened.has_value());
+                if (!opened) {
+                    return;
+                }
+                // A short rain timer makes the continuation cross a duration
+                // resample, so restoring the weather derivation is observable
+                // in the timer values and not only in the countdown.
+                opened->clock().set_weather(true, false, 0, 4, 0);
+                for (int tick{0}; tick < 2; ++tick) {
+                    opened->tick();
+                }
+                auto flushed{opened->flush()};
+                expect(flushed.has_value())
+                    << (flushed ? "" : flushed.error().message);
+                if (!flushed) {
+                    return;
+                }
+                saved = opened->clock().weather();
+                for (int tick{0}; tick < 120; ++tick) {
+                    opened->tick();
+                    expected.push_back(opened->clock().weather());
+                }
+            }
+            auto reopened{sim::world::open(path)};
+            expect(reopened.has_value())
+                << (reopened ? "" : reopened.error().message);
+            if (!reopened) {
+                return;
+            }
+            const auto restored{reopened->clock().weather()};
+            expect(restored.raining == saved.raining);
+            expect(restored.thundering == saved.thundering);
+            expect(restored.rain_time == saved.rain_time);
+            expect(restored.thunder_time == saved.thunder_time);
+            expect(restored.rain_level == saved.rain_level);
+            expect(restored.thunder_level == saved.thunder_level);
+            for (std::size_t index{0}; index < expected.size(); ++index) {
+                reopened->tick();
+                const auto actual{reopened->clock().weather()};
+                expect(actual.raining == expected[index].raining) << index;
+                expect(actual.thundering == expected[index].thundering)
+                    << index;
+                expect(actual.rain_time == expected[index].rain_time) << index;
+                expect(actual.thunder_time == expected[index].thunder_time)
+                    << index;
+                expect(actual.rain_level == expected[index].rain_level)
+                    << index;
+                expect(actual.thunder_level == expected[index].thunder_level)
+                    << index;
+            }
+        };
+
     "a world ticks its clock and restores it from stored data"_test = [] {
         world_fixture fixture{};
         const auto path{(fixture.directory / "world").string()};

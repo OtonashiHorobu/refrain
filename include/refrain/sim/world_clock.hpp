@@ -15,13 +15,15 @@
 // flag by 0.01 per tick so a rain front ramps over a hundred ticks instead of
 // appearing instantly.
 //
-// The distribution draws use a dedicated random stream, so weather does not
-// perturb the simulation's per-tick draw (the state hash covers the tick draw).
+// A duration draw is keyed by the world seed and the level's game time rather
+// than by a mutable stream. Two worlds with different seeds therefore get
+// different weather, the weather does not perturb the simulation's per-tick
+// draw (the state hash covers the tick draw), and a save/load resumes the same
+// sequence because a draw is a pure function of state the save already carries.
 
 #pragma once
 
 #include <refrain/core/error.hpp>
-#include <refrain/sim/rng.hpp>
 
 #include <cstdint>
 
@@ -70,8 +72,7 @@ class world_clock {
     world_clock();
     explicit world_clock(std::uint64_t seed) noexcept;
 
-    /// Reseed the weather distribution stream. The clock counters keep their
-    /// values.
+    /// Reseed the weather distribution. The clock counters keep their values.
     void seed(std::uint64_t seed) noexcept;
 
     /// Advance one server tick: age, daylight clock and weather.
@@ -131,7 +132,8 @@ class world_clock {
     float rain_level_{0.0F};
     float thunder_level_{0.0F};
 
-    rng weather_random_{};
+    /// World seed the duration draws are keyed by.
+    std::uint64_t weather_seed_{0};
 };
 
 /// Read `global/data/minecraft/world_clocks.dat` and
