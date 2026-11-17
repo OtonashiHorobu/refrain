@@ -96,7 +96,15 @@ struct harness {
     harness() = default;
     harness(const harness &) = delete;
     auto operator=(const harness &) -> harness & = delete;
-    ~harness() = default;
+    ~harness() {
+        // The listener owns I/O threads that invoke player_leave; stop it
+        // before the mining service (declared after the listener) is destroyed.
+        if (listener) {
+            listener->stop();
+            listener.reset();
+        }
+        mining.reset();
+    }
 
     [[nodiscard]] auto open() -> bool {
         {
