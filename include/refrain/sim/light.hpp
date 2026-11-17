@@ -180,12 +180,44 @@ class block_light_table {
         properties_{};
 };
 
+/// Observation counters of one light engine.
+///
+/// The counters describe work the engine already did. They never decide which
+/// cells are lit, the order light propagates or how much work one drain call
+/// processes, and the engine is single-threaded, so they are plain integers
+/// rather than atomics. A snapshot covers the window since the last
+/// `reset_stats()`.
+struct light_stats {
+    /// Columns whose initial light pass ran: a column joined the loaded set,
+    /// or an edit forced a full relight.
+    std::uint64_t columns_lit{0};
+    /// The subset of the drains below that a column's initial light pass ran:
+    /// calls, queue entries processed and wall time. A column load drains once,
+    /// so this is one call per `columns_lit` in the common case.
+    std::uint64_t initial_drain_calls{0};
+    std::uint64_t initial_nodes{0};
+    std::uint64_t initial_ns{0};
+    /// Every drain (the initial light pass, block edits and the tick
+    /// backstop): calls, queue entries processed and wall time.
+    std::uint64_t drain_calls{0};
+    std::uint64_t drain_nodes{0};
+    std::uint64_t drain_ns{0};
+    /// Block edits reported to `block_changed()`.
+    std::uint64_t block_edits{0};
+    /// Largest queue length observed at a drain boundary or sampled while a
+    /// drain processes entries.
+    std::uint64_t pending_peak{0};
+    /// Queue entries still waiting when the snapshot was taken.
+    std::uint64_t pending{0};
+};
+
 /// Sky and block light engine for one `world`.
 ///
 /// The engine is owned by the world and only touched from that world's thread.
 /// Column joins are initialised synchronously (a column a client may receive
 /// this tick must already carry light); block edits queue a bounded update
-/// that `run()` processes.
+/// that `run()` processes. `stats()` exposes the counters a workload reads
+/// between phases; they are observation only.
 class light_engine {
   public:
     explicit light_engine(world &owner);
@@ -239,6 +271,15 @@ class light_engine {
     /// single block edit relaxes at most a few thousand cells; column loads
     /// process their increase queue until it is empty.
     static constexpr std::size_t default_budget = 1U << 16U;
+
+    /// Observation counters since the last `reset_stats()`. Read a snapshot
+    /// before and after a phase and subtract the two; the counters never
+    /// affect lighting.
+    [[nodiscard]] auto stats() const noexcept -> light_stats;
+
+    /// Clear every counter. Queued work is not touched: `pending` in the next
+    /// snapshot still reports the queue, while `pending_peak` starts over.
+    void reset_stats() noexcept;
 
   private:
     struct impl;

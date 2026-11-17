@@ -238,7 +238,10 @@ in the column's storage record, so the chunk codec, the background writer and
 the `level_chunk_with_light` encoder read one copy. The engine keeps a
 deterministic order (ascending column position, then ascending section) for
 every propagation and every drained change, and a column's light does not
-depend on the order the generator delivered its neighbours.
+depend on the order the generator delivered its neighbours. Observation
+counters for columns lit, initial and incremental drain nodes and wall time,
+block edits and the queue peak are available for profiling through
+`light_engine::stats()`; they never change which cells are lit.
 
 Block light emission, sky dampening and shape-based occlusion come from the
 content data. The tracked vanilla container carries one record per block state:
