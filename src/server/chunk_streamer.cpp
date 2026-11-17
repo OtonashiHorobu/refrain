@@ -254,14 +254,19 @@ auto chunk_streamer::cache_capacity(std::int32_t radius) -> std::size_t {
 }
 
 void chunk_streamer::evict_least_recently_used() {
-    auto victim{cache_.begin()};
-    for (auto candidate{cache_.begin()}; candidate != cache_.end();
-         ++candidate) {
-        if (candidate->second.last_use < victim->second.last_use) {
-            victim = candidate;
-        }
+    if (cache_recent_.empty()) {
+        return;
     }
+    // The recency list records the order, so the victim is its back entry and
+    // no map scan is needed on a miss.
+    const auto victim{cache_recent_.back()};
+    cache_recent_.pop_back();
     cache_.erase(victim);
+}
+
+void chunk_streamer::erase_cache_entry(cache_map::iterator entry) {
+    cache_recent_.erase(entry->second.recent);
+    cache_.erase(entry);
 }
 
 auto chunk_streamer::cache_entry_stale(const cache_entry &entry, std::int32_t x,
@@ -293,7 +298,8 @@ auto chunk_streamer::cache_entry_stale(const cache_entry &entry, std::int32_t x,
 auto chunk_streamer::make_cache_entry(std::vector<std::byte> body,
                                       std::int32_t x, std::int32_t z)
     -> cache_entry {
-    cache_entry entry{.body = std::move(body), .last_use = ++clock_};
+    cache_recent_.push_front(cache_position{x, z});
+    cache_entry entry{.body = std::move(body), .recent = cache_recent_.begin()};
     if (source_.world == nullptr) {
         return entry;
     }
@@ -575,7 +581,7 @@ auto chunk_streamer::drain(std::uint64_t connection, stream_state &stream,
             // The body was encoded before an edit or from a column that has
             // since left memory. Drop it and encode the current column; the
             // stale body must never reach the client.
-            cache_.erase(cached);
+            erase_cache_entry(cached);
             cached = cache_.end();
         }
         if (cached == cache_.end()) {
@@ -611,7 +617,10 @@ auto chunk_streamer::drain(std::uint64_t connection, stream_state &stream,
                          .first;
         } else {
             ++cache_hits_;
-            cached->second.last_use = ++clock_;
+            // A served body becomes the most recently used one without a map
+            // walk: splice its recency node to the front.
+            cache_recent_.splice(cache_recent_.begin(), cache_recent_,
+                                 cached->second.recent);
         }
         stream.pending.pop_front();
         stream.queued.erase({x, z});
@@ -753,6 +762,12 @@ void chunk_streamer::tick(refrain::session::chunk_tracker &views) {
             largest_radius = std::max(largest_radius, stream.radius);
         }
         cache_capacity_ = cache_capacity(largest_radius);
+    } else {
+        // No connection can serve or want a body: release the last viewport's
+        // encoded chunks instead of keeping them resident until the next join.
+        cache_.clear();
+        cache_recent_.clear();
+        cache_capacity_ = 1;
     }
     // Bound the bytes queued for clients that cannot drain them. A slow
     // client keeps its pending list and resumes once the socket catches

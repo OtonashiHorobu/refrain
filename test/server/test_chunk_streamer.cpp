@@ -661,6 +661,56 @@ suite<"server/chunk-streamer"> chunk_streamer_tests = [] {
         expect(streamer.cache_misses() == expected.size());
     };
 
+    "server/chunk cache is released after the last stream ends"_test = [] {
+        recording_gateway gateway;
+        gateway.active = {3};
+        auto state{std::make_shared<fake_encoder>()};
+        server::chunk_streamer streamer{gateway, server::chunk_packet_source{}};
+        streamer.set_encoder(make_encoder(state));
+        session::chunk_tracker views;
+        static_cast<void>(views.update(3, 0, 0, 2));
+        const auto expected{viewport_order(2)};
+        std::size_t guard{0};
+        while (streamed(gateway, 3).size() < expected.size() && guard < 32) {
+            streamer.tick(views);
+            ++guard;
+        }
+        expect(streamed(gateway, 3) == expected);
+        expect(streamer.cache_entries() == expected.size());
+
+        // The client disconnects. No stream can serve a body again, so the
+        // encoded cache is released instead of staying resident until the
+        // process exits.
+        gateway.active.clear();
+        streamer.tick(views);
+        expect(streamer.cache_entries() == 0U);
+    };
+
+    "server/chunk cache stays bounded along a moving viewport"_test = [] {
+        recording_gateway gateway;
+        gateway.active = {4};
+        auto state{std::make_shared<fake_encoder>()};
+        server::chunk_streamer streamer{gateway, server::chunk_packet_source{}};
+        streamer.set_encoder(make_encoder(state));
+        session::chunk_tracker views;
+        // A radius-zero viewport reuses one body at most: walking far past it
+        // must not accumulate the columns already left.
+        constexpr std::size_t radius_zero_capacity{1};
+        for (std::int32_t center{0}; center < 24; ++center) {
+            static_cast<void>(views.update(4, center, 0, 0));
+            streamer.tick(views);
+            expect(streamer.cache_entries() <= radius_zero_capacity);
+        }
+        // A second connection at the same viewport still hits the body the
+        // first one encoded.
+        gateway.active = {4, 5};
+        static_cast<void>(views.update(5, 23, 0, 0));
+        const auto misses_before{streamer.cache_misses()};
+        streamer.tick(views);
+        expect(streamer.cache_misses() == misses_before);
+        expect(streamer.cache_entries() <= radius_zero_capacity);
+    };
+
     "server/chunk stream leaves a slow client pending and resumes later"_test =
         [] {
             recording_gateway gateway;
