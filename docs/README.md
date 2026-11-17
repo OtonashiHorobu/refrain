@@ -21,6 +21,9 @@ built yet.
   hardening, release archives, local iteration and benchmarking.
 - [Testing](testing.md) — unit suites, additional configurations, CI checks,
   fuzz smokes, protocol bot and load tools, soak baselines and acceptance.
+- [Commands](commands.md) — the in-game command framework: typed argument
+  parsers, client command tree and completion, permissions, how to add a
+  command and the 26.3 coverage list.
 - [Mods and gamepacks](modding.md) — mod manifests, gamepack composition,
   providers, the native entry ABI, the host runtime API and the content store.
 

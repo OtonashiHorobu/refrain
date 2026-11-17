@@ -9,6 +9,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -73,6 +74,17 @@ class context {
     [[nodiscard]] auto boolean(std::string_view name) const noexcept -> bool;
     [[nodiscard]] auto location(std::string_view name) const noexcept
         -> const data::resource_location *;
+    [[nodiscard]] auto position(std::string_view name) const noexcept
+        -> const block_position *;
+    [[nodiscard]] auto rotation_value(std::string_view name) const noexcept
+        -> const rotation *;
+    [[nodiscard]] auto uuid_value(std::string_view name) const noexcept
+        -> const uuid *;
+
+    /// Typed game mode accessor. Returns `std::nullopt` when the argument is
+    /// absent or is not a game mode.
+    [[nodiscard]] auto gamemode(std::string_view name) const noexcept
+        -> std::optional<game_mode>;
 
     /// Send one feedback line through the source sink and record it in the
     /// execution result (within the feedback bounds).

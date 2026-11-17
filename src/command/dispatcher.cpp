@@ -127,6 +127,12 @@ void dispatcher::set_requirement(
     bump_revision();
 }
 
+void dispatcher::set_visibility_filter(
+    std::function<bool(const source &, std::string_view)> filter) {
+    visibility_ = std::move(filter);
+    bump_revision();
+}
+
 void dispatcher::set_executor(std::size_t index,
                               std::function<result<int>(context &)> fn) {
     if (index >= nodes_.size()) {
@@ -165,6 +171,19 @@ auto dispatcher::is_allowed(std::size_t index, const source &src) const
            nodes_[index].requirement(src);
 }
 
+auto dispatcher::is_visible(std::size_t index, const source &src) const
+    -> bool {
+    if (!is_allowed(index, src)) {
+        return false;
+    }
+    // The root has no name to filter on; its own requirement still gates the
+    // whole graph.
+    if (index == 0 || visibility_ == nullptr) {
+        return true;
+    }
+    return visibility_(src, nodes_[index].name);
+}
+
 auto dispatcher::parse_command(std::string_view input, const source &src,
                                bool allow_incomplete) const
     -> std::expected<parsed_command, parse_failure> {
@@ -173,7 +192,7 @@ auto dispatcher::parse_command(std::string_view input, const source &src,
     if (input.size() > max_command_bytes) {
         return std::unexpected{parse_failure{0, "command is too long"}};
     }
-    if (!is_allowed(0, src)) {
+    if (!is_visible(0, src)) {
         return std::unexpected{parse_failure{0, "unknown command"}};
     }
 
@@ -188,7 +207,7 @@ auto dispatcher::parse_command(std::string_view input, const source &src,
                     parse_failure{in.cursor(), "too many command redirects"}};
             }
             const auto target = nodes_[current].redirect;
-            if (!is_allowed(target, src)) {
+            if (!is_visible(target, src)) {
                 return std::unexpected{
                     parse_failure{in.cursor(), "command is unavailable"}};
             }
@@ -210,7 +229,7 @@ auto dispatcher::parse_command(std::string_view input, const source &src,
         std::size_t best_cursor{token_start};
         std::string best_message{};
         for (const auto child : nodes_[current].children) {
-            if (!is_allowed(child, src)) {
+            if (!is_visible(child, src)) {
                 continue;
             }
             const auto &entry = nodes_[child];
@@ -228,10 +247,12 @@ auto dispatcher::parse_command(std::string_view input, const source &src,
             }
             auto value = entry.parser->parse(in);
             if (!value) {
-                // Prefer the first parser failure unless another child got
-                // further into the input.
-                if (best_message.empty() || token_start > best_cursor) {
-                    best_cursor = token_start;
+                // Prefer the failure that got furthest into the input; parsers
+                // report the offset of the token that actually failed.
+                const auto failure =
+                    std::min(token_start + value.error().offset, input.size());
+                if (best_message.empty() || failure > best_cursor) {
+                    best_cursor = failure;
                     best_message = value.error().message;
                 }
                 continue;
@@ -277,6 +298,96 @@ auto dispatcher::parse_command(std::string_view input, const source &src,
     }
 }
 
+auto dispatcher::locate_suggestion(std::string_view input,
+                                   const source &src) const
+    -> std::optional<suggestion_context> {
+    // One entry per completed node of the parse, in command order. Completion
+    // re-enters the node whose byte range contains the cursor, exactly like the
+    // reference: typing the last byte of an argument completes that argument,
+    // while a trailing separator moves completion to its children.
+    struct parsed_node {
+        std::size_t node{0};
+        std::size_t parent{0};
+        std::size_t start{0};
+        std::size_t end{0};
+    };
+    std::vector<parsed_node> parsed{};
+    parsed.reserve(16);
+
+    reader in{input};
+    std::size_t current{0};
+    std::size_t redirects{0};
+    while (true) {
+        in.skip_whitespace();
+        while (nodes_[current].redirect != no_node) {
+            if (++redirects > max_redirect_depth) {
+                return std::nullopt;
+            }
+            const auto target = nodes_[current].redirect;
+            if (!is_visible(target, src)) {
+                return std::nullopt;
+            }
+            current = target;
+        }
+        const auto token_start = in.cursor();
+        if (!in.can_read()) {
+            const auto cursor = input.size();
+            for (auto entry = parsed.rbegin(); entry != parsed.rend();
+                 ++entry) {
+                if (entry->start <= cursor && cursor <= entry->end) {
+                    return suggestion_context{entry->parent, entry->start};
+                }
+            }
+            return suggestion_context{current, token_start};
+        }
+        bool matched{false};
+        for (const auto child : nodes_[current].children) {
+            if (!is_visible(child, src)) {
+                continue;
+            }
+            const auto &entry = nodes_[child];
+            const auto parent = current;
+            in.set_cursor(token_start);
+            if (entry.kind == node_kind::literal) {
+                if (in.read_word() == entry.name) {
+                    parsed.push_back(
+                        parsed_node{child, parent, token_start, in.cursor()});
+                    current = child;
+                    matched = true;
+                    break;
+                }
+                continue;
+            }
+            if (entry.parser == nullptr) {
+                continue;
+            }
+            auto value = entry.parser->parse(in);
+            if (!value) {
+                continue;
+            }
+            const auto value_end = in.cursor();
+            if (value_end == token_start) {
+                continue;
+            }
+            if (in.can_read() && !in.at_whitespace()) {
+                continue;
+            }
+            parsed.push_back(
+                parsed_node{child, parent, token_start, value_end});
+            current = child;
+            matched = true;
+            break;
+        }
+        if (!matched) {
+            // The token being typed cannot complete the parse; its parent's
+            // children are the completion candidates and the argument range
+            // starts at this token (a multi-token argument reports its whole
+            // partial text).
+            return suggestion_context{current, token_start};
+        }
+    }
+}
+
 auto dispatcher::execute(std::string_view input, source &src) const
     -> result<execution> {
     if (input.size() > max_command_bytes) {
@@ -317,6 +428,38 @@ auto dispatcher::execute(std::string_view input, source &src) const
     outcome.failure = std::string{ctx.failure_};
     outcome.feedback = std::move(ctx.feedback_);
     return outcome;
+}
+
+auto dispatcher::suggest(std::string_view input, std::size_t cursor,
+                         const source &src) const -> suggestions {
+    const auto clamped = std::min(cursor, input.size());
+    if (input.size() > max_command_bytes) {
+        return suggestions{clamped, clamped, {}, false};
+    }
+    const auto truncated = input.substr(0, clamped);
+    const auto located = locate_suggestion(truncated, src);
+    if (!located) {
+        return suggestions{clamped, clamped, {}, false};
+    }
+    const auto start = std::min(located->argument_start, clamped);
+    const auto remaining = truncated.substr(start);
+    suggestion_builder builder{start, clamped};
+    for (const auto child : nodes_[located->node].children) {
+        if (!is_visible(child, src)) {
+            continue;
+        }
+        const auto &entry = nodes_[child];
+        if (entry.kind == node_kind::literal) {
+            if (entry.name.starts_with(remaining)) {
+                builder.add(entry.name, entry.tooltip);
+            }
+            continue;
+        }
+        if (entry.parser != nullptr) {
+            entry.parser->suggest(remaining, src, builder);
+        }
+    }
+    return std::move(builder).build();
 }
 
 node_ref::node_ref(dispatcher *owner, std::size_t index) noexcept

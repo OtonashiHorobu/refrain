@@ -17,6 +17,7 @@
 #include <functional>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -73,7 +74,11 @@ class node_ref;
 ///     .require(command::level::gamemode)
 ///     .then(d.argument("mode", command::gamemode_arg())
 ///               .executes([](command::context &c) -> result<int> {
-///                   c.reply(c.string("mode"));
+///                   const auto mode = c.gamemode("mode");
+///                   if (!mode.has_value()) {
+///                       return 0;
+///                   }
+///                   c.reply(command::to_string(*mode));
 ///                   return 1;
 ///               }));
 /// ```
@@ -152,9 +157,20 @@ class dispatcher {
                                 std::unique_ptr<const argument_parser> parser)
         -> node_ref;
 
+    /// Install the visibility hook consulted, in addition to each node's own
+    /// requirement, by `execute`, `suggest` and `tree`. It receives the source
+    /// and the node name and returns false to hide the node. This is where a
+    /// permission service is injected; the command module itself has no
+    /// permission registry and no policy beyond the registered requirements.
+    /// A node hidden by the hook hides its whole subtree from the tree
+    /// snapshot. The hook must be set before the dispatcher is shared; it is
+    /// not required to be thread-safe against itself.
+    void set_visibility_filter(
+        std::function<bool(const source &, std::string_view)> filter);
+
     /// Monotonic registration revision. It starts at 1 and changes on every
     /// mutation (node creation, link, executor, requirement, tooltip,
-    /// redirect).
+    /// redirect, visibility hook).
     [[nodiscard]] auto revision() const noexcept -> std::uint64_t;
     [[nodiscard]] auto node_count() const noexcept -> std::size_t;
 
@@ -168,10 +184,12 @@ class dispatcher {
     [[nodiscard]] auto execute(std::string_view input, source &src) const
         -> result<execution>;
 
-    /// Complete the token at `cursor`. The returned range is
-    /// `[token_start, cursor)` in bytes. Cursors outside the input are clamped;
-    /// oversized input yields empty suggestions. Entries are filtered by the
-    /// source requirements and bounded by `max_suggestions`.
+    /// Complete the argument at `cursor`. The returned range starts at the
+    /// first byte of the argument being typed, so filling it replaces a whole
+    /// multi-token argument (a block position types three words). Cursors
+    /// outside the input are clamped; oversized input yields empty suggestions.
+    /// Entries are filtered by the source requirements and bounded by
+    /// `max_suggestions`.
     [[nodiscard]] auto suggest(std::string_view input, std::size_t cursor,
                                const source &src) const -> suggestions;
 
@@ -229,13 +247,26 @@ class dispatcher {
     void set_tooltip(std::size_t index, std::string_view text);
     void set_redirect(std::size_t index, std::size_t target);
     void bump_revision() noexcept;
+    /// Where completion starts: the node whose children are candidates and the
+    /// byte offset of the argument being typed.
+    struct suggestion_context {
+        std::size_t node{0};
+        std::size_t argument_start{0};
+    };
+
     [[nodiscard]] auto is_allowed(std::size_t index, const source &src) const
+        -> bool;
+    [[nodiscard]] auto is_visible(std::size_t index, const source &src) const
         -> bool;
     [[nodiscard]] auto parse_command(std::string_view input, const source &src,
                                      bool allow_incomplete) const
         -> std::expected<parsed_command, parse_failure>;
+    [[nodiscard]] auto locate_suggestion(std::string_view input,
+                                         const source &src) const
+        -> std::optional<suggestion_context>;
 
     std::vector<node_entry> nodes_{};
+    std::function<bool(const source &, std::string_view)> visibility_{};
     std::atomic<std::uint64_t> revision_{1};
 };
 

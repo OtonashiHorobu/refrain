@@ -25,6 +25,10 @@ enum class node_kind : std::uint8_t {
 /// Stable, module-local parser taxonomy. These values are intentionally not
 /// protocol parser ids: the network adapter owns that mapping, so the command
 /// module can evolve without renumbering itself when the protocol changes.
+///
+/// The taxonomy is closed on purpose: it names exactly the argument families
+/// the dispatcher can parse and serialize. A parser outside it cannot appear in
+/// a client tree, because the client would not know how to render it.
 enum class parser_kind : std::uint8_t {
     none = 0,
     boolean = 1,
@@ -33,10 +37,18 @@ enum class parser_kind : std::uint8_t {
     float_number = 4,
     double_number = 5,
     string = 6,
-    /// A fixed set of names (for example game modes). Wire adapters normally
-    /// serialize this as a string parser plus server-side suggestions.
+    /// A fixed set of names (for example a resource type vocabulary). Wire
+    /// adapters normally serialize this as a string parser plus server-side
+    /// suggestions.
     enum_values = 7,
     resource_location = 8,
+    block_position = 9,
+    rotation = 10,
+    player_name = 11,
+    gamemode = 12,
+    time = 13,
+    dimension = 14,
+    uuid = 15,
 };
 
 /// String parser shape. These values match the vanilla `brigadier:string`
@@ -58,7 +70,10 @@ enum class string_mode : std::uint8_t {
 /// - enum_values: `enum_values` holds the canonical names, `suggestion_type`
 ///   optionally names a protocol suggestion provider (empty means that the
 ///   client asks the server, which is what `dispatcher::suggest` serves);
-/// - resource_location: no additional properties.
+/// - time: `integer_min` is the minimum accepted tick count; the wire form
+///   always carries it;
+/// - block_position, rotation, player_name, gamemode, dimension, uuid and
+///   resource_location: no additional properties.
 struct parser_descriptor {
     parser_kind kind{parser_kind::none};
     string_mode string{string_mode::single_word};
