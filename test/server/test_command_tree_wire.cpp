@@ -268,7 +268,8 @@ constexpr std::uint8_t flag_redirect = 8U;
         expect(static_cast<bool>(bridge.suggest));
         expect(static_cast<bool>(bridge.execute));
 
-        const auto identity = example_identity("Alice");
+        const std::string alice_name{"Alice"};
+        const auto identity = example_identity(alice_name);
         const auto tree = bridge.tree(identity);
         expect(tree != nullptr);
         if (tree != nullptr) {
@@ -344,7 +345,8 @@ constexpr std::uint8_t flag_redirect = 8U;
         environment->permission = refrain::command::level::owner;
         auto bridge = refrain::server::make_command_bridge(environment);
 
-        const auto owner_identity = example_identity("Alice", 1);
+        const std::string owner_name{"Alice"};
+        const auto owner_identity = example_identity(owner_name, 1);
         const auto owner_tree = bridge.tree(owner_identity);
         expect(owner_tree != nullptr);
         if (owner_tree != nullptr) {
@@ -354,7 +356,8 @@ constexpr std::uint8_t flag_redirect = 8U;
         expect(bridge.tree(owner_identity) == owner_tree);
 
         environment->permission = refrain::command::level::everyone;
-        const auto guest_identity = example_identity("Bob", 2);
+        const std::string guest_name{"Bob"};
+        const auto guest_identity = example_identity(guest_name, 2);
         const auto guest_tree = bridge.tree(guest_identity);
         expect(guest_tree != nullptr);
         if (guest_tree != nullptr) {

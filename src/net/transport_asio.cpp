@@ -66,7 +66,7 @@ class transport_impl final : public transport {
               strand{asio::make_strand(owner->context_)} {}
 
         void start() {
-            connected = true;
+            connected.store(true, std::memory_order_relaxed);
             reader();
             writer();
         }
@@ -87,9 +87,9 @@ class transport_impl final : public transport {
         /// once the backlog passes the cap.
         std::atomic<std::size_t> queued_bytes{0};
         static constexpr std::size_t max_queued_bytes = 16U * 1024U * 1024U;
-        bool connected{false};
+        std::atomic<bool> connected{false};
         bool writing{false};
-        bool closed{false};
+        std::atomic<bool> closed{false};
     };
 
     void accept_next();
@@ -328,7 +328,7 @@ auto transport_impl::session_for(std::uint64_t connection) const
 }
 
 void transport_impl::session::reader() {
-    if (closed) {
+    if (closed.load(std::memory_order_acquire)) {
         return;
     }
     socket.async_read_some(
@@ -336,7 +336,7 @@ void transport_impl::session::reader() {
         asio::bind_executor(
             strand, [self = shared_from_this()](const std::error_code &error,
                                                 std::size_t transferred) {
-                if (self->closed) {
+                if (self->closed.load(std::memory_order_acquire)) {
                     return;
                 }
                 if (error) {
@@ -353,7 +353,8 @@ void transport_impl::session::reader() {
 }
 
 void transport_impl::session::writer() {
-    if (closed || !connected || writes.empty()) {
+    if (closed.load(std::memory_order_acquire) ||
+        !connected.load(std::memory_order_acquire) || writes.empty()) {
         return;
     }
     writing = true;
@@ -363,7 +364,7 @@ void transport_impl::session::writer() {
             strand, [self = shared_from_this()](const std::error_code &error,
                                                 std::size_t /*transferred*/) {
                 self->writing = false;
-                if (self->closed) {
+                if (self->closed.load(std::memory_order_acquire)) {
                     return;
                 }
                 if (error) {
@@ -382,7 +383,7 @@ void transport_impl::session::writer() {
 void transport_impl::session::send_copy(std::vector<std::byte> bytes) {
     asio::post(strand, [self = shared_from_this(),
                         data = std::move(bytes)]() mutable {
-        if (self->closed) {
+        if (self->closed.load(std::memory_order_acquire)) {
             return;
         }
         const auto queued{self->queued_bytes.load(std::memory_order_relaxed)};
@@ -400,11 +401,12 @@ void transport_impl::session::send_copy(std::vector<std::byte> bytes) {
 }
 
 void transport_impl::session::finish(std::string reason) {
-    if (closed) {
+    bool expected{false};
+    if (!closed.compare_exchange_strong(expected, true,
+                                        std::memory_order_acq_rel)) {
         return;
     }
-    closed = true;
-    connected = false;
+    connected.store(false, std::memory_order_relaxed);
     std::error_code error{};
     socket.close(error);
     owner->remove(id);
