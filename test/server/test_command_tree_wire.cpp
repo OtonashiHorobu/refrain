@@ -60,7 +60,7 @@ constexpr std::uint8_t flag_redirect = 8U;
     return refrain::net::player_identity{
         .connection = connection,
         .id = id.value_or(refrain::net::uuid{}),
-        .name = std::string{name},
+        .name = name,
         .world = {},
     };
 }
