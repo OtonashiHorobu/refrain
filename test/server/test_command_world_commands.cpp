@@ -1102,7 +1102,7 @@ const suite command_selector_tests = [] {
         const auto first{world.execute("tp @r 3 64 3")};
         expect(static_cast<bool>(first))
             << (first ? "" : first.error().message);
-        const auto first_name{teleported_name(world.replies)};
+        const std::string first_name{teleported_name(world.replies)};
         expect(!first_name.empty()) << world.replies.front();
         // Restore both positions and repeat: the seed is derived from the
         // source, the tick and the command text, so the draw is the same.
