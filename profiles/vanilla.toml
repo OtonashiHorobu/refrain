@@ -19,6 +19,7 @@ mods = [
     "refrain.proto.vanilla",
     "refrain.server.vanilla",
     "refrain.session.vanilla",
+    "refrain.permissions",
     "refrain.sim.vanilla",
     "refrain.storage.rwf",
     "refrain.transport.asio.tcp",

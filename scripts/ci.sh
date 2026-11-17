@@ -170,7 +170,7 @@ grep -q 'refrain.data.vanilla@1.0.0' "$EXTRACT_DIR/mods-check.txt" \
     -o "$EXTRACT_DIR/builtin-a.image" >"$EXTRACT_DIR/builtin-image.txt"
 "$BIN_DIR/refrain-tools" builtin image --mods "$ROOT/mods" \
     -o "$EXTRACT_DIR/builtin-b.image" >/dev/null
-grep -Eq '^builtin image: 13 file\(s\), [0-9]+ byte\(s\), BLAKE3 [0-9a-f]{64} -> ' \
+grep -Eq '^builtin image: 14 file\(s\), [0-9]+ byte\(s\), BLAKE3 [0-9a-f]{64} -> ' \
     "$EXTRACT_DIR/builtin-image.txt" \
     || die "builtin image: unexpected summary line"
 cmp "$EXTRACT_DIR/builtin-a.image" "$EXTRACT_DIR/builtin-b.image" \
@@ -182,7 +182,7 @@ cmp "$EXTRACT_DIR/builtin-a.image" "$EXTRACT_DIR/builtin-b.image" \
 "$BIN_DIR/refrain-tools" version >"$EXTRACT_DIR/version-profile.txt"
 grep -q '^  profile: vanilla$' "$EXTRACT_DIR/version-profile.txt" \
     || die "version output does not name the build profile"
-grep -Eq '^  mods: +12 built-in, 0 dynamic \(build [0-9a-f]{16}\)$' \
+grep -Eq '^  mods: +13 built-in, 0 dynamic \(build [0-9a-f]{16}\)$' \
     "$EXTRACT_DIR/version-profile.txt" \
     || die "version output is missing the mod build id"
 "$BIN_DIR/refrain-tools" mods check --profile vanilla --built \
@@ -986,12 +986,12 @@ echo "  content: 4 file(s) -> 3 blob(s) (2 in segments), deterministic RFRX, whe
     --dump-gamepack | grep -Eq 'worldgen[[:space:]]*-> refrain.worldgen.flat@1.0.0' \
     || die "server did not resolve the flat-worldgen preset"
 "$BIN_DIR/refrain-server" --gamepack "$ROOT/gamepack/gamepack.toml" \
-    --dump-gamepack 2>&1 | grep -q '\[content\]: loaded 13 content files totaling' \
+    --dump-gamepack 2>&1 | grep -q '\[content\]: loaded 14 content files totaling' \
     || die "server did not load the embedded built-in image"
 "$BIN_DIR/refrain-server" --gamepack "$ROOT/gamepack/gamepack.toml" --check \
     >"$EXTRACT_DIR/server-startup.txt" 2>&1 \
     || die "server did not start the vanilla composition"
-grep -q '\[host\]: loaded 12 mods' "$EXTRACT_DIR/server-startup.txt" \
+grep -q '\[host\]: loaded 13 mods' "$EXTRACT_DIR/server-startup.txt" \
     || die "server did not load the gamepack mods through the mod host"
 grep -q 'with mod profile vanilla (build ' "$EXTRACT_DIR/server-startup.txt" \
     || die "server startup log does not name the build profile"

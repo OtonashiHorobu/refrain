@@ -31,6 +31,7 @@ list = [
     "refrain.proto.vanilla@1.0.0",
     "refrain.transport.asio.tcp@1.0.0",
     "refrain.session.vanilla@1.0.0",
+    "refrain.permissions@1.0.0",
     "refrain.admin.vanilla@1.0.0",
     "refrain.server.vanilla@1.0.0",
 ]
@@ -55,3 +56,7 @@ runtime = "refrain.server.vanilla@^1.0.0"
 net_session = "refrain.session.vanilla@^1.0.0"
 admin = "refrain.admin.vanilla@^1.0.0"
 data = "refrain.data.vanilla@^1.0.0"
+# The permission service is a chain: the built-in default resolver is the base.
+# A deployment that adds an external provider lists it under `wrappers`; the
+# wrappers are consulted before the base and may answer only the nodes they own.
+permissions = { base = "refrain.permissions@^1.0.0" }

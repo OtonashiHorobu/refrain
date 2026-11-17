@@ -74,7 +74,7 @@ const suite mod_profile_tests = [] {
             return;
         }
         expect(profile->name == "vanilla");
-        expect(profile->mods.size() == 12U);
+        expect(profile->mods.size() == 13U);
         expect(profile->dynamic.empty());
         expect(profile->gamepack == "gamepack/gamepack.toml");
         expect(profile->link == "static");

@@ -141,10 +141,10 @@ or TOML file:
 
 The first start writes `config/refrain.toml`, `config/network.toml`,
 `config/world.toml`, `config/runtime.toml`, `config/storage.toml`,
-`config/mods.toml` and `config/mods_admin.toml` with these defaults; existing
-files are never rewritten. `--import-properties` skips the
-generated files, because the imported properties are a fallback layer below the
-operator's TOML files.
+`config/mods.toml`, `config/mods_admin.toml` and `config/permissions.toml` with
+these defaults; existing files are never rewritten. `--import-properties` skips
+the generated files, because the imported properties are a fallback layer below
+the operator's TOML files.
 
 ## Start
 
@@ -236,6 +236,8 @@ config/
                         [install] and [rotation."<id>"] (see docs/modding.md)
   mods_admin.toml       mod management: [lifecycle] hot gates, [admin]
                         operators allowed to run /mods
+  permissions.toml      permission policy served by the built-in permission
+                        service: [defaults], [op], [grants], [groups]
   providers/<id>.toml   implementation-specific options
   mods/<id>.toml        options of mods that do not provide a service
 ```
@@ -310,6 +312,41 @@ compact_interval_ticks = 0
 ```toml
 watchdog_timeout_ms = 5000
 ```
+
+`permissions.toml` is the policy of the built-in permission service. A node is
+a dot-separated lowercase path such as `refrain.command.teleport` or
+`refrain.mods.admin`; a rule may end in `.*` to cover a namespace and may start
+with `!` to deny, and a deny wins over every grant. Subjects are
+`player:<uuid>` (a profile name also matches as a fallback), `entity:<uuid>` and
+`plugin:<mod id>`; a grant may list `@<group>` to join a group declared in
+`[groups]`.
+
+```toml
+[defaults]
+default = "deny"        # or "op": an operator at or above op.min_level holds
+                        # every node
+
+[op]
+min_level = 1
+nodes = ["*"]           # nodes every operator holds
+
+[grants]
+"player:069a79f4-44e9-4726-a5be-fca90e38aaf5" = ["refrain.command.*", "!refrain.command.stop"]
+
+[groups]
+moderators = ["refrain.mods.admin"]
+```
+
+The console always holds every node. Rules resolve in this order: console, a
+matching deny, a matching grant, an operator's `[op].nodes`, then
+`[defaults].default`. Without the file (or without a mounted `permissions`
+namespace) the service serves the built-in policy instead of failing to start:
+the console holds every node and every other subject is denied. The service
+publishes a monotonic revision for caches and re-reads the file when the
+permission commands ask it to; until those land, an edit takes effect on the
+next start. The generated first-start file grants operators every node and
+denies every other subject until `[grants]` names it; remove `[op].nodes` to
+grant operators nothing implicitly either.
 
 A CLI flag that names the same setting is an explicit override and wins over
 both the TOML file and imported properties.

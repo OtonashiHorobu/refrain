@@ -310,6 +310,7 @@ versions named. The schema hash identifies the build; it is not a version.
 | `refrain:net.protocol` | 2.1.0 | instanced |
 | `refrain:net.session` | 1.0.0 | exclusive |
 | `refrain:net.translator` | 1.0.0 | exclusive |
+| `refrain:permissions` | 1.0.0 | chain |
 | `refrain:runtime` | 2.1.0 | exclusive |
 | `refrain:session.lifecycle` | 1.0.0 | instanced |
 | `refrain:session.status` | 1.0.0 | instanced |
@@ -327,6 +328,13 @@ versions named. The schema hash identifies the build; it is not a version.
 
 The shared primitives module `refrain:core` is at 1.0.0; it declares no
 service, so it has no composition mode.
+
+`refrain:permissions` is the first contract with `composition = chain`. Its
+gamepack binding names a `base` provider (the built-in default resolver) and may
+name `wrappers`; the wrappers are consulted before the base and answer
+`not_handled` for the nodes they do not own, so a deployment can extend the
+policy without replacing the base. A wrapper is registered as a candidate just
+like a chain link, and the base is the active default instance.
 
 `refrain:mod.loader` is the loader contract: one provider instance per loader
 id, addressed by the instance name. It started at `1.0.0` because no earlier

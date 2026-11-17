@@ -1046,6 +1046,16 @@ auto store::names() const -> std::vector<std::string> {
            std::ranges::to<std::vector<std::string>>();
 }
 
+auto store::path(std::string_view name) const -> result<std::string> {
+    const auto *entry{impl_->find(name)};
+    if (entry == nullptr) {
+        return std::unexpected{make_error(
+            error_code::not_found,
+            "config: namespace '" + std::string{name} + "' is not mounted")};
+    }
+    return entry->path;
+}
+
 auto store::impl::set(std::string_view name, std::string_view key,
                       config_value value, layer target) -> status {
     auto *target_entry{find(name)};
