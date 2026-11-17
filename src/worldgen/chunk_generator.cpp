@@ -248,6 +248,11 @@ struct chunk_generator::shared_generator_data {
     std::vector<feature::step_features> feature_plan{};
     std::vector<std::string> placed_ids{};
     structure::structure_data_set structure_data{};
+    /// The structure sets whose structures can appear with one of this
+    /// dimension's possible biomes, in the data set's own order. Every worker
+    /// shares the list; a set whose structures cannot appear at all never
+    /// reaches a scan of the starts window.
+    std::vector<const structure::structure_set *> structure_sets{};
 };
 
 chunk_generator::chunk_generator(
@@ -308,13 +313,15 @@ auto chunk_generator::create(chunk_generator_config config)
         }
         shared->feature_data = std::move(*loaded);
     }
-    if (needs_features) {
-        std::vector<std::string> possible_biomes;
+    std::vector<std::string> possible_biomes;
+    if (needs_features || needs_structures) {
         if (config.fixed_biome.empty()) {
             possible_biomes = (*dimension)->biome_source().biomes();
         } else {
             possible_biomes.push_back(config.fixed_biome);
         }
+    }
+    if (needs_features) {
         auto sorted = feature::feature_sorter::build(
             possible_biomes, shared->feature_data.biomes);
         if (!sorted) {
@@ -333,6 +340,8 @@ auto chunk_generator::create(chunk_generator_config config)
             return std::unexpected{loaded.error()};
         }
         shared->structure_data = std::move(*loaded);
+        shared->structure_sets = structure::applicable_structure_sets(
+            shared->structure_data, possible_biomes);
     }
 
     std::unique_ptr<feature::feature_registry> features;
@@ -596,6 +605,8 @@ auto chunk_generator::make_start_context(std::optional<error> &error)
     context.states = &states;
     context.templates = templates_.get();
     context.profile = profile_;
+    context.sets = std::span<const structure::structure_set *const>{
+        shared_->structure_sets};
     if (!config_.structure_sets.empty()) {
         const auto &allowed = config_.structure_sets;
         context.set_filter = [&allowed](std::string_view id) {

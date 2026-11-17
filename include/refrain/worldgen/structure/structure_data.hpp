@@ -14,6 +14,7 @@
 
 #include <map>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -58,6 +59,18 @@ struct structure_data_set {
     [[nodiscard]] auto biome_matches_tag(std::string_view tag,
                                          std::string_view biome) const -> bool;
 };
+
+/// The sets whose structures can appear with one of `possible_biomes`, in the
+/// order the data set lists them. A structure set is only usable when at
+/// least one of its entries names a biome a dimension's source can produce,
+/// which is the filter the reference applies when it loads a generator. It
+/// changes no generated start: a start whose biome list excludes every
+/// possible biome fails its biome check anyway, so dropping the set only
+/// avoids the search that would have ended in that failure.
+[[nodiscard]] auto
+applicable_structure_sets(const structure_data_set &data,
+                          std::span<const std::string> possible_biomes)
+    -> std::vector<const structure_set *>;
 
 /// Ordinal of a decoration step name, i.e. its position in the reference
 /// generation-step enumeration. Unknown names fall back to

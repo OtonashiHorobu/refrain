@@ -15,6 +15,7 @@
 #include <refrain/worldgen/terrain/beardifier.hpp>
 
 #include <functional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -66,6 +67,11 @@ struct structure_start_context {
     /// Restricts start generation to the selected structure sets. Empty
     /// accepts every set; a filter that selects none is an empty set.
     std::function<bool(std::string_view)> set_filter{};
+    /// The sets this generator evaluates, in the order the data set lists
+    /// them. Empty evaluates every set in `data`. A generator fills this with
+    /// the sets whose structures can appear with one of the biomes its source
+    /// produces, which is the reference filter for a loaded world.
+    std::span<const structure_set *const> sets{};
     /// Records the wall-clock time of the starts and reference stages when
     /// non-null. The profile never affects the generated starts.
     stage_profile *profile{nullptr};
