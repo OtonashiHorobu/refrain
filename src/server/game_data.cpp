@@ -170,8 +170,7 @@ constexpr std::uint64_t max_data_file_bytes = 64ULL * 1024ULL * 1024ULL;
         listing += refrain::data::to_hex(refrain::data::blake3(*bytes));
         listing.push_back('\0');
     }
-    const auto digest{refrain::data::blake3(std::span<const std::byte>{
-        reinterpret_cast<const std::byte *>(listing.data()), listing.size()})};
+    const auto digest{refrain::data::blake3(std::as_bytes(std::span{listing}))};
     return refrain::data::to_hex(digest);
 }
 

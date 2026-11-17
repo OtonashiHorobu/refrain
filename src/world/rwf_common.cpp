@@ -4,6 +4,7 @@
 
 #include "rwf_internal.hpp"
 
+#include <refrain/core/byte_order.hpp>
 #include <refrain/data/checksum.hpp>
 
 #include <fmt/format.h>
@@ -456,11 +457,7 @@ auto make_zstd_dictionary(std::span<const std::byte> bytes) -> zstd_dictionary {
     zstd_dictionary dictionary{};
     dictionary.bytes.assign(bytes.begin(), bytes.end());
     const auto digest{data::blake3(bytes)};
-    for (std::size_t index{0}; index < 8; ++index) {
-        dictionary.id |= static_cast<std::uint64_t>(
-                             std::to_integer<unsigned int>(digest[index]))
-                         << (8U * index);
-    }
+    dictionary.id = core::byte_order::load_le64(digest);
     return dictionary;
 }
 

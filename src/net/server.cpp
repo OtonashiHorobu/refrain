@@ -91,32 +91,6 @@ namespace play_sb = ::refrain::protocol::current::play::serverbound;
     return value;
 }
 
-[[nodiscard]] auto uuid_halves(const uuid &value)
-    -> std::pair<std::int64_t, std::int64_t> {
-    std::uint64_t high{0};
-    std::uint64_t low{0};
-    for (std::size_t index{0}; index < 8; ++index) {
-        high = (high << 8U) | value.bytes[index];
-        low = (low << 8U) | value.bytes[index + 8];
-    }
-    return {std::bit_cast<std::int64_t>(high),
-            std::bit_cast<std::int64_t>(low)};
-}
-
-[[nodiscard]] auto uuid_from_halves(std::int64_t high, std::int64_t low)
-    -> uuid {
-    const auto high_bits{std::bit_cast<std::uint64_t>(high)};
-    const auto low_bits{std::bit_cast<std::uint64_t>(low)};
-    uuid value{};
-    for (std::size_t index{0}; index < 8; ++index) {
-        value.bytes[index] = static_cast<std::uint8_t>(
-            (high_bits >> (56U - index * 8U)) & 0xFFU);
-        value.bytes[index + 8] =
-            static_cast<std::uint8_t>((low_bits >> (56U - index * 8U)) & 0xFFU);
-    }
-    return value;
-}
-
 [[nodiscard]] auto valid_name(std::string_view name) noexcept -> bool {
     if (name.size() < 3 || name.size() > 16) {
         return false;
@@ -891,8 +865,8 @@ void server::impl::handle(std::uint64_t id, std::span<const std::byte> body) {
             if (!with_connection(
                     id, [&packet, session](connection_state_data &data) {
                         data.name = std::move(packet.name);
-                        auto profile{uuid_from_halves(packet.profile_high,
-                                                      packet.profile_low)};
+                        auto profile{uuid::from_halves(packet.profile_high,
+                                                       packet.profile_low)};
                         const bool zero_profile{std::ranges::all_of(
                             profile.bytes,
                             [](std::uint8_t byte) { return byte == 0U; })};
@@ -1241,8 +1215,8 @@ void server::impl::send_login_finished(std::uint64_t id) {
             })) {
         return;
     }
-    const auto [profile_high, profile_low] = uuid_halves(profile);
-    const auto [session_high, session_low] = uuid_halves(session);
+    const auto [profile_high, profile_low] = profile.halves();
+    const auto [session_high, session_low] = session.halves();
     login_cb::login_finished packet{
         .profile_high = profile_high,
         .profile_low = profile_low,

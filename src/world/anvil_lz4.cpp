@@ -4,6 +4,8 @@
 
 #include "anvil_lz4.hpp"
 
+#include <refrain/core/byte_order.hpp>
+
 #include <fmt/format.h>
 
 #include <lz4.h>
@@ -38,17 +40,6 @@ constexpr XXH32_hash_t checksum_mask{0x0FFFFFFFU};
         make_error(error_code::parse_error, std::move(message))};
 }
 
-[[nodiscard]] auto read_le32(std::span<const std::byte> input,
-                             std::size_t offset) noexcept -> std::uint32_t {
-    std::uint32_t value{0};
-    for (std::size_t index{0}; index < 4; ++index) {
-        value |= static_cast<std::uint32_t>(
-                     std::to_integer<std::uint8_t>(input[offset + index]))
-                 << (index * 8U);
-    }
-    return value;
-}
-
 } // namespace
 
 auto decode_lz4_block_stream(std::span<const std::byte> input,
@@ -77,11 +68,11 @@ auto decode_lz4_block_stream(std::span<const std::byte> input,
         const auto compression_level{
             static_cast<unsigned>(10U + (token & 0x0FU))};
         const auto compressed_length{
-            read_le32(input, position + magic.size() + 1)};
+            core::byte_order::load_le32(input, position + magic.size() + 1)};
         const auto original_length{
-            read_le32(input, position + magic.size() + 5)};
+            core::byte_order::load_le32(input, position + magic.size() + 5)};
         const auto expected_checksum{
-            read_le32(input, position + magic.size() + 9)};
+            core::byte_order::load_le32(input, position + magic.size() + 9)};
         position += block_header_bytes;
 
         if (method != method_raw && method != method_lz4) {

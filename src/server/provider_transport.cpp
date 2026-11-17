@@ -152,11 +152,7 @@ void provider_transport::poll_loop() {
         case services::transport::transport_event_kind::data: {
             const auto bytes{contracts::as_bytes(event.data)};
             if (handler_.on_data) {
-                handler_.on_data(
-                    event.connection,
-                    std::span<const std::byte>{
-                        reinterpret_cast<const std::byte *>(bytes.data()),
-                        bytes.size()});
+                handler_.on_data(event.connection, std::as_bytes(bytes));
             }
             break;
         }

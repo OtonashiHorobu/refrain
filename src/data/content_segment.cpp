@@ -4,6 +4,7 @@
 
 #include <refrain/data/content_segment.hpp>
 
+#include <refrain/core/byte_order.hpp>
 #include <refrain/core/bytes.hpp>
 #include <refrain/core/hex.hpp>
 #include <refrain/core/io.hpp>
@@ -123,13 +124,7 @@ constexpr auto write_u64 = core::bytes::write_le<std::uint64_t>;
 /// body.
 [[nodiscard]] auto segment_id_from_hash(const digest32 &hash) noexcept
     -> std::uint64_t {
-    std::uint64_t id{0};
-    for (std::size_t index{0}; index < 8U; ++index) {
-        id |= static_cast<std::uint64_t>(
-                  std::to_integer<unsigned int>(hash[index]))
-              << (8U * index);
-    }
-    return id;
+    return core::byte_order::load_le64(hash);
 }
 
 /// Segment file name: 16 lowercase hex digits plus the file extension.
