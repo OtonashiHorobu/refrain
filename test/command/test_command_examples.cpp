@@ -57,7 +57,8 @@ class example_source final : public refrain::command::source {
 constexpr std::string_view example_line =
     "example true 7 123456789012 0.5 1.25 word \"quoted text\" "
     "minecraft:stone 1 2 3 0.5 64 1.5 90 45 Steve creative 20s "
-    "minecraft:overworld dd12be42-52a9-4a91-a8a1-11c01849e498";
+    "minecraft:overworld dd12be42-52a9-4a91-a8a1-11c01849e498 "
+    "@a[limit=2]";
 
 [[maybe_unused]] const suite command_example_tests = [] {
     "the example command parses every typed argument end to end"_test = [] {
@@ -71,7 +72,7 @@ constexpr std::string_view example_line =
             return;
         }
         expect(outcome->success);
-        expect(outcome->value == 16);
+        expect(outcome->value == 17);
         expect(has_reply(source.replies, "flag true")) << source.replies.size();
         expect(has_reply(source.replies, "count 7"));
         expect(has_reply(source.replies, "big 123456789012"));
@@ -89,6 +90,7 @@ constexpr std::string_view example_line =
         expect(has_reply(source.replies, "dimension minecraft:overworld"));
         expect(has_reply(source.replies,
                          "identifier dd12be42-52a9-4a91-a8a1-11c01849e498"));
+        expect(has_reply(source.replies, "target all_players 2"));
     };
 
     "the example command reports a typed argument failure"_test = [] {
@@ -126,7 +128,7 @@ constexpr std::string_view example_line =
         if (snapshot == nullptr) {
             return;
         }
-        expect(snapshot->nodes.size() == 18U);
+        expect(snapshot->nodes.size() == 19U);
         expect(snapshot->root_node().children.size() == 1U);
         if (snapshot->root_node().children.size() != 1U) {
             return;
@@ -155,6 +157,7 @@ constexpr std::string_view example_line =
                 {"time", refrain::command::parser_kind::time},
                 {"dimension", refrain::command::parser_kind::dimension},
                 {"identifier", refrain::command::parser_kind::uuid},
+                {"target", refrain::command::parser_kind::entity_selector},
         };
         auto index = example_index;
         for (const auto &[name, kind] : expected) {
@@ -217,6 +220,17 @@ constexpr std::string_view example_line =
         auto identifiers =
             dispatcher.suggest(before_uuid, before_uuid.size(), source);
         expect(identifiers.empty());
+
+        const std::string before_target{before_uuid + "dd12be42-52a9-4a91-a8a1-"
+                                                      "11c01849e498 "};
+        auto targets =
+            dispatcher.suggest(before_target, before_target.size(), source);
+        expect(has_suggestion(targets, "@p"));
+        expect(has_suggestion(targets, "@a"));
+        expect(has_suggestion(targets, "@e"));
+        expect(has_suggestion(targets, "@s"));
+        expect(has_suggestion(targets, "@r"));
+        expect(has_suggestion(targets, "@n"));
     };
 };
 

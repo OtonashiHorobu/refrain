@@ -58,6 +58,8 @@ auto to_string(parser_kind kind) noexcept -> std::string_view {
         return "uuid";
     case parser_kind::vec3:
         return "vec3";
+    case parser_kind::entity_selector:
+        return "entity_selector";
     }
     return "unknown";
 }

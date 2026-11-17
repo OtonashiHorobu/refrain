@@ -458,16 +458,25 @@ The server announces a small command tree after joining:
 | `/difficulty <0-3>` | persist and broadcast the world difficulty |
 | `/hardcore <on\|off>` | persist hardcore for new logins |
 | `/time <...>`, `/weather <...>` | read and change the overworld clock and weather |
-| `/tp <x y z>`, `/tp <player>`, `/tp <player> <x y z>`, `/tp <player> <player>` | move a player (also `/teleport`) |
+| `/tp <x y z>`, `/tp <target>`, `/tp <targets> <x y z>`, `/tp <targets> <destination>` | move the source or the selected entities (also `/teleport`); every target can be a bare player name or an entity selector |
 | `/setblock <x y z> <block> [replace\|keep]` | place one block |
 | `/fill <from> <to> <block> [replace\|keep\|hollow\|outline]` | edit a block region |
 | `/clone <from> <to> <destination> [replace\|masked]` | copy a block region |
-| `/give <player> <item> [count]` | add items to a player's inventory |
+| `/give <targets> <item> [count]` | add items to the inventory of every selected player |
 | `/me <action>` | broadcast an emote |
-| `/msg <player> <message>` | whisper to one player (also `/tell` and `/w`) |
+| `/msg <targets> <message>` | whisper to every selected player (also `/tell` and `/w`) |
 | `/save-all [flush]` | flush dirty chunks and the clock state to the store |
 | `/mods <command>` | list, verify, install, uninstall, reload, reload content data or manage the trust state of mods (requires `refrain.mods.admin`; see [Mod management](#mod-management)) |
 | `/permissions <command>` | check, grant, revoke, list groups or reload the permission policy (requires `refrain.permissions.admin`; see [Permission administration](#permission-administration)) |
+
+Entity selectors (`@p`, `@a`, `@r`, `@s`, `@e`, `@n`) and the
+`limit`/`sort`/`distance`/`x`/`y`/`z`/`dx`/`dy`/`dz`/`name`/`gamemode`/`type`
+filters are accepted wherever a command takes a target in the table above.
+Selectors resolve against the players in play; a filter the server does not
+model is rejected instead of ignored. The draw behind `@r` and `sort=random`
+is derived from the command source, the world tick and the command text, so a
+replay reproduces it. The full grammar and the v1 limits are in
+[Commands](commands.md#entity-selectors).
 
 Every in-game command declares a stable permission node. The policy decides who
 holds it; the fallback level is what a composition without the permission
@@ -491,7 +500,7 @@ nodes and may run every console command.
 | `/clone <...>` | `refrain.command.clone` | gamemaster |
 | `/give <...>` | `refrain.command.give` | gamemaster |
 | `/me <action>` | `refrain.command.me` | everyone |
-| `/msg <player> <message>`, `/tell`, `/w` | `refrain.command.msg` | everyone |
+| `/msg <targets> <message>`, `/tell`, `/w` | `refrain.command.msg` | everyone |
 | `/save-all [flush]` | `refrain.command.save-all` | owner |
 | `/mods <command>` | `refrain.mods.admin` | admin |
 | `/permissions <command>` | `refrain.permissions.admin` | admin |

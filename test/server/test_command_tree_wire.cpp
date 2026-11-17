@@ -75,6 +75,7 @@ constexpr std::uint8_t flag_redirect = 8U;
         expect(wire_parser_id(parser_kind::integer) == 3U);
         expect(wire_parser_id(parser_kind::long_integer) == 4U);
         expect(wire_parser_id(parser_kind::string) == 5U);
+        expect(wire_parser_id(parser_kind::entity_selector) == 6U);
         expect(wire_parser_id(parser_kind::player_name) == 7U);
         expect(wire_parser_id(parser_kind::block_position) == 8U);
         expect(wire_parser_id(parser_kind::vec3) == 10U);
@@ -115,6 +116,19 @@ constexpr std::uint8_t flag_redirect = 8U;
                 .executes([](refrain::command::context &) { return 1; }));
         dispatcher.literal("wait").then(
             dispatcher.argument("time", refrain::command::time_arg(5))
+                .executes([](refrain::command::context &) { return 1; }));
+        dispatcher.literal("targets").then(
+            dispatcher
+                .argument("target", refrain::command::entity_selector_arg())
+                .executes([](refrain::command::context &) { return 1; }));
+        dispatcher.literal("single").then(
+            dispatcher
+                .argument("target", refrain::command::entity_selector_arg(true))
+                .executes([](refrain::command::context &) { return 1; }));
+        dispatcher.literal("players").then(
+            dispatcher
+                .argument("target",
+                          refrain::command::entity_selector_arg(false, true))
                 .executes([](refrain::command::context &) { return 1; }));
         // A node can be executable and still have children: the parent form is
         // the command without the optional trailing argument.
@@ -195,6 +209,37 @@ constexpr std::uint8_t flag_redirect = 8U;
             expect(time->parser_id == 43U);
             expect(time->time_min == 5);
         }
+        // The `entity` argument carries its argument form as a flag byte:
+        // `entities()` has none, `entity()` sets single and `players()` sets
+        // players-only.
+        std::uint8_t targets_flags{0xFFU};
+        std::uint8_t single_flags{0xFFU};
+        std::uint8_t players_flags{0xFFU};
+        for (std::size_t index{0}; index < wire.nodes.size(); ++index) {
+            const auto &node = wire.nodes[index];
+            if (node.name != "target" || node.parser_id != 6U) {
+                continue;
+            }
+            // The parent literal distinguishes the three registrations.
+            for (std::size_t parent{0}; parent < wire.nodes.size(); ++parent) {
+                for (const auto child : wire.nodes[parent].children) {
+                    if (child != index) {
+                        continue;
+                    }
+                    const auto &owner = wire.nodes[parent];
+                    if (owner.name == "targets") {
+                        targets_flags = node.entity_flags;
+                    } else if (owner.name == "single") {
+                        single_flags = node.entity_flags;
+                    } else if (owner.name == "players") {
+                        players_flags = node.entity_flags;
+                    }
+                }
+            }
+        }
+        expect(targets_flags == 0U);
+        expect(single_flags == 1U);
+        expect(players_flags == 2U);
         const auto *weather_node = find_wire_node(wire, "weather");
         expect(weather_node != nullptr);
         if (weather_node != nullptr) {
@@ -324,7 +369,8 @@ constexpr std::uint8_t flag_redirect = 8U;
         const std::string line{
             "example true 7 123456789012 0.5 1.25 word \"quoted text\" "
             "minecraft:stone 1 2 3 0.5 64 1.5 90 45 Steve creative 20s "
-            "minecraft:overworld dd12be42-52a9-4a91-a8a1-11c01849e498"};
+            "minecraft:overworld dd12be42-52a9-4a91-a8a1-11c01849e498 "
+            "@a[limit=2]"};
         const auto feedback = bridge.execute(identity, line);
         expect(feedback.handled);
         expect(feedback.success) << feedback.message;

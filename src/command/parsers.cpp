@@ -1121,6 +1121,11 @@ auto dimension_arg(std::vector<std::string> ids) -> dimension_parser {
 
 auto uuid_arg() -> uuid_parser { return uuid_parser{}; }
 
+auto entity_selector_arg(bool single, bool players_only)
+    -> entity_selector_parser {
+    return entity_selector_parser{single, players_only};
+}
+
 auto world_time_markers() -> std::vector<time_marker> {
     return {
         time_marker{"day", 1'000, "Start of the day"},

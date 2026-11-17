@@ -50,6 +50,8 @@ enum class parser_kind : std::uint8_t {
     dimension = 14,
     uuid = 15,
     vec3 = 16,
+    /// The 26.3 `entity` argument: a bare player name or an `@` selector.
+    entity_selector = 17,
 };
 
 /// String parser shape. These values match the vanilla `brigadier:string`
@@ -74,7 +76,9 @@ enum class string_mode : std::uint8_t {
 /// - time: `integer_min` is the minimum accepted tick count; the wire form
 ///   always carries it;
 /// - block_position, rotation, player_name, gamemode, dimension, uuid and
-///   resource_location: no additional properties.
+///   resource_location: no additional properties;
+/// - entity_selector: `entity_single` and `entity_players_only` are the two
+///   flags the client needs to render and validate the `entity` argument.
 struct parser_descriptor {
     parser_kind kind{parser_kind::none};
     string_mode string{string_mode::single_word};
@@ -86,6 +90,10 @@ struct parser_descriptor {
     std::int64_t integer_max{0};
     std::vector<std::string> enum_values{};
     std::string suggestion_type{};
+    /// `entity_selector`: the argument form allows at most one result.
+    bool entity_single{false};
+    /// `entity_selector`: the argument form accepts players only.
+    bool entity_players_only{false};
 
     friend auto operator==(const parser_descriptor &, const parser_descriptor &)
         -> bool = default;

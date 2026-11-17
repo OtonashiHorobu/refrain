@@ -5,6 +5,7 @@
 #pragma once
 
 #include <refrain/command/argument.hpp>
+#include <refrain/command/selector.hpp>
 
 #include <cstdint>
 #include <optional>
@@ -243,6 +244,36 @@ class uuid_parser final : public argument_parser {
     [[nodiscard]] auto parse(reader &in) const -> parse_result override;
 };
 
+/// Entity selector argument: the reference's name-or-selector target.
+///
+/// Accepts a bare player name or one of the `@p`/`@a`/`@r`/`@s`/`@e`/`@n`
+/// selectors with the filters the framework models (`limit`, `distance`,
+/// `x`/`y`/`z`, `dx`/`dy`/`dz`, `name`, `gamemode`, `sort`, `type`). The parse
+/// result is the context-free `entity_selector`; resolving it against the
+/// source and the online players is the executor's job (`resolve_selector`),
+/// so parsing — and therefore the packet path that parses a command — never
+/// reads live entity state.
+///
+/// `single` and `players_only` mirror the reference's argument factories:
+/// `single` rejects a selector that may match more than one entity at parse
+/// time, `players_only` rejects a selector that may include non-player
+/// entities. The wire adapter serializes both as the `entity` argument's flag
+/// byte.
+class entity_selector_parser final : public argument_parser {
+  public:
+    explicit entity_selector_parser(bool single = false,
+                                    bool players_only = false);
+
+    [[nodiscard]] auto descriptor() const -> parser_descriptor override;
+    [[nodiscard]] auto parse(reader &in) const -> parse_result override;
+    void suggest(std::string_view remaining, const source &src,
+                 suggestion_builder &out) const override;
+
+  private:
+    bool single_;
+    bool players_only_;
+};
+
 [[nodiscard]] auto word_arg() -> string_parser;
 [[nodiscard]] auto quoted_arg() -> string_parser;
 [[nodiscard]] auto greedy_arg() -> string_parser;
@@ -279,6 +310,14 @@ integer_arg(std::optional<std::int64_t> minimum = std::nullopt,
 [[nodiscard]] auto dimension_arg(std::vector<std::string> ids)
     -> dimension_parser;
 [[nodiscard]] auto uuid_arg() -> uuid_parser;
+
+/// Entity-selector argument. `single` restricts the accepted selectors to those
+/// that match one entity at most and `players_only` to those that match players
+/// only, mirroring the reference's `EntityArgument.entity()`/`players()`
+/// factories.
+[[nodiscard]] auto entity_selector_arg(bool single = false,
+                                       bool players_only = false)
+    -> entity_selector_parser;
 
 /// The world clock markers `/time set` accepts, in ticks since the clock start.
 [[nodiscard]] auto world_time_markers() -> std::vector<time_marker>;
