@@ -9,7 +9,6 @@
 #include <refrain/worldgen/chunk/block_state_codec.hpp>
 
 #include <array>
-#include <cstdio>
 #include <cstdlib>
 #include <optional>
 #include <string>
@@ -1003,13 +1002,6 @@ void place_shipwreck_piece(const structure_place_context &context,
         return;
     }
     const auto &templ = context.templates->get_or_create(piece.template_id);
-    if (std::getenv("REFRAIN_MANSION_DEBUG") != nullptr) {
-        std::fprintf(stderr, "mansion piece %s palettes=%zu origin=%d,%d,%d\n",
-                     piece.template_id.c_str(), templ.palettes.size(),
-                     static_cast<int>(piece.template_x),
-                     static_cast<int>(piece.template_y),
-                     static_cast<int>(piece.template_z));
-    }
     if (templ.palettes.empty()) {
         return;
     }

@@ -103,19 +103,31 @@ fi
 # moment it asked.
 
 say "syncing the working tree to $HOST:$REMOTE_DIR"
-# Anchored patterns: an unanchored `world` would also drop src/world.
-# The host generates its own datapack once and keeps it. Syncing it would
-# replace a real directory there with a lane's symlink and dangle. Lane
-# worktrees are excluded for the same reason: they hold their own build
-# trees, and copying a live one races with the lane that owns it.
+# The named patterns protect state the host owns: its build tree, its generated
+# datapack and its run directories must survive --delete. Anchored patterns: an
+# unanchored `world` would also drop src/world.
+# A top-level entry that Git does not track is local to the sending machine
+# (an archive, a scratch tree, a worktree); such entries are derived from Git
+# below so this script names no machine-local path.
 # --checksum, not the default size+mtime: a file that matches its old size
 # and keeps its source mtime is skipped, so the host can silently build a
 # stale object and report the previous run's numbers.
+declare -A tracked_top=()
+while IFS= read -r path; do
+    tracked_top["${path%%/*}"]=1
+done < <(git ls-files)
+local_excludes=()
+shopt -s nullglob dotglob
+for entry in *; do
+    [[ -n "${tracked_top[$entry]:-}" ]] && continue
+    local_excludes+=("--exclude=/$entry")
+done
+shopt -u nullglob dotglob
 rsync -a --checksum --delete -e "ssh ${SSH_OPTS[*]}" \
     --exclude=/.git \
+    "${local_excludes[@]}" \
     --exclude='/build*' \
     --exclude=/.cache \
-    --exclude=/refrain-internal \
     --exclude=/.agents \
     --exclude=/world \
     --exclude='/install*' \

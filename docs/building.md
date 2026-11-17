@@ -81,7 +81,7 @@ not built with.
 
 | Profile | Mods | Default gamepack | Purpose |
 |---|---|---|---|
-| `vanilla` | all 12 bundled vanilla mods | `gamepack/gamepack.toml` | default build and release |
+| `vanilla` | all 13 bundled vanilla mods | `gamepack/gamepack.toml` | default build and release |
 | `minimal` | content + data layer only | `gamepack/presets/data-only.toml` | content tooling and mod-host smoke |
 | `dynamic` | vanilla set, data layer as shared module | `gamepack/gamepack.toml` | native-loader smoke |
 | `1.17` | content + data layer (example) | `gamepack/presets/data-only.toml` | template for a version-specific set |

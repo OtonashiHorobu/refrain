@@ -26,10 +26,6 @@ option(REFRAIN_BUILD_FUZZ "Build libFuzzer harnesses (Clang only)" OFF)
 option(REFRAIN_BUILD_BENCH_VARIANTS
        "Build the optional library-comparison benchmarks" OFF)
 option(REFRAIN_BUILD_SERVER "Build refrain-server" ON)
-# REFRAIN_BUILD_CLIENT is accepted but not wired yet: the client stack is
-# future work. It is kept so the option surface (conanfile.py + CMake) stays
-# stable.
-option(REFRAIN_BUILD_CLIENT "Build the client stack (not wired yet)" OFF)
 option(REFRAIN_USE_REFLECTION "Enable refl-cpp based refrain::reflect glue" ON)
 option(REFRAIN_WITH_CRASHPAD "Enable Crashpad crash reporting" ON)
 option(REFRAIN_WITH_WASM "Enable the wasmtime WASM runtime" ON)
@@ -113,10 +109,12 @@ option(REFRAIN_HARDEN "Enable the baseline security hardening flags" OFF)
 option(REFRAIN_HARDEN_MAX
        "Also zero stack storage and clear caller-saved registers on return"
        OFF)
-# Link-time optimization for optimized builds. Off by default so regular
-# builds stay fast; release builds enable it through scripts/dist.sh. It is
-# skipped for sanitizer builds (instrumentation and LTO interact poorly) and
-# for the MSVC toolchain (LTCG build time is not worth the CI budget).
+# Link-time optimization for optimized builds. On by default: release
+# artifacts and benchmark builds want it, and the Conan `lto` option seeds this
+# cache entry. It is skipped for sanitizer builds (instrumentation and LTO
+# interact poorly), for unoptimised build types and for the MSVC and MinGW
+# toolchains (link-time code generation build time is not worth the CI budget);
+# a coverage build requires it off. Turn it off for the edit/build/test loop.
 option(REFRAIN_LTO "Enable link-time optimization for optimized builds" ON)
 option(REFRAIN_COVERAGE
        "Instrument for gcov coverage; never combined with LTO or sanitizers"

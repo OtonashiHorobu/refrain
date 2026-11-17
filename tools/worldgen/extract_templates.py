@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+#
+# SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 """Extract structure templates from a Minecraft server jar.
 
 The repository ships no game assets. World generation reads structure

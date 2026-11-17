@@ -2,7 +2,7 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 
-// Kernel primitive benchmarks (Google Benchmark 1.9.5).
+// Kernel primitive benchmarks (Google Benchmark 1.10.0).
 //
 // Covers the job system and the arena allocator. Run with:
 //   ./build/Release/bin/refrain-bench --benchmark_min_time=0.2s

@@ -41,8 +41,13 @@ namespace refrain::data {
 // real read reports them).
 //
 // There is deliberately no block cache (the default budget is 0 bytes) and no
-// global cache: the mmap/read_file page cache is the OS's job. Cancellation,
-// priorities and a persistent decompression worker pool are not implemented.
+// global cache: the mmap/read_file page cache is the OS's job.
+//
+// TODO: cancellation, priorities and a persistent decompression worker pool
+// are not implemented. A cancellation token must drop queued work before it
+// starts, a priority must order queued reads instead of the current FIFO
+// order, and one decompression pool must be shared by every handle rather than
+// owned by each stream.
 //
 // Lifetime/threading: the handle is move-only. The destructor stops the
 // runtime and joins its worker threads, so pending tasks are dropped and a

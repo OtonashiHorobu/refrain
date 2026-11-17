@@ -17,7 +17,6 @@ class RefrainConan(ConanFile):
 
     options = {
         "lto": [True, False],
-        "client": [True, False],
         "with_crashpad": [True, False],
         "with_wasm": [True, False],
         "use_reflection": [True, False],
@@ -35,7 +34,6 @@ class RefrainConan(ConanFile):
     }
     default_options = {
         "lto": True,
-        "client": False,
         "with_crashpad": True,
         "with_wasm": True,
         "use_reflection": True,
@@ -224,17 +222,12 @@ class RefrainConan(ConanFile):
         if self.options.with_crashpad:
             self.requires("crashpad/2026.10.26")
 
-        # --- client-only stack (deferred). Server-first builds skip it.
-        if self.options.client:
-            self.requires("steam-audio/4.8.1")
-
     def layout(self):
         cmake_layout(self)
 
     def generate(self):
         tc = CMakeToolchain(self)
         tc.variables["REFRAIN_LTO"] = "ON" if self.options.lto else "OFF"
-        tc.variables["REFRAIN_BUILD_CLIENT"] = "ON" if self.options.client else "OFF"
         tc.variables["REFRAIN_WITH_CRASHPAD"] = (
             "ON" if self.options.with_crashpad else "OFF"
         )

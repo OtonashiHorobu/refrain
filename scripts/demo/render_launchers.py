@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+#
+# SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 """Render the Windows demo launchers into a staged package directory.
 
 The demo package assembly copies a staged client and server tree into one

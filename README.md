@@ -52,8 +52,10 @@ Not implemented yet:
 - protocol or game versions other than 26.3 (protocol 777);
 - the full breadth of vanilla gameplay: many mechanics, commands and entity
   behaviours are still missing;
-- external WebAssembly mods; the script host has not landed, so native mods are
-  the only package type the loader accepts.
+- external WebAssembly mods beyond load: an installed package that names the
+  wasm loader is validated, instantiated and its `on_load` hook runs, but the
+  script host API and the call dispatch path a guest needs have not landed, so
+  a wasm mod cannot answer server calls yet; native mods are loadable in full.
 
 ## Quickstart
 
