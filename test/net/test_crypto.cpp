@@ -359,4 +359,95 @@ const suite tests = [] {
     };
 };
 
+suite<"net/crypto-secrets"> crypto_secret_tests = [] {
+    "net/crypto constant-time equality accepts equal bytes"_test = [] {
+        const auto token{from_hex("deadbeef")};
+        expect(net::constant_time_equal(std::span{token}, std::span{token}));
+        const std::array<std::byte, 4> first{std::byte{0xDE}, std::byte{0xAD},
+                                             std::byte{0xBE}, std::byte{0xEF}};
+        const std::array<std::byte, 4> copy{first};
+        expect(net::constant_time_equal(std::span{first}, std::span{copy}));
+        expect(net::constant_time_equal({}, {}));
+    };
+
+    "net/crypto constant-time equality rejects a difference in any byte"_test =
+        [] {
+            const std::array<std::byte, 4> expected{
+                std::byte{0x01}, std::byte{0x02}, std::byte{0x03},
+                std::byte{0x04}};
+            for (std::size_t index{0}; index < expected.size(); ++index) {
+                auto altered{expected};
+                altered[index] = static_cast<std::byte>(
+                    std::to_integer<unsigned int>(altered[index]) ^ 0xFFU);
+                expect(!net::constant_time_equal(std::span{expected},
+                                                 std::span{altered}));
+            }
+        };
+
+    "net/crypto constant-time equality rejects unequal lengths without reading "
+    "past the shorter span"_test = [] {
+        const auto token{from_hex("deadbeef")};
+        expect(!net::constant_time_equal(std::span{token}.first(3),
+                                         std::span{token}));
+        expect(!net::constant_time_equal({}, std::span{token}));
+        expect(!net::constant_time_equal(std::span{token}, {}));
+    };
+
+    "net/crypto secret buffer wipes every byte when cleared"_test = [] {
+        net::secret_buffer buffer{bytes_of("shared-secret-16")};
+        const auto retained{buffer.span()};
+        expect(retained.size() == 16U);
+        buffer.wipe();
+        expect(buffer.empty());
+        bool all_zero{true};
+        for (const auto byte : retained) {
+            if (byte != std::byte{0}) {
+                all_zero = false;
+            }
+        }
+        expect(all_zero);
+    };
+
+    "net/crypto secret buffer wipes the previous value on assignment"_test =
+        [] {
+            net::secret_buffer buffer{bytes_of("0123456789abcdef")};
+            const auto retained{buffer.span()};
+            const auto replacement{bytes_of("xy")};
+            buffer.assign(std::span<const std::byte>{replacement});
+            expect(buffer.size() == 2U);
+            // The buffer keeps its allocation, so the retained view still shows
+            // the old storage: the overwritten prefix holds the new value and
+            // every byte past it must have been wiped by the assignment.
+            expect(retained[0] == std::byte{'x'});
+            expect(retained[1] == std::byte{'y'});
+            bool tail_zero{true};
+            for (std::size_t index{2}; index < retained.size(); ++index) {
+                if (retained[index] != std::byte{0}) {
+                    tail_zero = false;
+                }
+            }
+            expect(tail_zero)
+                << "the replaced secret must not stay in the buffer";
+        };
+
+    "net/crypto random bytes are fresh and not all zero"_test = [] {
+        if (!net::crypto_available()) {
+            return;
+        }
+        std::array<std::byte, 16> first{};
+        std::array<std::byte, 16> second{};
+        expect(net::random_bytes(first).has_value());
+        expect(net::random_bytes(second).has_value());
+        const bool differ{first != second};
+        expect(differ);
+        bool nonzero{false};
+        for (const auto byte : first) {
+            if (byte != std::byte{0}) {
+                nonzero = true;
+            }
+        }
+        expect(nonzero);
+    };
+};
+
 } // namespace
