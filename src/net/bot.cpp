@@ -25,6 +25,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <cstdio>
+#include <functional>
 #include <mutex>
 #include <random>
 #include <string>
@@ -59,6 +60,43 @@ namespace common = ::refrain::protocol::v777::common;
 }
 
 enum class bot_state : std::uint8_t { login, configuration, play };
+
+/// Owns every helper thread a bot starts.
+///
+/// The transport thread starts the walk/move/command/respawn threads from its
+/// packet handler, while the caller's thread joins them during teardown. A bare
+/// `std::thread` member cannot be handed between those threads safely, so the
+/// group serializes starts, rejects starts after the join barrier, and swaps
+/// the handles out before joining them.
+class bot_thread_group {
+  public:
+    void start(std::function<void()> work) {
+        std::lock_guard lock{mutex_};
+        if (closed_) {
+            return;
+        }
+        threads_.emplace_back(std::move(work));
+    }
+
+    void join_all() {
+        std::vector<std::thread> local{};
+        {
+            std::lock_guard lock{mutex_};
+            closed_ = true;
+            local.swap(threads_);
+        }
+        for (auto &thread : local) {
+            if (thread.joinable()) {
+                thread.join();
+            }
+        }
+    }
+
+  private:
+    std::mutex mutex_{};
+    std::vector<std::thread> threads_{};
+    bool closed_{false};
+};
 
 class bot_session {
   public:
@@ -118,20 +156,22 @@ class bot_session {
                 fail_locked("timed out waiting for play state");
             }
         }
-        if (joined_ && options_.linger.count() > 0) {
+        bool joined_snapshot{false};
+        {
+            std::lock_guard lock{mutex_};
+            joined_snapshot = joined_;
+        }
+        if (joined_snapshot && options_.linger.count() > 0) {
             std::this_thread::sleep_for(options_.linger);
         }
         running_.store(false, std::memory_order_relaxed);
-        if (command_thread_.joinable()) {
-            command_thread_.join();
-        }
-        if (move_thread_.joinable()) {
-            move_thread_.join();
-        }
-        if (respawn_thread_.joinable()) {
-            respawn_thread_.join();
-        }
+        // Stop the transport first: it joins the I/O threads and prevents any
+        // further packet handler from starting a helper thread. The helper
+        // threads may still send while the transport is stopping; the transport
+        // ignores sends once its session table is drained, and the object stays
+        // alive until every helper has joined.
         transport_->stop();
+        workers_.join_all();
         transport_.reset();
 
         std::lock_guard lock{mutex_};
@@ -464,15 +504,15 @@ class bot_session {
                 if (options_.command_delay.count() == 0) {
                     send_command();
                 } else {
-                    command_thread_ = std::thread{[this] {
+                    workers_.start([this] {
                         log::set_thread_name("bot-command");
                         std::this_thread::sleep_for(options_.command_delay);
                         send_command();
-                    }};
+                    });
                 }
             }
             if (options_.walk_radius > 0.0) {
-                move_thread_ = std::thread{[this] {
+                workers_.start([this] {
                     log::set_thread_name("bot-walk");
                     if (options_.move_delay.count() > 0) {
                         std::this_thread::sleep_for(options_.move_delay);
@@ -487,25 +527,25 @@ class bot_session {
                         ++step;
                         std::this_thread::sleep_for(period);
                     }
-                }};
+                });
             } else if (options_.move_dx != 0.0 || options_.move_dy != 0.0 ||
                        options_.move_dz != 0.0) {
-                move_thread_ = std::thread{[this] {
+                workers_.start([this] {
                     log::set_thread_name("bot-move");
                     if (options_.move_delay.count() > 0) {
                         std::this_thread::sleep_for(options_.move_delay);
                     }
                     send_move();
-                }};
+                });
             }
             if (options_.request_respawn) {
-                respawn_thread_ = std::thread{[this] {
+                workers_.start([this] {
                     log::set_thread_name("bot-respawn");
                     if (options_.command_delay.count() > 0) {
                         std::this_thread::sleep_for(options_.command_delay);
                     }
                     send_respawn();
-                }};
+                });
             }
         }
     }
@@ -613,9 +653,7 @@ class bot_session {
     double spawn_x_{0.0};
     double spawn_y_{64.0};
     double spawn_z_{0.0};
-    std::thread command_thread_{};
-    std::thread move_thread_{};
-    std::thread respawn_thread_{};
+    bot_thread_group workers_{};
     std::atomic<bool> running_{true};
     double walk_phase_{0.0};
 };
