@@ -105,6 +105,49 @@ const suite tests = [] {
         }
     };
 
+    "net/strings count UTF-16 code units, not bytes, for two-byte UTF-8"_test =
+        [] {
+            // U+00E9 is one UTF-16 unit but two UTF-8 bytes.
+            const std::string two_byte{"\xC3\xA9"};
+            std::vector<std::byte> out;
+            net::writer writer{out};
+            expect(writer.write_string(two_byte, 1).has_value());
+            expect(!writer.write_string(two_byte, 0).has_value());
+        };
+
+    "net/strings count a supplementary code point as a surrogate pair"_test =
+        [] {
+            // U+1F600 is four UTF-8 bytes and two UTF-16 units.
+            const std::string emoji{"\xF0\x9F\x98\x80"};
+            std::vector<std::byte> out;
+            net::writer writer{out};
+            expect(writer.write_string(emoji, 2).has_value());
+            expect(!writer.write_string(emoji, 1).has_value());
+            expect(!writer.write_string(emoji + emoji, 3).has_value());
+            expect(writer.write_string(emoji + emoji, 4).has_value());
+            // 16,383 supplementary code points plus one BMP character reach
+            // exactly the 32,767-unit ceiling the single-argument callers use.
+            std::string at_ceiling{"a"};
+            for (int index{0}; index < 16'383; ++index) {
+                at_ceiling += emoji;
+            }
+            expect(writer.write_string(at_ceiling, 32'767).has_value());
+            // One more unit crosses it.
+            expect(!writer.write_string(at_ceiling + "a", 32'767).has_value());
+        };
+
+    "net/strings default to the 32,767-unit vanilla field ceiling"_test = [] {
+        // The single-argument form is used by every protocol string field
+        // without a tighter limit; the default is the vanilla ceiling in
+        // UTF-16 units, not the four-byte encoding bound.
+        const std::string euro{"\xE2\x82\xAC"};
+        std::vector<std::byte> out;
+        net::writer writer{out};
+        expect(writer.write_string(euro, 1).has_value());
+        expect(writer.write_string(std::string(32'767, 'a')).has_value());
+        expect(!writer.write_string(std::string(32'768, 'a')).has_value());
+    };
+
     "net/strings reject a byte length above the field ceiling"_test = [] {
         std::vector<std::byte> out;
         net::writer writer{out};

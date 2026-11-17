@@ -744,6 +744,66 @@ const suite tests = [] {
         expect(remove_in.empty());
     };
 
+    "net/wire rejects the unmodelled number format and predicate fields"_test =
+        [] {
+            // objective_update with a present number format: name, add
+            // method, display, render type and a true present flag.
+            std::vector<std::byte> bytes;
+            net::writer objective_out{bytes};
+            expect(objective_out.write_string("sidebar").has_value());
+            objective_out.write_u8(0U);
+            const net::text_component display{};
+            expect(static_cast<bool>(
+                net::encode_text_component(objective_out, display)));
+            objective_out.write_varint(1U);
+            objective_out.write_bool(true);
+            net::reader objective_in{bytes};
+            net::objective_update objective{};
+            auto objective_status{
+                net::decode_objective_update(objective_in, objective)};
+            expect(!objective_status);
+            expect(objective_status.error().code ==
+                   refrain::error_code::unsupported);
+
+            // component_predicate with one entry.
+            bytes.assign({static_cast<std::byte>(0x01)});
+            net::reader predicate_in{bytes};
+            net::component_predicate predicate{};
+            auto predicate_status{
+                net::decode_component_predicate(predicate_in, predicate)};
+            expect(!predicate_status);
+            expect(predicate_status.error().code ==
+                   refrain::error_code::unsupported);
+
+            // item_cost with one predicate entry.
+            bytes.clear();
+            net::writer cost_out{bytes};
+            cost_out.write_varint(1U);
+            cost_out.write_varint(2U);
+            cost_out.write_varint(1U);
+            net::reader cost_in{bytes};
+            net::merchant_offer offer{};
+            auto offer_status{net::decode_merchant_offer(cost_in, offer)};
+            expect(!offer_status);
+            expect(offer_status.error().code ==
+                   refrain::error_code::unsupported);
+
+            // item_stack_template with a non-empty component patch.
+            bytes.clear();
+            net::writer template_out{bytes};
+            template_out.write_varint(1U);
+            template_out.write_varint(1U);
+            template_out.write_varint(1U);
+            template_out.write_varint(0U);
+            net::reader template_in{bytes};
+            net::item_stack_template icon{};
+            auto template_status{
+                net::decode_item_stack_template(template_in, icon)};
+            expect(!template_status);
+            expect(template_status.error().code ==
+                   refrain::error_code::unsupported);
+        };
+
     "team update round trips create and leave forms"_test = [] {
         net::team_update create{};
         create.name = "red";

@@ -863,7 +863,11 @@ auto encode_objective_update(writer &out, const objective_update &value)
             return written;
         }
         out.write_varint(value.render_type);
-        out.write_bool(false); // number format is not implemented
+        // FIXME: `objective_update` does not model the optional number
+        // format, so the encoder always writes its absent form. A
+        // `number_format` field must be encoded here (present flag, then the
+        // format type and its payload) once scoreboard formats are supported.
+        out.write_bool(false);
     }
     return status_ok();
 }
@@ -898,6 +902,9 @@ auto decode_objective_update(reader &in, objective_update &value) -> status {
             return std::unexpected{std::move(has_format.error())};
         }
         if (*has_format) {
+            // FIXME: a present number format is rejected because the value is
+            // not modelled. The decoder must read the format type and payload
+            // into an `objective_update` number-format field instead.
             return std::unexpected{make_error(
                 error_code::unsupported,
                 "objective_update: number formats are not implemented")};
@@ -3307,7 +3314,9 @@ auto encode_item_stack_template(writer &out, const item_stack_template &value)
     -> status {
     out.write_varint(value.item_id);
     out.write_varint(value.count);
-    // DataComponentPatch: added and removed counts, both zero.
+    // FIXME: `item_stack_template` models only an empty data-component patch,
+    // so both patch lists are always written empty. The template needs added
+    // and removed component lists to encode a non-empty patch.
     out.write_varint(0);
     out.write_varint(0);
     return status_ok();
@@ -3324,6 +3333,9 @@ auto decode_item_stack_template(reader &in, item_stack_template &value)
                                           "item_stack_template: truncated")};
     }
     if (*positive != 0U || *negative != 0U) {
+        // FIXME: non-empty data-component patches are rejected because the
+        // template does not model them. The decoder must read the patch lists
+        // once the component codec is available.
         return std::unexpected{make_error(
             error_code::unsupported,
             "item_stack_template: non-empty patches are not implemented")};
@@ -3657,6 +3669,10 @@ namespace {
     case 16:
     case 17:
     case 41:
+        // FIXME: serializers 16 (particle), 17 (particle list) and 41
+        // (resolvable profile) are not modelled. Their payloads must be
+        // written from dedicated `metadata_value` fields instead of being
+        // rejected.
         return std::unexpected{
             make_error(error_code::unsupported,
                        "entity_metadata: serializer is not implemented")};
@@ -3866,6 +3882,10 @@ namespace {
     case 16:
     case 17:
     case 41:
+        // FIXME: serializers 16 (particle), 17 (particle list) and 41
+        // (resolvable profile) are not modelled. The decoder must read their
+        // payloads into dedicated `metadata_value` fields once the codecs
+        // exist.
         return std::unexpected{
             make_error(error_code::unsupported,
                        "entity_metadata: serializer is not implemented")};
@@ -3908,7 +3928,10 @@ auto decode_entity_metadata(reader &in, entity_metadata &value) -> status {
 
 auto encode_component_predicate(writer &out, const component_predicate &)
     -> status {
-    out.write_varint(0); // empty predicate
+    // FIXME: `component_predicate` models only the empty predicate, so the
+    // encoder always writes a zero entry count. A predicate list and the
+    // typed component predicates must be encoded here.
+    out.write_varint(0);
     return status_ok();
 }
 
@@ -3918,6 +3941,9 @@ auto decode_component_predicate(reader &in, component_predicate &) -> status {
         return std::unexpected{std::move(count.error())};
     }
     if (*count != 0U) {
+        // FIXME: a non-empty predicate list is rejected because the type does
+        // not model it. The decoder must read the typed predicates once the
+        // data-component codec can skip or materialize them.
         return std::unexpected{make_error(
             error_code::unsupported,
             "component_predicate: non-empty predicates are not implemented")};
@@ -3930,7 +3956,10 @@ namespace {
 void write_item_cost(writer &out, const item_cost &cost) {
     out.write_varint(cost.item_id);
     out.write_varint(cost.count);
-    out.write_varint(0); // empty predicate
+    // FIXME: `item_cost` models only the empty predicate, so a zero entry
+    // count is always written. The cost needs a component-predicate field to
+    // encode a non-empty predicate.
+    out.write_varint(0);
 }
 
 [[nodiscard]] auto read_item_cost(reader &in, item_cost &cost) -> status {
@@ -3942,6 +3971,9 @@ void write_item_cost(writer &out, const item_cost &cost) {
             make_error(error_code::parse_error, "item_cost: truncated")};
     }
     if (*predicate != 0U) {
+        // FIXME: a non-empty item cost predicate is rejected because the type
+        // does not model it. The decoder must read the predicate once the
+        // data-component codec can skip or materialize it.
         return std::unexpected{
             make_error(error_code::unsupported,
                        "item_cost: non-empty predicates are not implemented")};

@@ -4,6 +4,8 @@
 
 #include <refrain/net/frame.hpp>
 
+#include <zlib.h>
+
 #include <boost/ut.hpp>
 
 #include <cstddef>
@@ -158,6 +160,66 @@ const suite tests = [] {
         expect(decoder.push(framed).has_value());
         std::vector<std::byte> decoded;
         expect(!decoder.next(decoded).has_value());
+    };
+
+    "net/frame decoder rejects a compressed bomb by its declared size"_test =
+        [] {
+            // The inner VarInt declares more than the 8 MiB decompression
+            // ceiling. The decoder must reject it before allocating the
+            // declared buffer, so the payload after the VarInt is arbitrary.
+            std::vector<std::byte> envelope;
+            net::writer inner{envelope};
+            inner.write_varint(
+                static_cast<std::uint32_t>(net::max_uncompressed_length + 1));
+            inner.write_u8(0x78);
+            inner.write_u8(0x9C);
+            std::vector<std::byte> framed;
+            net::writer outer{framed};
+            outer.write_varint(static_cast<std::uint32_t>(envelope.size()));
+            outer.write_bytes(envelope);
+            net::frame_decoder decoder{16};
+            expect(decoder.push(framed).has_value());
+            std::vector<std::byte> body;
+            expect(!decoder.next(body).has_value());
+            expect(decoder.failed());
+        };
+
+    "net/frame decoder rejects a compressed bomb whose output disagrees"_test =
+        [] {
+            // Declare one size, then hand the decoder a stream that inflates
+            // to another: the mismatch is rejected after decompression.
+            std::vector<std::byte> plain(1024, std::byte{0x41});
+            std::vector<std::byte> compressed(
+                compressBound(static_cast<uLong>(plain.size())));
+            uLongf compressed_size{static_cast<uLongf>(compressed.size())};
+            expect(compress2(reinterpret_cast<Bytef *>(compressed.data()),
+                             &compressed_size,
+                             reinterpret_cast<const Bytef *>(plain.data()),
+                             static_cast<uLong>(plain.size()),
+                             Z_DEFAULT_COMPRESSION) == Z_OK);
+            compressed.resize(compressed_size);
+            std::vector<std::byte> envelope;
+            net::writer inner{envelope};
+            inner.write_varint(static_cast<std::uint32_t>(plain.size() - 1U));
+            inner.write_bytes(compressed);
+            std::vector<std::byte> framed;
+            net::writer outer{framed};
+            outer.write_varint(static_cast<std::uint32_t>(envelope.size()));
+            outer.write_bytes(envelope);
+            net::frame_decoder decoder{16};
+            expect(decoder.push(framed).has_value());
+            std::vector<std::byte> body;
+            expect(!decoder.next(body).has_value());
+            expect(decoder.failed());
+        };
+
+    "net/frame decoder refuses to buffer past max_frame_buffer"_test = [] {
+        net::frame_decoder decoder{-1};
+        const std::vector<std::byte> at_limit(net::max_frame_buffer,
+                                              std::byte{0x01});
+        expect(decoder.push(at_limit).has_value());
+        const std::vector<std::byte> one_more{std::byte{0x01}};
+        expect(!decoder.push(one_more).has_value());
     };
 
     "net/frame encoder rejects a body above the frame limit"_test = [] {

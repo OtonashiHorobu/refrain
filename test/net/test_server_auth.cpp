@@ -650,6 +650,140 @@ suite<"net/auth"> server_auth_tests = [] {
         expect(test.disconnect_reason(throttled).find("Too many") !=
                std::string::npos);
     };
+
+    "net/server sends encryption, compression and login success in order"_test =
+        [] {
+            std::atomic<bool> verifier_inputs_valid{false};
+            net::session_verifier verifier =
+                [&verifier_inputs_valid](std::string_view name,
+                                         std::string_view hash)
+                -> refrain::result<net::session_profile> {
+                verifier_inputs_valid.store(name == "AuthTester" &&
+                                                !hash.empty(),
+                                            std::memory_order_relaxed);
+                return expected_profile();
+            };
+            fixture test{verifier};
+            expect(static_cast<bool>(test.running));
+            if (!test.running) {
+                return;
+            }
+            constexpr std::uint64_t connection{300};
+            test.open(connection);
+            const auto challenge{test.join_to_hello(connection, "AuthTester")};
+            expect(challenge.size() == 4U);
+            if (challenge.size() != 4U) {
+                return;
+            }
+            // Client-side encryption step: the shared secret is random per
+            // login, and the challenge it echoes is the one the server sent.
+            test.send_key(connection, challenge, shared_secret());
+            expect(wait_until([&] {
+                return test.has_packet(connection,
+                                       login_cb::login_finished::packet_id);
+            }));
+            expect(test.codec->live(connection));
+            const auto packets{test.codec->sent(connection)};
+            const auto position_of = [&packets](std::uint32_t id) {
+                std::size_t position{0};
+                for (const auto &packet : packets) {
+                    if (packet.first == id) {
+                        return position;
+                    }
+                    ++position;
+                }
+                return position;
+            };
+            // The server raises encryption before it sends the compressed
+            // front, and login success comes after both.
+            const auto hello_position{position_of(login_cb::hello::packet_id)};
+            const auto compression_position{
+                position_of(login_cb::login_compression::packet_id)};
+            const auto finished_position{
+                position_of(login_cb::login_finished::packet_id)};
+            expect(verifier_inputs_valid.load(std::memory_order_relaxed));
+            expect(hello_position < compression_position);
+            expect(compression_position < finished_position);
+            // The verified profile, not the client-declared one, is echoed.
+            const auto finished{
+                std::ranges::find_if(packets, [](const auto &packet) {
+                    return packet.first == login_cb::login_finished::packet_id;
+                })};
+            expect(finished != packets.end());
+            if (finished != packets.end()) {
+                net::reader in{finished->second};
+                login_cb::login_finished decoded{};
+                expect(static_cast<bool>(
+                    login_cb::decode_login_finished(in, decoded)));
+                expect(net::uuid::from_halves(decoded.profile_high,
+                                              decoded.profile_low) ==
+                       expected_profile().id);
+            }
+        };
+
+    "net/server rejects login acknowledgement before the encryption step"_test =
+        [] {
+            net::session_verifier verifier =
+                [](std::string_view,
+                   std::string_view) -> refrain::result<net::session_profile> {
+                return expected_profile();
+            };
+            fixture test{verifier};
+            expect(static_cast<bool>(test.running));
+            if (!test.running) {
+                return;
+            }
+            constexpr std::uint64_t connection{301};
+            test.open(connection);
+            const auto challenge{test.join_to_hello(connection, "AuthTester")};
+            expect(challenge.size() == 4U);
+            if (challenge.size() != 4U) {
+                return;
+            }
+            // Skipping the key exchange must not reach the configuration
+            // stage: no login success was acknowledged yet.
+            test.feed(connection, login_sb::login_acknowledged::packet_id, {});
+            expect(!test.codec->live(connection));
+            expect(!test.has_packet(connection,
+                                    login_cb::login_finished::packet_id));
+        };
+
+    "net/server rejects a login whose session check times out or fails TLS"_test =
+        [] {
+            for (const auto reason :
+                 {net::auth_error::timeout, net::auth_error::tls_failure}) {
+                // The verifier fails synthetically: no network access is
+                // involved, and the login handler must close the connection
+                // instead of waiting forever.
+                net::session_verifier verifier = [reason](std::string_view,
+                                                          std::string_view)
+                    -> refrain::result<net::session_profile> {
+                    return std::unexpected{net::make_auth_error(
+                        reason, "synthetic session failure")};
+                };
+                fixture test{verifier};
+                expect(static_cast<bool>(test.running));
+                if (!test.running) {
+                    return;
+                }
+                constexpr std::uint64_t connection{302};
+                test.open(connection);
+                const auto challenge{
+                    test.join_to_hello(connection, "AuthTester")};
+                expect(challenge.size() == 4U);
+                if (challenge.size() != 4U) {
+                    return;
+                }
+                test.send_key(connection, challenge, shared_secret());
+                expect(wait_until(
+                    [&test] { return !test.codec->live(connection); }));
+                expect(!test.has_packet(connection,
+                                        login_cb::login_finished::packet_id));
+                expect(test.disconnect_reason(connection)
+                           .find("Failed to verify username") !=
+                       std::string::npos);
+            }
+        };
 };
 
 } // namespace

@@ -45,11 +45,15 @@ using boost::ut::suite;
 using namespace boost::ut::literals;
 
 namespace net = refrain::net;
+namespace config_cb = refrain::protocol::current::configuration::clientbound;
 namespace config_sb = refrain::protocol::current::configuration::serverbound;
 namespace handshake_sb = refrain::protocol::current::handshake::serverbound;
 namespace login_cb = refrain::protocol::current::login::clientbound;
 namespace login_sb = refrain::protocol::current::login::serverbound;
+namespace play_cb = refrain::protocol::current::play::clientbound;
 namespace play_sb = refrain::protocol::current::play::serverbound;
+namespace status_cb = refrain::protocol::current::status::clientbound;
+namespace status_sb = refrain::protocol::current::status::serverbound;
 
 /// Injected monotonic clock shared by the I/O and simulation paths.
 class fake_clock {
@@ -169,6 +173,13 @@ class scripted_codec final : public net::protocol_codec {
         const std::lock_guard lock{mutex_};
         const auto found{sent_.find(connection)};
         return found == sent_.end() ? std::vector<packet>{} : found->second;
+    }
+    [[nodiscard]] auto has_sent(std::uint64_t connection,
+                                std::uint32_t packet_id) -> bool {
+        const auto packets{sent(connection)};
+        return std::ranges::any_of(packets, [packet_id](const auto &entry) {
+            return entry.first == packet_id;
+        });
     }
 
   private:
@@ -513,8 +524,8 @@ suite<"net/hardening"> server_hardening_tests = [] {
             constexpr std::uint64_t second{37};
             test.open(first);
             test.open(second);
-            test.join_play(first);
-            test.join_play(second);
+            test.join_play(first, "BudgetOne");
+            test.join_play(second, "BudgetTwo");
             test.feed_play(first, 1, 600);
             expect(test.codec->live(first));
             test.feed_play(second, 1, 600);
@@ -650,6 +661,202 @@ suite<"net/hardening"> server_hardening_tests = [] {
         fixture high{"view_distance = 32\nsimulation_distance = 32\n"};
         expect(static_cast<bool>(high.running));
     };
+
+    "net/server enforces the custom_payload direction ceilings"_test = [] {
+        const auto channel{
+            refrain::data::resource_location::parse("minecraft:brand")};
+        expect(channel.has_value());
+        if (!channel) {
+            return;
+        }
+        fixture test{};
+        expect(static_cast<bool>(test.running));
+        if (!test.running) {
+            return;
+        }
+        const auto join_configuration = [&test](std::uint64_t connection,
+                                                std::string_view name) {
+            handshake_sb::intention intention{};
+            intention.protocol = 777;
+            intention.host = "localhost";
+            intention.port = 25565;
+            intention.next = 2;
+            test.feed(
+                connection, handshake_sb::intention::packet_id,
+                encode_payload(intention, handshake_sb::encode_intention));
+            login_sb::hello hello{};
+            hello.name = std::string{name};
+            test.feed(connection, login_sb::hello::packet_id,
+                      encode_payload(hello, login_sb::encode_hello));
+            test.feed(connection, login_sb::login_acknowledged::packet_id, {});
+        };
+
+        // The serverbound ceiling is 32,767 bytes after the channel id; the
+        // boundary is accepted and one byte past it closes the connection
+        // before the decoder copies the payload.
+        constexpr std::uint64_t boundary{80};
+        test.open(boundary);
+        join_configuration(boundary, "PayloadLimit");
+        config_sb::custom_payload accepted{};
+        accepted.channel = *channel;
+        accepted.data.assign(32'767, std::byte{0x42});
+        test.feed(boundary, config_sb::custom_payload::packet_id,
+                  encode_payload(accepted, config_sb::encode_custom_payload));
+        expect(test.codec->live(boundary));
+
+        constexpr std::uint64_t oversized{81};
+        test.open(oversized);
+        join_configuration(oversized, "PayloadLimit");
+        config_sb::custom_payload too_big{};
+        too_big.channel = *channel;
+        too_big.data.assign(32'768, std::byte{0x42});
+        test.feed(oversized, config_sb::custom_payload::packet_id,
+                  encode_payload(too_big, config_sb::encode_custom_payload));
+        expect(!test.codec->live(oversized));
+
+        // The play-stage serverbound packet enforces the same ceiling.
+        constexpr std::uint64_t play_connection{82};
+        test.open(play_connection);
+        test.join_play(play_connection, "PayloadLimit");
+        expect(test.codec->live(play_connection));
+        play_sb::custom_payload play_oversized{};
+        play_oversized.channel = *channel;
+        play_oversized.data.assign(32'768, std::byte{0x42});
+        test.feed(
+            play_connection, play_sb::custom_payload::packet_id,
+            encode_payload(play_oversized, play_sb::encode_custom_payload));
+        // Play packets are handled on the simulation thread.
+        test.running->tick();
+        expect(!test.codec->live(play_connection));
+
+        // The clientbound ceiling is 1 MiB. The only outbound path is raw
+        // packet sending; an oversized payload is dropped before encoding.
+        constexpr std::uint64_t outbound{83};
+        test.open(outbound);
+        test.join_play(outbound, "PayloadLimit");
+        expect(test.codec->live(outbound));
+        std::vector<std::byte> body;
+        net::writer body_writer{body};
+        body_writer.write_varint(play_cb::custom_payload::packet_id);
+        expect(body_writer.write_identifier(*channel).has_value());
+        body_writer.write_bytes(
+            std::vector<std::byte>(1U << 20U, std::byte{0x42}));
+        body_writer.write_bytes(std::vector<std::byte>(1, std::byte{0x42}));
+        test.running->send_raw(outbound, body);
+        expect(!test.codec->has_sent(outbound,
+                                     play_cb::custom_payload::packet_id));
+
+        body.clear();
+        net::writer small_writer{body};
+        small_writer.write_varint(play_cb::custom_payload::packet_id);
+        expect(small_writer.write_identifier(*channel).has_value());
+        small_writer.write_bytes(std::vector<std::byte>(16, std::byte{0x42}));
+        test.running->send_raw(outbound, body);
+        expect(
+            test.codec->has_sent(outbound, play_cb::custom_payload::packet_id));
+    };
+
+    "net/server kicks the older session of a duplicate login"_test = [] {
+        fixture test{};
+        expect(static_cast<bool>(test.running));
+        if (!test.running) {
+            return;
+        }
+        constexpr std::uint64_t first{90};
+        test.open(first);
+        test.join_play(first, "DupPlayer");
+        expect(test.codec->live(first));
+
+        // Offline identity is derived from the name, so the same name is the
+        // same profile; the newest login keeps the session and the older one
+        // receives the duplicate-login disconnect.
+        constexpr std::uint64_t second{91};
+        test.open(second);
+        test.join_play(second, "DupPlayer");
+        expect(test.codec->live(second));
+        expect(!test.codec->live(first));
+        expect(test.codec->released(first) == 1);
+        expect(test.codec->has_sent(first, play_cb::disconnect::packet_id));
+
+        // A different name is a different identity and both sessions stay.
+        constexpr std::uint64_t third{92};
+        test.open(third);
+        test.join_play(third, "OtherPlayer");
+        expect(test.codec->live(second));
+        expect(test.codec->live(third));
+    };
+
+    "net/server answers a status request only when status replies are enabled"_test =
+        [] {
+            fixture enabled{};
+            expect(static_cast<bool>(enabled.running));
+            if (enabled.running) {
+                constexpr std::uint64_t connection{70};
+                enabled.open(connection);
+                handshake_sb::intention intention{};
+                intention.protocol = 777;
+                intention.host = "localhost";
+                intention.port = 25565;
+                intention.next = 1;
+                enabled.feed(
+                    connection, handshake_sb::intention::packet_id,
+                    encode_payload(intention, handshake_sb::encode_intention));
+                status_sb::status_request request{};
+                enabled.feed(
+                    connection, status_sb::status_request::packet_id,
+                    encode_payload(request, status_sb::encode_status_request));
+                expect(enabled.codec->live(connection));
+                expect(enabled.codec->has_sent(
+                    connection, status_cb::status_response::packet_id));
+            }
+
+            fixture disabled{"[status]\nenabled = false\n"};
+            expect(static_cast<bool>(disabled.running));
+            if (!disabled.running) {
+                return;
+            }
+            constexpr std::uint64_t connection{71};
+            disabled.open(connection);
+            handshake_sb::intention intention{};
+            intention.protocol = 777;
+            intention.host = "localhost";
+            intention.port = 25565;
+            intention.next = 1;
+            disabled.feed(
+                connection, handshake_sb::intention::packet_id,
+                encode_payload(intention, handshake_sb::encode_intention));
+            status_sb::status_request request{};
+            disabled.feed(
+                connection, status_sb::status_request::packet_id,
+                encode_payload(request, status_sb::encode_status_request));
+            // No response of any kind, and the connection is closed: the
+            // MOTD, version and player count are not disclosed.
+            expect(!disabled.codec->live(connection));
+            for (const auto packet_id : {status_cb::status_response::packet_id,
+                                         status_cb::pong_response::packet_id}) {
+                expect(!disabled.codec->has_sent(connection, packet_id));
+            }
+        };
+
+    "net/server rejects out-of-range auth timeout and player ceiling"_test =
+        [] {
+            // Both values are narrowed into smaller integer types, so a value
+            // outside the documented range must stop startup instead of
+            // wrapping.
+            for (const auto *config :
+                 {"auth_timeout_ms = 0\n", "auth_timeout_ms = 60001\n",
+                  "[status]\nmax_players = -1\n",
+                  "[status]\nmax_players = 1000001\n"}) {
+                fixture test{config};
+                expect(!test.running);
+                expect(test.error.find("out of range") != std::string::npos);
+            }
+            fixture low{"auth_timeout_ms = 1\n[status]\nmax_players = 0\n"};
+            expect(static_cast<bool>(low.running));
+            fixture high{
+                "auth_timeout_ms = 60000\n[status]\nmax_players = 1000000\n"};
+            expect(static_cast<bool>(high.running));
+        };
 
     "net/server derives the offline identity from the name"_test = [] {
         fixture test{};

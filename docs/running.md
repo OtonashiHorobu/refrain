@@ -276,6 +276,7 @@ max_inbound_packets_total = 8192
 max_inbound_bytes_total = 8388608
 
 [status]
+enabled = true          # false: close status handshakes without a response
 motd = "A Refrain Server"
 max_players = 20
 
@@ -301,6 +302,12 @@ unauthenticated peer cannot hold a slot, a descriptor and a receive buffer
 forever. `pre_play_buffer_bytes` bounds what one unauthenticated connection may
 leave in its frame decoder; an ordinary handshake, status or login packet is a
 few hundred bytes, so the default is far below the 2 MiB frame ceiling.
+`[status].enabled` controls whether the server answers the server list ping:
+when it is false a status handshake is closed without a response, so the MOTD,
+version and player count are not disclosed. `[status].max_players` must be
+between 0 and 1,000,000 and `auth_timeout_ms` between 1 and 60,000; a value
+outside those ranges stops startup instead of being narrowed into a different
+setting.
 
 The play queue limits bound the work a tick has to catch up on.
 `max_inbound_packets` and `max_inbound_bytes` apply per connection,
@@ -331,9 +338,11 @@ would stop the corresponding pass from making progress.
 write queue passes `max_connection_backlog` is left alone for that tick, so a
 client that stops reading slows only its own view and catches up when it
 resumes; `max_total_backlog` pauses the whole stream, generation included, once
-every client is behind. The transport has its own per-connection cap above both
-values and closes a connection that passes it, so these two decide when the
-stream yields first, not when a client is dropped. The values shown are the
+every client is behind. The transport holds 8 MiB of undelivered frames for one
+connection and 64 MiB for all connections together, and closes a connection
+whose queue would pass either ceiling; the per-connection cap is above both
+stream values, so these two decide when the stream yields first, not when a
+client is dropped. The values shown are the
 defaults, a value below one is raised to one, and the effective values are
 logged at startup.
 

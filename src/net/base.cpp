@@ -423,10 +423,25 @@ auto writer::write_string(std::string_view text, std::size_t max_characters)
         return std::unexpected{make_error(error_code::invalid_argument,
                                           "string is not valid UTF-8")};
     }
+    if (max_characters > std::numeric_limits<std::size_t>::max() / 4U) {
+        return std::unexpected{
+            make_error(error_code::invalid_argument,
+                       "string limit is too large to validate against bytes")};
+    }
     if (utf16_length(text) > max_characters) {
         return std::unexpected{make_error(
             error_code::invalid_argument,
             fmt::format("string exceeds {} character(s)", max_characters))};
+    }
+    // Well-formed UTF-8 needs at most three bytes per UTF-16 unit, so a string
+    // inside the character ceiling cannot cross this bound. It stays as the
+    // stated byte contract and as a guard for a future encoder change.
+    if (text.size() > max_characters * 4U) {
+        return std::unexpected{make_error(
+            error_code::invalid_argument,
+            fmt::format("string is {} bytes, the byte ceiling for {} "
+                        "character(s) is {}",
+                        text.size(), max_characters, max_characters * 4U))};
     }
     if (text.size() > std::numeric_limits<std::uint32_t>::max()) {
         return std::unexpected{make_error(error_code::invalid_argument,
@@ -439,7 +454,7 @@ auto writer::write_string(std::string_view text, std::size_t max_characters)
 }
 
 auto writer::write_identifier(const data::resource_location &value) -> status {
-    return write_string(value.to_string(), 32'767);
+    return write_string(value.to_string(), max_string_characters);
 }
 
 auto writer::write_uuid(const uuid &value) -> status {

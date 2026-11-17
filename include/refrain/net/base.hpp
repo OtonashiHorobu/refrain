@@ -148,9 +148,15 @@ class writer {
     void write_varint(std::uint32_t value);
     void write_varlong(std::uint64_t value);
 
-    [[nodiscard]] auto write_string(std::string_view text,
-                                    std::size_t max_bytes = max_string_bytes)
-        -> status;
+    /// Append a length-prefixed UTF-8 string. `max_characters` is the vanilla
+    /// field ceiling counted in UTF-16 code units, so a supplementary code
+    /// point counts as two. The encoded byte length is additionally bounded by
+    /// the widest legal UTF-8 encoding of that many units
+    /// (`max_characters * 4`), which also keeps the VarInt length in range.
+    /// Invalid UTF-8 is rejected.
+    [[nodiscard]] auto
+    write_string(std::string_view text,
+                 std::size_t max_characters = max_string_characters) -> status;
     [[nodiscard]] auto write_identifier(const data::resource_location &value)
         -> status;
     [[nodiscard]] auto write_uuid(const uuid &value) -> status;
