@@ -13,6 +13,7 @@
 #   scripts/ci.sh --skip-build             # test/smoke only
 #   scripts/ci.sh --skip-format            # skip the clang-format gate
 #   scripts/ci.sh --offline                # pass -nr to conan install
+#   scripts/ci.sh --policy-only            # the fast policy gates only, no build
 #
 # The vendored lockfile is mandatory: a missing/stale conan/locks/vendor.lock
 # fails the run instead of silently building against unlocked deps.
@@ -28,6 +29,7 @@ LOCKFILE="conan/locks/vendor.lock"
 SKIP_CONFIGURE=""
 SKIP_BUILD=""
 OFFLINE=""
+POLICY_ONLY=""
 RUN_FORMAT_CHECK=1
 
 for arg in "$@"; do
@@ -35,8 +37,9 @@ for arg in "$@"; do
         --skip-configure)    SKIP_CONFIGURE=1 ;;
         --skip-build)        SKIP_BUILD=1 ;;
         --offline)           OFFLINE=1 ;;
+        --policy-only)       POLICY_ONLY=1 ;;
         --skip-format)       RUN_FORMAT_CHECK="" ;;
-        -h|--help)           sed -n '2,23p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help)           sed -n '2,24p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "unknown option: $arg" >&2; exit 2 ;;
     esac
 done
@@ -60,6 +63,11 @@ python3 tools/check_literal_tables.py --self-test
 
 say "[2/12] platform abstraction guard (tools/platform_check.py)"
 python3 tools/platform_check.py
+
+if [[ -n "$POLICY_ONLY" ]]; then
+    say "policy gates OK (--policy-only: no configure, build or smoke step ran)"
+    exit 0
+fi
 
 say "[3/11] lockfile-checked conan install (profile: $PROFILE)"
 if [[ ! -f "$CONAN_HOME_DIR/profiles/$PROFILE" ]]; then

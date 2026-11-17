@@ -94,6 +94,24 @@ jobs:
           path: conan-pins.txt
 
   # ---------------------------------------------------------------------------
+  # Policy gate: the cross-cutting policy checks run through the same
+  # `scripts/ci.sh` entry point local runs use (licenses, protocol boundary,
+  # contract versions, datapack literal tables, save-format versions, vendor
+  # and platform rules). Every check is a Python script over the tracked tree,
+  # so the job needs no compiler, no Conan cache and no network beyond the
+  # checkout, and it stays fast on pull requests.
+  # ---------------------------------------------------------------------------
+  policy-guard:
+    name: policy guard
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Policy gates
+        run: scripts/ci.sh --policy-only
+
+  # ---------------------------------------------------------------------------
   # Formatting gate: fast, no compilation, same check as `scripts/ci.sh`.
   # Generated SDK headers are excluded via .clang-format-ignore.
   # ---------------------------------------------------------------------------
@@ -127,7 +145,7 @@ jobs:
     container:
       image: gcc:16
     timeout-minutes: 90
-    needs: vendor-guard
+    needs: [vendor-guard, policy-guard]
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 1G
