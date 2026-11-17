@@ -53,8 +53,9 @@ void report_example_values(context &ctx) {
 } // namespace
 
 void register_parser_examples(dispatcher &into) {
-    auto example{into.literal("example").tooltip(
-        "Exercise every typed command argument")};
+    auto example{into.literal("example")
+                     .require_node("refrain.command.example")
+                     .tooltip("Exercise every typed command argument")};
     auto flag{into.argument("flag", bool_arg())};
     auto count{into.argument("count", integer_arg(0, 100))};
     auto big{into.argument("big", long_arg())};

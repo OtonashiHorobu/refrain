@@ -234,10 +234,9 @@ config/
   storage.toml      zstd and compaction policy
   mods.toml             mod install/trust policy: [signature], [trust],
                         [install] and [rotation."<id>"] (see docs/modding.md)
-  mods_admin.toml       mod management: [lifecycle] hot gates, [admin]
-                        operators allowed to run /mods
+  mods_admin.toml       mod management: [lifecycle] hot gates
   permissions.toml      permission policy served by the built-in permission
-                        service: [defaults], [op], [grants], [groups]
+                        service: [defaults], [op], [ops], [grants], [groups]
   providers/<id>.toml   implementation-specific options
   mods/<id>.toml        options of mods that do not provide a service
 ```
@@ -314,7 +313,7 @@ watchdog_timeout_ms = 5000
 ```
 
 `permissions.toml` is the policy of the built-in permission service. A node is
-a dot-separated lowercase path such as `refrain.command.teleport` or
+a dot-separated lowercase path such as `refrain.command.gamemode` or
 `refrain.mods.admin`; a rule may end in `.*` to cover a namespace and may start
 with `!` to deny, and a deny wins over every grant. Subjects are
 `player:<uuid>` (a profile name also matches as a fallback), `entity:<uuid>` and
@@ -323,12 +322,20 @@ with `!` to deny, and a deny wins over every grant. Subjects are
 
 ```toml
 [defaults]
-default = "deny"        # or "op": an operator at or above op.min_level holds
-                        # every node
+default = "deny"        # or "op": an operator holds every node
+# Nodes every subject holds. The public command surface of the server.
+nodes = ["refrain.command.help", "refrain.command.list"]
 
 [op]
+# Vanilla ladder level that counts as an operator. It is reserved for a
+# composition that supplies a real op level in the query.
 min_level = 1
 nodes = ["*"]           # nodes every operator holds
+
+[ops]
+# Players treated as operators: canonical lowercase profile uuids or profile
+# names. The server console always holds every node.
+players = []
 
 [grants]
 "player:069a79f4-44e9-4726-a5be-fca90e38aaf5" = ["refrain.command.*", "!refrain.command.stop"]
@@ -338,15 +345,33 @@ moderators = ["refrain.mods.admin"]
 ```
 
 The console always holds every node. Rules resolve in this order: console, a
-matching deny, a matching grant, an operator's `[op].nodes`, then
-`[defaults].default`. Without the file (or without a mounted `permissions`
-namespace) the service serves the built-in policy instead of failing to start:
-the console holds every node and every other subject is denied. The service
-publishes a monotonic revision for caches and re-reads the file when the
-permission commands ask it to; until those land, an edit takes effect on the
-next start. The generated first-start file grants operators every node and
-denies every other subject until `[grants]` names it; remove `[op].nodes` to
-grant operators nothing implicitly either.
+matching deny, a matching grant, an operator's `[op].nodes` (an operator is a
+player in `[ops].players` or at `[op].min_level` on the ladder), a grant in
+`[defaults].nodes`, then `[defaults].default`.
+
+The generated first-start policy leaves the public command surface
+(`refrain.command.help`, `refrain.command.list`) open to every player, grants
+`[ops].players` every node, and denies everything else. A fresh install
+therefore announces and runs `/help` and `/list` for everyone; `/say`, the
+game-management commands and `/mods` need an `[ops].players` entry or an
+explicit `[grants]` rule. Remove an entry from `[defaults].nodes` to hide that
+command from players, and add a node there to make another command public.
+
+The old `config/mods_admin.toml` operator list is not imported: the file keeps
+only its `[lifecycle]` gates. Move its entries into `[ops].players` to keep
+them operators, or into a `[grants]` entry to allow one player one node. A stale
+`[admin]` table is ignored with a warning at startup.
+
+A composition without the `refrain:permissions` provider (for example a
+gamepack that does not select `refrain.permissions`) keeps the vanilla
+op-level semantics: every command node declares a fallback level next to its
+node, and a player at or above that level may use the command.
+
+The service publishes a monotonic revision for caches and re-reads the file
+when the permission commands ask it to; until those land, an edit takes effect
+on the next start. A policy change advances the revision, which invalidates the
+command-tree cache and makes the server resend the tree to every player in
+play.
 
 A CLI flag that names the same setting is an explicit override and wins over
 both the TOML file and imported properties.
@@ -381,7 +406,32 @@ The server announces a small command tree after joining:
 | `/defaultgamemode <mode>` | persist the world's default game mode |
 | `/difficulty <0-3>` | persist and broadcast the world difficulty |
 | `/hardcore <on\|off>` | persist hardcore for new logins |
-| `/mods <command>` | list, verify, install, uninstall, reload, reload content data or manage the trust state of mods (operator only; see [Mod management](#mod-management)) |
+| `/mods <command>` | list, verify, install, uninstall, reload, reload content data or manage the trust state of mods (requires `refrain.mods.admin`; see [Mod management](#mod-management)) |
+
+Every in-game command declares a stable permission node. The policy decides who
+holds it; the fallback level is what a composition without the permission
+service compares a player's vanilla op level against. The console ignores the
+nodes and may run every console command.
+
+| Command | Permission node | Fallback level |
+|---|---|---|
+| `/help` | `refrain.command.help` | everyone |
+| `/list` | `refrain.command.list` | everyone |
+| `/say <message>` | `refrain.command.say` | gamemaster |
+| `/gamemode <mode>` | `refrain.command.gamemode` | gamemaster |
+| `/defaultgamemode <mode>` | `refrain.command.defaultgamemode` | gamemaster |
+| `/difficulty <0-3>` | `refrain.command.difficulty` | gamemaster |
+| `/time <...>` | `refrain.command.time` | gamemaster |
+| `/weather <...>` | `refrain.command.weather` | gamemaster |
+| `/hardcore <on\|off>` | `refrain.command.hardcore` | admin |
+| `/mods <command>` | `refrain.mods.admin` | admin |
+
+The tree snapshot and the completion list omit a node the player's subject may
+not use, and the same check rejects the command at execution, so the three
+paths agree. A denied command answers with the missing node instead of a
+generic parse error.
+
+The console reads the same commands without a permission check; its table:
 
 | Command | Effect |
 |---|---|
@@ -458,10 +508,6 @@ hot_install = false
 hot_reload = false
 # Rebuild the datapack content view (data and assets) in place.
 hot_reload_data = false
-
-[admin]
-# Player uuids allowed to run /mods. The server console is always allowed.
-operators = []
 ```
 
 The policy file is the source of truth for every runtime install. One-run
@@ -470,10 +516,19 @@ apply to the startup bootstrap only; the console and in-game commands always use
 `config/mods.toml`.
 
 The in-game command is gated by the `refrain.mods.admin` permission node and is
-only announced to an operator. A player without it is denied with a message
-naming the node; the command tree is filtered per player so an operator's tree
-is never shown to another player. There is no permission service yet, so the
-operator list in `mods_admin.toml` is the whole policy.
+only announced to a subject that holds it. A player without it is denied with a
+message naming the node; the command tree is filtered per player, and the
+completion list follows the same filter, so one player's tree is never shown to
+another. The server console holds every node and keeps its unconditional
+`mods` console command.
+
+Who holds the node is decided in `config/permissions.toml`: list the player in
+`[ops].players` to make them an operator, or grant the node to one player in
+`[grants]`. The old `[admin] operators` list of `config/mods_admin.toml` is not
+read; move its entries to `[ops].players` (or a `[grants]` rule) when upgrading.
+A composition without the permission service falls back to the command's
+declared admin level, so a provider-less development build keeps the previous
+behaviour.
 
 Installing and uninstalling change the content store immediately. Whether the
 running composition also changes is controlled by `hot_install`; with it off

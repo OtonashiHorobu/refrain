@@ -381,11 +381,15 @@ deny, and a deny wins over every grant:
 ```toml
 # config/permissions.toml
 [defaults]
-default = "deny"        # or "op": an operator at [op].min_level holds every node
+default = "deny"        # or "op": an operator holds every node
+nodes = ["refrain.command.help", "refrain.command.list"]
 
 [op]
-min_level = 1
+min_level = 1           # vanilla ladder level that counts as an operator
 nodes = ["refrain.mods.admin"]
+
+[ops]
+players = ["<uuid>", "Notch"]   # player identities that count as operators
 
 [grants]
 "player:069a79f4-44e9-4726-a5be-fca90e38aaf5" = ["refrain.command.*", "!refrain.command.stop"]
@@ -397,12 +401,28 @@ moderators = ["refrain.permissions.admin"]
 ```
 
 Rules resolve in this order: the console holds every node; a matching deny
-denies; a matching grant allows; an operator's `[op].nodes` set allows;
-`[defaults].default` decides. A grant joins a group with `@name`; groups are
-single-level in v1. Without a mounted `permissions` configuration namespace the
-resolver serves the built-in policy: the console holds every node and every
-other subject is denied, so a composition that adds the service before the
-operator writes a policy fails closed instead of granting players access.
+denies; a matching grant allows; an operator's `[op].nodes` set allows; a grant
+in `[defaults].nodes` allows; `[defaults].default` decides. An operator is a
+player listed in `[ops].players` (canonical lowercase uuid or profile name) or
+one at or above `[op].min_level` on the vanilla ladder supplied in the query.
+`[defaults].nodes` is the public surface every subject holds; it is how the
+built-in command tree keeps `/help` and `/list` available on a fresh install
+while management commands stay grant-only. A grant joins a group with `@name`;
+groups are single-level in v1. Without a mounted `permissions` configuration
+namespace the resolver serves the built-in policy: the console holds every node
+and every other subject is denied, so a composition that adds the service
+before the operator writes a policy fails closed instead of granting players
+access.
+
+The built-in command tree is the reference consumer of this policy: every
+in-game command declares a stable node (`refrain.command.<name>` and
+`refrain.mods.admin` below the feature namespace), and the tree, the
+suggestion list and the execution check all consult the same node. A command
+node also declares a vanilla ladder fallback, which decides when no provider is
+active; the complete node table is in
+[Running a server](running.md#in-game-commands). A command denied by the policy
+is absent from the tree and from completion, and the execution answers with the
+missing node text.
 
 A mod declares its nodes by using them: there is no registration call, only the
 namespace convention above. To query from mod code, look the provider up
@@ -817,8 +837,12 @@ The management service reads the install/trust policy from the same
 `config/mods.toml` the startup bootstrap uses, so a runtime install cannot
 accept a package the next start would reject. `config/mods_admin.toml` holds
 the hot lifecycle gates (`[lifecycle] hot_install`, `hot_reload`,
-`hot_reload_data`) and the list of player uuids allowed to run the in-game
-command (`[admin] operators`). The hot gates default off: installing or
+`hot_reload_data`). Who may run the in-game command is the
+`refrain.mods.admin` permission node: grant it in `config/permissions.toml`,
+either by listing the player in `[ops].players` or with a `[grants]` entry. The
+console frontend is unconditional. The old `[admin] operators` list is not
+read; a stale table is ignored with a warning so an old allowlist never
+silently becomes a grant. The hot gates default off: installing or
 uninstalling changes the content store at
 once, but the running composition picks the change up on the next start unless
 the gate is enabled. A hot install only publishes a mod the composition

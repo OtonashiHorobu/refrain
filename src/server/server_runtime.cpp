@@ -65,6 +65,7 @@ constexpr refrain::log::logger log_config{"config"};
 constexpr refrain::log::logger log_content{"content"};
 constexpr refrain::log::logger log_mods{"mods"};
 constexpr refrain::log::logger log_net{"net"};
+constexpr refrain::log::logger log_permissions{"permissions"};
 constexpr refrain::log::logger log_server{"server"};
 constexpr refrain::log::logger log_sim{"sim"};
 constexpr refrain::log::logger log_world{"world"};
@@ -170,30 +171,6 @@ loaded_composition_snapshot(const server_run_options &options)
         snapshot.push_back(std::move(entry));
     }
     return snapshot;
-}
-
-/// Operator gate of the in-game mod command tree: the console and any
-/// non-player source are trusted, a player needs a configured uuid. The
-/// server has no permission service yet, so this list is the whole policy.
-[[nodiscard]] auto
-make_mod_admin_gate(const refrain::server::mod_management_settings &settings)
-    -> std::function<bool(const refrain::command::source &)> {
-    std::vector<std::uint64_t> keys{};
-    keys.reserve(settings.operators.size());
-    for (const auto &text : settings.operators) {
-        auto id{refrain::net::uuid::parse(text)};
-        if (!id) {
-            continue; // the settings loader already rejected invalid uuids
-        }
-        keys.push_back(refrain::server::player_identity_key(*id));
-    }
-    return [keys = std::move(keys)](const refrain::command::source &source) {
-        if (!source.identity().player) {
-            return true;
-        }
-        return std::find(keys.begin(), keys.end(), source.identity().key) !=
-               keys.end();
-    };
 }
 
 } // namespace
@@ -609,11 +586,11 @@ auto run_server(const server_run_options &options,
     }
     refrain::app::mod_management mods_management{std::move(management)};
     log_mods.info(
-        "mod management is available with hot install {}, hot reload {} and "
-        "{} operators, targeting {}",
+        "mod management is available with hot install {}, hot reload {}, "
+        "targeting {}; the in-game command requires the 'refrain.mods.admin' "
+        "permission node",
         management_settings->hot_install ? "on" : "off",
         management_settings->hot_reload ? "on" : "off",
-        management_settings->operators.size(),
         options.content_store.empty() ? std::string{"no content store"}
                                       : options.content_store);
     if (mod_lifecycle_service) {
@@ -646,7 +623,31 @@ auto run_server(const server_run_options &options,
     command_environment->world = &world;
     command_environment->default_mode = initial_mode;
     command_environment->mods = &mods_management;
-    command_environment->mod_admin = make_mod_admin_gate(*management_settings);
+    // The permission service is authoritative when the composition provides
+    // it: the command filter, the explicit denial path and the tree cache all
+    // read through this binding. Without a provider the command nodes fall
+    // back to their declared op levels.
+    if (services.permissions != nullptr &&
+        services.permissions_self != nullptr) {
+        refrain::server::bind_permissions(command_environment,
+                                          *services.permissions,
+                                          services.permissions_self);
+        log_permissions.info(
+            "command permissions are served by {}, policy revision {}",
+            services.permissions_provider.empty()
+                ? std::string{"the built-in policy"}
+                : services.permissions_provider,
+            command_environment->permission_revision());
+    } else {
+        log_permissions.info(
+            "no permission provider is active; commands fall back to their "
+            "declared op levels");
+    }
+    const auto initial_permission_revision{
+        command_environment->permission_revision
+            ? command_environment->permission_revision()
+            : 0U};
+    auto published_permission_revision{initial_permission_revision};
     // The first-party port owns the simulation table in this process, so the
     // session forwards to it without a copy. A contract port owns no such
     // table: the provider keeps it and hands the runtime a projection, so the
@@ -1442,6 +1443,25 @@ auto run_server(const server_run_options &options,
         chunks.observe_tick(work_ns);
         if (options.on_tick) {
             options.on_tick(static_cast<std::uint64_t>(ticks_run));
+        }
+        // A permission policy change invalidates every cached command tree:
+        // rebuild and resend them so a new grant or revoke takes effect in
+        // play without a reconnect.
+        if (command_environment->permission_revision) {
+            const auto policy_revision{
+                command_environment->permission_revision()};
+            if (policy_revision != published_permission_revision) {
+                published_permission_revision = policy_revision;
+                if (listener) {
+                    const auto player_count{
+                        listener->active_connections().size()};
+                    listener->resend_commands();
+                    log_permissions.info(
+                        "permission policy revision changed to {}, resent the "
+                        "command tree to {} players",
+                        policy_revision, player_count);
+                }
+            }
         }
         if (options.hash_every > 0 &&
             (ticks_run % static_cast<std::int64_t>(options.hash_every)) == 0) {

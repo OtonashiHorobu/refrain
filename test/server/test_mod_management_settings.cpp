@@ -3,7 +3,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 
 // Mod management configuration: the install/trust policy reused from the
-// startup bootstrap and the hot gates / operator list of the command surface.
+// startup bootstrap and the hot lifecycle gates of the command surface.
 
 #include <refrain/server/mod_management_settings.hpp>
 
@@ -57,7 +57,6 @@ const suite mod_management_settings_tests = [] {
             expect(!settings->hot_install);
             expect(!settings->hot_reload);
             expect(!settings->hot_reload_data);
-            expect(settings->operators.empty());
             expect(settings->policy_source.empty());
             expect(settings->admin_source.empty());
         }
@@ -76,12 +75,7 @@ const suite mod_management_settings_tests = [] {
                           "[lifecycle]\n"
                           "hot_install = true\n"
                           "hot_reload = true\n"
-                          "hot_reload_data = true\n"
-                          "\n[admin]\n"
-                          "operators = [\n"
-                          "  \"11111111-1111-1111-1111-111111111111\",\n"
-                          "  \"AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA\",\n"
-                          "]\n"));
+                          "hot_reload_data = true\n"));
         auto settings{server::load_mod_management_settings(directory.string())};
         expect(static_cast<bool>(settings)) << "load failed";
         if (settings) {
@@ -92,13 +86,6 @@ const suite mod_management_settings_tests = [] {
             expect(settings->hot_install);
             expect(settings->hot_reload);
             expect(settings->hot_reload_data);
-            expect(settings->operators.size() == 2U);
-            // Canonical lowercase form, independent of how the operator wrote
-            // it.
-            expect(settings->operators.front() ==
-                   "11111111-1111-1111-1111-111111111111");
-            expect(settings->operators.back() ==
-                   "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
             expect(settings->policy_source.find("mods.toml") !=
                    std::string::npos);
             expect(settings->admin_source.find("mods_admin.toml") !=
@@ -143,21 +130,29 @@ const suite mod_management_settings_tests = [] {
             fs::remove_all(directory, error);
         };
 
-    "mod settings/an operator entry that is not a uuid is an error"_test = [] {
-        const auto directory{scratch_directory("operator")};
-        expect(write_file(directory, "mods_admin.toml",
-                          "[admin]\noperators = [\"not-a-uuid\"]\n"));
-        auto settings{server::load_mod_management_settings(directory.string())};
-        expect(!settings);
-        if (!settings) {
-            expect(settings.error().code == refrain::error_code::parse_error);
-            expect(settings.error().message.find("not-a-uuid") !=
-                   std::string::npos)
-                << settings.error().message;
-        }
-        std::error_code error;
-        fs::remove_all(directory, error);
-    };
+    "mod settings/the legacy admin table is ignored without granting anyone"_test =
+        [] {
+            // The operator allowlist is no longer a configuration of this
+            // file: `/mods` is gated by the `refrain.mods.admin` permission
+            // node. An old file must load for its lifecycle gates and must not
+            // turn its list into an effective grant, whatever it contains.
+            const auto directory{scratch_directory("legacy-admin")};
+            expect(write_file(directory, "mods_admin.toml",
+                              "[lifecycle]\n"
+                              "hot_reload = true\n"
+                              "\n[admin]\n"
+                              "operators = [\"not-a-uuid\"]\n"));
+            auto settings{
+                server::load_mod_management_settings(directory.string())};
+            expect(static_cast<bool>(settings)) << "load failed";
+            if (settings) {
+                expect(settings->hot_reload);
+                expect(settings->admin_source.find("mods_admin.toml") !=
+                       std::string::npos);
+            }
+            std::error_code error;
+            fs::remove_all(directory, error);
+        };
 
     "mod settings/a malformed admin file is an error"_test = [] {
         const auto directory{scratch_directory("malformed")};
@@ -190,7 +185,6 @@ const suite mod_management_settings_tests = [] {
             expect(settings->policy.require_signature);
             expect(!settings->hot_install);
             expect(!settings->hot_reload_data);
-            expect(settings->operators.empty());
         }
     };
 };

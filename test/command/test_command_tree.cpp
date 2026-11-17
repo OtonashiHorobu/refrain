@@ -6,6 +6,7 @@
 
 #include <boost/ut.hpp>
 
+#include <algorithm>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -309,13 +310,17 @@ class tree_source final : public refrain::command::source {
         dispatcher.literal("public").executes(
             [](refrain::command::context &) { return 1; });
         auto hidden = dispatcher.literal("secret");
+        hidden.require_node("refrain.command.secret");
         hidden.executes([](refrain::command::context &) { return 1; });
         hidden.then(
             dispatcher.argument("value", refrain::command::word_arg())
                 .executes([](refrain::command::context &) { return 1; }));
-        dispatcher.set_visibility_filter(
-            [](const refrain::command::source &, std::string_view name) {
-                return name != "secret";
+        dispatcher.set_permission_filter(
+            [](const refrain::command::source &,
+               const refrain::command::node_permission &permission) {
+                return permission.node == "refrain.command.secret"
+                           ? refrain::command::permission_decision::denied
+                           : refrain::command::permission_decision::allowed;
             });
 
         tree_source source;
@@ -329,6 +334,86 @@ class tree_source final : public refrain::command::source {
         expect(find_node(*snapshot, "value") == nullptr);
         expect(!dispatcher.execute("secret", source));
     };
+
+    "node permission declarations gate the tree, completion and execution"_test =
+        [] {
+            refrain::command::dispatcher dispatcher;
+            auto gated = dispatcher.literal("gated").require_node(
+                "refrain.command.gated", refrain::command::level::gamemode);
+            gated.executes([](refrain::command::context &) { return 1; });
+            dispatcher.literal("open")
+                .require_node("refrain.command.open")
+                .executes([](refrain::command::context &) { return 1; });
+
+            // Without an injected filter the declared vanilla level is the
+            // whole policy, which is what a composition without the permission
+            // service falls back to.
+            tree_source guest{refrain::command::level::everyone};
+            tree_source owner{refrain::command::level::owner};
+            expect(find_node(*dispatcher.tree(guest), "gated") == nullptr);
+            expect(find_node(*dispatcher.tree(owner), "gated") != nullptr);
+
+            // The filter is authoritative and receives the declared node plus
+            // its fallback level.
+            std::vector<std::string> asked{};
+            refrain::command::permission_level gated_fallback{
+                refrain::command::level::everyone};
+            dispatcher.set_permission_filter(
+                [&asked, &gated_fallback](
+                    const refrain::command::source &,
+                    const refrain::command::node_permission &permission) {
+                    asked.emplace_back(permission.node);
+                    if (permission.node == "refrain.command.gated") {
+                        gated_fallback = permission.fallback;
+                        return refrain::command::permission_decision::allowed;
+                    }
+                    if (permission.node == "refrain.command.open") {
+                        return refrain::command::permission_decision::denied;
+                    }
+                    return refrain::command::permission_decision::not_handled;
+                });
+
+            const auto visible{dispatcher.tree(guest)};
+            expect(find_node(*visible, "gated") != nullptr);
+            expect(find_node(*visible, "open") == nullptr);
+            expect(dispatcher.execute("gated", guest).has_value());
+            expect(!dispatcher.execute("open", guest));
+            expect(gated_fallback == refrain::command::level::gamemode);
+            const auto gated_asked{
+                std::ranges::find(asked,
+                                  std::string{"refrain.command.gated"}) !=
+                asked.end()};
+            const auto open_asked{
+                std::ranges::find(asked, std::string{"refrain.command.open"}) !=
+                asked.end()};
+            expect(gated_asked);
+            expect(open_asked);
+
+            const auto completion{dispatcher.suggest("", 0, guest)};
+            expect(completion.entries.size() == 1U);
+            expect(completion.entries.front().text == "gated");
+        };
+
+    "a not_handled permission answer falls back to the declared level"_test =
+        [] {
+            refrain::command::dispatcher dispatcher;
+            dispatcher.literal("gated")
+                .require_node("refrain.command.gated",
+                              refrain::command::level::admin)
+                .executes([](refrain::command::context &) { return 1; });
+            dispatcher.set_permission_filter(
+                [](const refrain::command::source &,
+                   const refrain::command::node_permission &) {
+                    return refrain::command::permission_decision::not_handled;
+                });
+
+            tree_source guest{refrain::command::level::everyone};
+            tree_source owner{refrain::command::level::owner};
+            expect(find_node(*dispatcher.tree(guest), "gated") == nullptr);
+            expect(find_node(*dispatcher.tree(owner), "gated") != nullptr);
+            expect(!dispatcher.execute("gated", guest));
+            expect(dispatcher.execute("gated", owner).has_value());
+        };
 
     "tree carries a configured suggestion provider string"_test = [] {
         refrain::command::dispatcher dispatcher;

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <refrain/contracts/services/permissions_abi.h>
 #include <refrain/contracts/services/sim_abi.h>
 #include <refrain/contracts/services/storage_abi.h>
 #include <refrain/contracts/services/world_abi.h>
@@ -50,8 +51,10 @@ struct world_bootstrap_config {
 };
 
 /// The active providers of the three services the runtime ticks over, plus
-/// their ids. The ids decide which port implementation the runtime selects;
-/// the vtables are the call surfaces a contract port uses.
+/// optional providers the runtime consults outside the tick (world migration
+/// and permissions), and their ids. The ids decide which port implementation
+/// the runtime selects; the vtables are the call surfaces a contract port
+/// uses.
 ///
 /// A handle is null when the composition has no active provider for that
 /// service. The pointers stay valid for the lifetime of the mod host, which
@@ -90,6 +93,17 @@ struct server_service_handles {
     /// Generation of the migration table. It is only read before the tick loop
     /// starts, so the loop does not validate it.
     std::uint64_t migration_generation{0};
+    /// Optional `refrain:permissions` provider. It is a chain base, so the
+    /// active provider is the resolver the command layer queries; the runtime
+    /// uses it to build the command permission filter and to invalidate the
+    /// command-tree cache when the policy revision changes. Null when the
+    /// composition has no permission service, in which case commands fall back
+    /// to their declared op levels.
+    const refrain_services_permissions_vtable *permissions{nullptr};
+    void *permissions_self{nullptr};
+    std::string permissions_provider{};
+    /// Committed registry generation of the permission table at boot.
+    std::uint64_t permissions_generation{0};
 };
 
 /// Which implementation of `world_port` the runtime uses.

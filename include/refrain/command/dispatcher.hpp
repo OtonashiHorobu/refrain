@@ -36,6 +36,23 @@ inline constexpr std::size_t max_arguments = 128;
 /// Upper bound for redirect hops while resolving one node.
 inline constexpr std::size_t max_redirect_depth = 16;
 
+/// Permission declaration of one command node, as handed to the injected
+/// permission filter: the stable node text the tree, completion and execution
+/// checks, and the vanilla ladder level that applies when no filter is
+/// installed or a permission provider answers `not_handled`.
+struct node_permission {
+    std::string_view node{};
+    permission_level fallback{permission_level::everyone};
+};
+
+/// Permission filter installed by the composition root. It answers one node
+/// declaration for one source; `not_handled` means the filter has no opinion
+/// and the node's declared fallback level decides. The dispatcher consults it
+/// for tree snapshots, completion and execution, so the three paths cannot
+/// disagree about who may use a command.
+using permission_filter =
+    std::function<permission_decision(const source &, const node_permission &)>;
+
 /// Result of a successfully parsed and executed command.
 ///
 /// `success` reflects the executor: it is false when the executor called
@@ -92,11 +109,21 @@ class node_ref {
     [[nodiscard]] auto index() const noexcept -> std::size_t;
     [[nodiscard]] auto name() const noexcept -> std::string_view;
 
-    /// Require a permission level. The predicate is evaluated for tree
-    /// snapshots, suggestions and dispatch. (`requires` is a C++ keyword, so
-    /// the registration verb is `require`.)
+    /// Require a vanilla permission level. The predicate is evaluated for tree
+    /// snapshots, suggestions and dispatch; prefer `require_node()` for a
+    /// command that a permission service should gate. (`requires` is a C++
+    /// keyword, so the registration verb is `require`.)
     auto require(permission_level required) -> node_ref;
     auto require(std::function<bool(const source &)> predicate) -> node_ref;
+
+    /// Declare the stable permission node of this command (for example
+    /// `refrain.command.gamemode`) and the vanilla ladder level that applies
+    /// when no permission filter is installed or the filter answers
+    /// `not_handled`. The node is what the tree snapshot, completion and
+    /// execution check; a node hidden this way hides its whole subtree.
+    auto require_node(std::string_view node,
+                      permission_level fallback = permission_level::everyone)
+        -> node_ref;
 
     /// Tooltip attached to this literal's suggestion entry.
     auto tooltip(std::string_view text) -> node_ref;
@@ -157,20 +184,28 @@ class dispatcher {
                                 std::unique_ptr<const argument_parser> parser)
         -> node_ref;
 
-    /// Install the visibility hook consulted, in addition to each node's own
+    /// Install the permission filter consulted, in addition to each node's own
     /// requirement, by `execute`, `suggest` and `tree`. It receives the source
-    /// and the node name and returns false to hide the node. This is where a
-    /// permission service is injected; the command module itself has no
-    /// permission registry and no policy beyond the registered requirements.
-    /// A node hidden by the hook hides its whole subtree from the tree
-    /// snapshot. The hook must be set before the dispatcher is shared; it is
-    /// not required to be thread-safe against itself.
-    void set_visibility_filter(
-        std::function<bool(const source &, std::string_view)> filter);
+    /// and the node's declared permission (`require_node()`) and returns
+    /// `allowed`, `denied` or `not_handled`; `not_handled` falls back to the
+    /// node's declared vanilla level. This is where a permission service is
+    /// injected; the command module itself has no permission registry and no
+    /// policy beyond the registered declarations. A node hidden by the filter
+    /// hides its whole subtree from the tree snapshot. The filter must be set
+    /// before the dispatcher is shared; it is not required to be thread-safe
+    /// against itself.
+    void set_permission_filter(permission_filter filter);
+
+    /// Permission declaration of the root literal named `command`; an empty
+    /// `node` when the command is unknown or declares none. A caller that
+    /// answers a hidden command with an explicit denial uses it to name the
+    /// node the subject is missing.
+    [[nodiscard]] auto permission_of(std::string_view command) const
+        -> node_permission;
 
     /// Monotonic registration revision. It starts at 1 and changes on every
     /// mutation (node creation, link, executor, requirement, tooltip,
-    /// redirect, visibility hook).
+    /// redirect, permission filter).
     [[nodiscard]] auto revision() const noexcept -> std::uint64_t;
     [[nodiscard]] auto node_count() const noexcept -> std::size_t;
 
@@ -209,6 +244,10 @@ class dispatcher {
         std::string name{};
         std::unique_ptr<const argument_parser> parser{};
         std::function<bool(const source &)> requirement{};
+        /// Declared permission node (`require_node`); empty when the node has
+        /// no permission declaration.
+        std::string permission_node{};
+        permission_level permission_fallback{permission_level::everyone};
         std::function<result<int>(context &)> executor{};
         std::vector<std::size_t> children{};
         std::size_t parent{no_node};
@@ -242,6 +281,8 @@ class dispatcher {
     void detach(std::size_t child);
     void set_requirement(std::size_t index,
                          std::function<bool(const source &)> predicate);
+    void set_permission(std::size_t index, std::string_view node,
+                        permission_level fallback);
     void set_executor(std::size_t index,
                       std::function<result<int>(context &)> fn);
     void set_tooltip(std::size_t index, std::string_view text);
@@ -254,8 +295,6 @@ class dispatcher {
         std::size_t argument_start{0};
     };
 
-    [[nodiscard]] auto is_allowed(std::size_t index, const source &src) const
-        -> bool;
     [[nodiscard]] auto is_visible(std::size_t index, const source &src) const
         -> bool;
     [[nodiscard]] auto parse_command(std::string_view input, const source &src,
@@ -266,7 +305,7 @@ class dispatcher {
         -> std::optional<suggestion_context>;
 
     std::vector<node_entry> nodes_{};
-    std::function<bool(const source &, std::string_view)> visibility_{};
+    permission_filter permission_filter_{};
     std::atomic<std::uint64_t> revision_{1};
 };
 

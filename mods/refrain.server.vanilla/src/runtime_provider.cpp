@@ -134,6 +134,9 @@ void collect_service(const refrain::mod::host &host, std::string_view service,
     collect_service(host, "refrain:world.migration", services.migration,
                     services.migration_self, services.migration_provider,
                     services.migration_generation);
+    collect_service(host, "refrain:permissions", services.permissions,
+                    services.permissions_self, services.permissions_provider,
+                    services.permissions_generation);
     return services;
 }
 
@@ -556,11 +559,15 @@ struct runtime_provider {
             return REFRAIN_SERVICES_RUNTIME_RUNTIME_ERROR_INTERNAL;
         }
         log_runtime.debug(
-            "using the {} world port with world {}, sim {} and storage {}",
+            "using the {} world port with world {}, sim {}, storage {} and "
+            "permissions {}",
             choice == refrain::server::world_port_choice::direct ? "direct"
                                                                  : "contract",
             services.world_provider, services.sim_provider,
-            services.storage_provider);
+            services.storage_provider,
+            services.permissions_provider.empty()
+                ? std::string{"none"}
+                : services.permissions_provider);
         // `run_server` reports startup/shutdown failures through the log and
         // returns the process exit code; the contract forwards that code
         // unchanged (0 = clean stop), so the host never reinterprets it.

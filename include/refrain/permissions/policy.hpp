@@ -14,10 +14,15 @@
 //
 //   [defaults]
 //   default = "deny"          # "deny" or "op"
+//   nodes = ["refrain.command.help", "refrain.command.list"]
+//                             # nodes every subject holds
 //
 //   [op]
 //   min_level = 1             # vanilla operator ladder level that counts as op
 //   nodes = ["*"]             # nodes every operator holds
+//
+//   [ops]
+//   players = ["<uuid>", "Notch"]   # player identities that count as operators
 //
 //   [grants]
 //   "player:<uuid>" = ["refrain.mods.admin", "!refrain.command.stop"]
@@ -32,12 +37,20 @@
 // keys and unknown groups are configuration errors rather than silently ignored
 // text, so a typo cannot widen an access rule.
 //
+// `[ops].players` is the operator source the built-in resolver owns: a player
+// named by canonical uuid or profile name is treated as an operator and holds
+// `[op].nodes` even though no vanilla op list is persisted yet.
+// `[op].min_level` stays the ladder rule for a host that supplies a real op
+// level in the query.
+//
 // Resolution order for one query:
 //   1. console holds every node;
 //   2. a matching deny anywhere denies (deny wins over every grant);
 //   3. a matching grant allows;
-//   4. an operator's `[op].nodes` grant allows;
-//   5. `[defaults].default` decides: `deny`, or `op` for an operator.
+//   4. an operator's `[op].nodes` grant allows, where an operator is a subject
+//      listed in `[ops].players` or a player at or above `[op].min_level`;
+//   5. a grant in `[defaults].nodes` allows;
+//   6. `[defaults].default` decides: `deny`, or `op` for an operator.
 // The constructed context (world, game mode, extra keys) is carried into the
 // query and validated, but v1 matches every rule globally; context rules are a
 // later, additive rule set.
@@ -108,6 +121,13 @@ struct policy {
     default_answer fallback{default_answer::deny};
     std::uint32_t op_min_level{1};
     node_set op_nodes{};
+    /// Nodes every subject holds unless a matching deny exists
+    /// (`[defaults].nodes`).
+    node_set default_nodes{};
+    /// Player identities that count as operators (`[ops].players`): canonical
+    /// lowercase uuids and profile names, matched against a player subject's
+    /// uuid and profile name.
+    std::vector<std::string> operators{};
     /// Keyed by configured subject key, for example `player:<uuid>`.
     std::map<std::string, subject_rules, std::less<>> subjects{};
     /// Keyed by group name.
