@@ -300,7 +300,10 @@ class world {
         -> block_state_id;
 
     /// Set a block and mark the chunk dirty. The chunk must already exist in
-    /// the imported world; Y must be inside the model's section bounds.
+    /// the imported world; Y must be inside the runtime build bounds
+    /// (`build_min_y()`..`build_max_y()`), which are the range the chunk packet
+    /// carries. An edit outside them fails with `invalid_argument` instead of
+    /// persisting a block no client can receive.
     [[nodiscard]] auto set_block(const block_pos &pos, block_state_id value)
         -> status;
 
@@ -460,6 +463,12 @@ class world {
     /// Cancel a pending timer; false when it already ran or was cancelled.
     auto cancel_timer(timer_id id) -> bool;
 
+    /// Upper bound of timer callbacks one `tick()` runs. A timer that
+    /// re-schedules itself with zero delay would otherwise keep the pump from
+    /// returning; the callbacks left due stay queued for the next tick, still
+    /// in (due, id) order.
+    static constexpr std::size_t max_timers_per_tick{1024};
+
     /// Event bus for sim-thread notification events (tick, later block hooks).
     /// The bus, its subscriptions included, moves with the world: a world that
     /// is moved after configuration keeps listening.
@@ -569,15 +578,21 @@ class world {
     void set_hardcore(bool value) noexcept;
     [[nodiscard]] auto hardcore() const noexcept -> bool { return hardcore_; }
 
-    /// Vertical build bounds of the runtime world, derived from the storage
-    /// model's section range.
+    /// Vertical section range the runtime protocol path serves: the 26.3
+    /// overworld sections. The storage model is dimension-agnostic and accepts
+    /// a wider range, but the chunk packet encoder emits exactly this range,
+    /// so a block outside it could be saved and never reach a client. The
+    /// encoder and `set_block` both take their bound from these constants.
+    static constexpr std::int32_t runtime_min_section_y{-4};
+    static constexpr std::int32_t runtime_max_section_y{19};
+
+    /// Vertical build bounds of the runtime world: the block range the
+    /// protocol path serves, derived from the runtime section range.
     [[nodiscard]] static constexpr auto build_min_y() noexcept -> std::int32_t {
-        return ::refrain::world::min_section_y * ::refrain::world::section_edge;
+        return runtime_min_section_y * ::refrain::world::section_edge;
     }
     [[nodiscard]] static constexpr auto build_max_y() noexcept -> std::int32_t {
-        return (::refrain::world::max_section_y + 1) *
-                   ::refrain::world::section_edge -
-               1;
+        return (runtime_max_section_y + 1) * ::refrain::world::section_edge - 1;
     }
 
     /// Install the per-item stack sizes and max damage read from the item
@@ -601,10 +616,17 @@ class world {
         return light_table_;
     }
 
-    /// Basic inventory mutation. Stacks are capped at the item's own stack
-    /// limit; adding more fills existing partial stacks first and then appends
-    /// full stacks (deterministic order). `item_count` sums every stack,
-    /// `remove_item` consumes across stacks in order.
+    /// Basic inventory mutation. A stack is capped at the item's own stack
+    /// limit, never above `absolute_stack_size`, and the inventory never grows
+    /// past `modeled_inventory_slots`; adding more fills matching partial
+    /// stacks first, then empty slots and finally appends new slots in
+    /// deterministic order. A count that does not fit fails with
+    /// `invalid_argument` and leaves the inventory unchanged.
+    ///
+    /// `item_count` sums every stack. `remove_item` consumes across stacks in
+    /// order, matches only stacks without data components (the plain item the
+    /// name denotes) and clears a slot in place when it runs out, so inventory
+    /// indices stay stable for the menu that is open on it.
     [[nodiscard]] auto add_item(player_state &player, std::string_view item,
                                 std::uint32_t count = 1) -> status;
     [[nodiscard]] auto remove_item(player_state &player, std::string_view item,
@@ -612,6 +634,11 @@ class world {
     [[nodiscard]] auto item_count(const player_state &player,
                                   std::string_view item) const noexcept
         -> std::uint32_t;
+
+    /// Inventory slots the player menu models. The runtime keeps the record at
+    /// most this long; an item that does not fit is refused instead of growing
+    /// a tail no menu slot and no container packet can show.
+    static constexpr std::size_t modeled_inventory_slots{36};
 
     /// Apply one use to the stack in `player.inventory[index]`. A destroyed
     /// stack leaves an empty slot rather than removing the slot, so inventory
@@ -686,9 +713,16 @@ class world {
         -> std::vector<light_section_change>;
 
     /// Block mutations applied since the previous call, in application order.
-    /// The batch is bounded; a caller that arrives late sees the newest
-    /// entries. The server turns them into block-update packets.
+    /// The batch is bounded by `max_pending_edits`; a caller that arrives late
+    /// sees the newest entries. The server turns them into block-update
+    /// packets.
     [[nodiscard]] auto take_block_edits() -> std::vector<block_change>;
+
+    /// Upper bound of block edits one `take_block_edits()` returns. A large
+    /// scripted fill must not grow the pending list without limit; older
+    /// entries are dropped because the client receives the whole column again
+    /// on the next send.
+    static constexpr std::size_t max_pending_edits{4096};
 
     /// Level clock and weather. `tick()` advances both.
     [[nodiscard]] auto clock() noexcept -> world_clock & { return clock_; }
@@ -728,6 +762,12 @@ class world {
     /// Queue one applied block change for the update broadcast.
     void record_block_edit(const block_pos &pos, block_state_id old_state,
                            block_state_id new_state);
+    /// Update the column's stored vanilla heightmaps after a successful block
+    /// edit. The storage record keeps the nine-bit maps the chunk packet
+    /// encoder sends and RWF persists; an edit that changes a column's top
+    /// block has to move them, exactly like the reference `LevelChunk`.
+    void update_heightmaps(chunk &column, const block_pos &pos,
+                           block_state_id value) noexcept;
     /// Spawn the generated entities of a column and record their runtime ids
     /// on it. Called exactly once per column load; a column already holding
     /// ids is refused so a reload path cannot spawn a second copy. A non-empty
@@ -867,11 +907,12 @@ class world {
     timer_id next_timer_id_{1};
     rng rng_{};
     std::int64_t tick_{0};
-    /// Upper bound of edits one tick's broadcast drains. A large scripted fill
-    /// must not grow the pending list without limit; older entries are dropped
-    /// because the client receives the whole column again on the next send.
-    static constexpr std::size_t max_pending_edits = 4096;
+    /// Pending block edits packed in application order. The vector grows to
+    /// `max_pending_edits` once and is reused; when it is full the oldest entry
+    /// is overwritten at `pending_edits_head_`, so recording is O(1) and the
+    /// buffer never grows past the bound.
     std::vector<block_change> pending_edits_{};
+    std::size_t pending_edits_head_{0};
     light_engine light_;
     world_clock clock_{};
 };

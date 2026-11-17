@@ -13,11 +13,13 @@
 
 #include <fmt/format.h>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
 #include <filesystem>
+#include <functional>
 #include <span>
 #include <string>
 #include <system_error>
@@ -49,6 +51,31 @@ namespace world = refrain::world;
     chunk.y_pos = 0;
     storage::section_record section{};
     section.y = 0;
+    section.kind = storage::section_kind::single_value;
+    section.bits_per_entry = 0;
+    section.block_count = static_cast<std::uint16_t>(world::section_volume);
+    section.biome_kind = storage::section_kind::single_value;
+    section.biome_bits_per_entry = 0;
+    section.biome_palette.push_back("minecraft:plains");
+    section.palette.push_back(storage::palette_entry{
+        .key = "minecraft:stone",
+        .count = static_cast<std::uint16_t>(world::section_volume),
+        .state = 0,
+    });
+    chunk.sections.push_back(std::move(section));
+    return chunk;
+}
+
+/// One stone section at the overworld bottom (`y_pos` -4), the shape a real
+/// overworld column has. The default fixture starts at y_pos 0, which would
+/// make the bottom half of the runtime build range unrepresentable.
+[[nodiscard]] auto make_low_chunk() -> storage::chunk {
+    storage::chunk chunk{};
+    chunk.format_version = world::chunk_format_version;
+    chunk.status = storage::chunk_status::full;
+    chunk.y_pos = -4;
+    storage::section_record section{};
+    section.y = -4;
     section.kind = storage::section_kind::single_value;
     section.bits_per_entry = 0;
     section.block_count = static_cast<std::uint16_t>(world::section_volume);
@@ -570,14 +597,21 @@ namespace world = refrain::world;
                 }
                 expect(runtime->remove_item(*player, "minecraft:dirt", 70));
                 expect(runtime->item_count(*player, "minecraft:dirt") == 60U);
-                expect(player->inventory.size() == 2U);
-                if (player->inventory.size() == 2U) {
-                    expect(player->inventory[0].count == 58U);
-                    expect(player->inventory[1].count == 2U);
+                // `remove_item` clears the slot in place: the inventory keeps
+                // the index every later stack sits at, so an open menu never
+                // points at a shifted stack.
+                expect(player->inventory.size() == 3U);
+                if (player->inventory.size() == 3U) {
+                    expect(refrain::sim::stack_empty(player->inventory[0]));
+                    expect(player->inventory[1].count == 58U);
+                    expect(player->inventory[2].count == 2U);
                 }
                 expect(runtime->remove_item(*player, "minecraft:dirt", 60));
                 expect(runtime->item_count(*player, "minecraft:dirt") == 0U);
-                expect(player->inventory.empty());
+                expect(player->inventory.size() == 3U);
+                for (const auto &stack : player->inventory) {
+                    expect(refrain::sim::stack_empty(stack));
+                }
                 expect(!runtime->remove_item(*player, "minecraft:dirt", 61));
                 expect(runtime->item_count(*player, "minecraft:dirt") == 0U);
             }
@@ -624,14 +658,23 @@ namespace world = refrain::world;
                    refrain::sim::damage_result::broken);
             expect(player->inventory[0].count == 0U);
             expect(player->inventory[0].components.empty());
-            // A stack of an item without max damage never breaks.
+            // A stack of an item without max damage never breaks. The broken
+            // tool slot is empty and gets reused, so the stone is not appended
+            // at the end.
             expect(
                 runtime->add_item(*player, "minecraft:stone", 1).has_value());
-            const auto stone_slot{player->inventory.size() - 1};
-            expect(refrain::sim::damage_stack(player->inventory[stone_slot],
-                                              runtime->items(), 5) ==
-                   refrain::sim::damage_result::unchanged);
-            expect(player->inventory[stone_slot].count == 1U);
+            const auto stone_slot{
+                std::find_if(player->inventory.begin(), player->inventory.end(),
+                             [](const refrain::sim::item_stack &stack) {
+                                 return stack.item == "minecraft:stone";
+                             })};
+            expect(stone_slot != player->inventory.end());
+            if (stone_slot != player->inventory.end()) {
+                expect(refrain::sim::damage_stack(*stone_slot, runtime->items(),
+                                                  5) ==
+                       refrain::sim::damage_result::unchanged);
+                expect(stone_slot->count == 1U);
+            }
         }
         std::error_code error;
         fs::remove_all(directory, error);
@@ -1279,6 +1322,300 @@ namespace world = refrain::world;
             expect(delayed == 1);
             expect(cancelled == 0);
             expect(runtime->ticks() == 2);
+        }
+        std::error_code error;
+        fs::remove_all(directory, error);
+    };
+
+    "sim/inventory reuses a cleared slot and skips stacks with components"_test =
+        [] {
+            const auto directory{scratch_directory()};
+            {
+                auto store{make_store(directory)};
+                expect(store.has_value());
+                if (!store) {
+                    return;
+                }
+                auto runtime{refrain::sim::world::open(directory.string())};
+                expect(runtime.has_value());
+                if (!runtime) {
+                    return;
+                }
+                const auto player_id{make_console_player(*runtime)};
+                auto *player{runtime->player(player_id)};
+                expect(player != nullptr);
+                if (player == nullptr) {
+                    return;
+                }
+                // Slot 1 holds a damaged stack: it has its own identity and
+                // must not be consumed by a name-only removal.
+                player->inventory.resize(2);
+                player->inventory[0] = refrain::sim::item_stack{
+                    .item = "minecraft:dirt", .count = 10};
+                player->inventory[1] = refrain::sim::item_stack{
+                    .item = "minecraft:dirt", .count = 5};
+                refrain::sim::set_stack_damage(player->inventory[1], 2);
+
+                expect(runtime->remove_item(*player, "minecraft:dirt", 10));
+                // The plain stack is cleared in place; the damaged stack keeps
+                // its slot and its components.
+                expect(refrain::sim::stack_empty(player->inventory[0]));
+                expect(player->inventory[1].count == 5U);
+                expect(refrain::sim::stack_damage(player->inventory[1]) == 2U);
+                expect(runtime->item_count(*player, "minecraft:dirt") == 5U);
+                expect(!runtime->remove_item(*player, "minecraft:dirt", 1));
+
+                // The cleared slot is reused before a new slot is appended, so
+                // the inventory does not grow an empty head.
+                expect(runtime->add_item(*player, "minecraft:dirt", 3)
+                           .has_value());
+                expect(player->inventory.size() == 2U);
+                expect(player->inventory[0].item == "minecraft:dirt");
+                expect(player->inventory[0].count == 3U);
+                expect(runtime->item_count(*player, "minecraft:dirt") == 8U);
+            }
+            std::error_code error;
+            fs::remove_all(directory, error);
+        };
+
+    "sim/inventory caps stacks at the protocol ceiling and the modeled slots"_test =
+        [] {
+            const auto directory{scratch_directory()};
+            {
+                auto store{make_store(directory)};
+                expect(store.has_value());
+                if (!store) {
+                    return;
+                }
+                auto runtime{refrain::sim::world::open(directory.string())};
+                expect(runtime.has_value());
+                if (!runtime) {
+                    return;
+                }
+                refrain::sim::item_table items;
+                // Content data is untrusted: a stack limit above the protocol
+                // ceiling and a zero limit both have to be clamped.
+                items.insert("minecraft:test_oversized",
+                             {.max_stack_size = 1000});
+                items.insert("minecraft:test_zero", {.max_stack_size = 0});
+                runtime->set_item_table(std::move(items));
+                const auto player_id{make_console_player(*runtime)};
+                auto *player{runtime->player(player_id)};
+                expect(player != nullptr);
+                if (player == nullptr) {
+                    return;
+                }
+                expect(
+                    runtime->add_item(*player, "minecraft:test_oversized", 600)
+                        .has_value());
+                expect(runtime->item_count(*player,
+                                           "minecraft:test_oversized") == 600U);
+                expect(player->inventory.size() == 7U);
+                for (const auto &stack : player->inventory) {
+                    expect(stack.count <= refrain::sim::absolute_stack_size);
+                }
+                // A zero stack limit is clamped to one instead of leaving the
+                // append loop unable to consume the count.
+                expect(runtime->add_item(*player, "minecraft:test_zero", 2)
+                           .has_value());
+                expect(player->inventory.size() == 9U);
+
+                // The remaining modeled slots of 64: one more item does not
+                // fit and the record is left untouched.
+                const auto free_slots{
+                    refrain::sim::world::modeled_inventory_slots -
+                    player->inventory.size()};
+                const auto dirt_fit{free_slots *
+                                    refrain::sim::default_stack_size};
+                expect(runtime
+                           ->add_item(*player, "minecraft:dirt",
+                                      static_cast<std::uint32_t>(dirt_fit))
+                           .has_value());
+                const auto before{player->inventory};
+                const auto rejected{
+                    runtime->add_item(*player, "minecraft:dirt", 1)};
+                expect(!rejected);
+                if (!rejected) {
+                    expect(rejected.error().code ==
+                           refrain::error_code::invalid_argument);
+                }
+                expect(player->inventory == before);
+            }
+            std::error_code error;
+            fs::remove_all(directory, error);
+        };
+
+    "sim/set_block rejects edits outside the packet section range"_test = [] {
+        const auto directory{scratch_directory()};
+        {
+            auto store{make_store(directory)};
+            expect(store.has_value());
+            if (!store) {
+                return;
+            }
+            auto runtime{refrain::sim::world::open(directory.string())};
+            expect(runtime.has_value());
+            if (!runtime) {
+                return;
+            }
+            // A real overworld column: section -4 is the chunk bottom, so the
+            // accepted lower bound is representable.
+            auto inserted{runtime->insert_chunk({2, 2}, make_low_chunk())};
+            expect(inserted.has_value())
+                << (inserted ? "" : inserted.error().message);
+            if (!inserted) {
+                return;
+            }
+            const auto stone{runtime->registry().find("minecraft:stone")};
+            expect(stone.has_value());
+            if (!stone) {
+                return;
+            }
+            constexpr std::int32_t x{33};
+            constexpr std::int32_t z{33};
+            // The packet carries sections -4..19: y=-64 and y=319 are the last
+            // blocks a client can receive and an edit there succeeds.
+            expect(runtime
+                       ->set_block({x, refrain::sim::world::build_min_y(), z},
+                                   *stone)
+                       .has_value());
+            expect(runtime
+                       ->set_block({x, refrain::sim::world::build_max_y(), z},
+                                   *stone)
+                       .has_value());
+            // One block above or below the served range would be saved and
+            // never sent, so the mutation is refused before it changes state.
+            for (const auto y :
+                 {refrain::sim::world::build_max_y() + 1, 1023,
+                  refrain::sim::world::build_min_y() - 1, -1024}) {
+                const auto rejected{runtime->set_block(
+                    {x, static_cast<std::int16_t>(y), z}, *stone)};
+                expect(!rejected) << y;
+                if (!rejected) {
+                    expect(rejected.error().code ==
+                           refrain::error_code::invalid_argument);
+                }
+                expect(runtime->block_at({x, static_cast<std::int16_t>(y),
+                                          z}) == refrain::sim::air_block);
+            }
+        }
+        std::error_code error;
+        fs::remove_all(directory, error);
+    };
+
+    "sim/timers bound the callbacks one tick runs"_test = [] {
+        const auto directory{scratch_directory()};
+        {
+            auto store{make_store(directory)};
+            expect(store.has_value());
+            if (!store) {
+                return;
+            }
+            auto runtime{refrain::sim::world::open(directory.string())};
+            expect(runtime.has_value());
+            if (!runtime) {
+                return;
+            }
+            const auto bound{
+                static_cast<int>(refrain::sim::world::max_timers_per_tick)};
+            expect(bound > 0);
+            int runs{0};
+            std::function<void()> reschedule{};
+            reschedule = [&runtime, &reschedule, &runs] {
+                ++runs;
+                runtime->schedule_after(0, reschedule);
+            };
+            runtime->schedule_after(0, reschedule);
+            // A timer that re-schedules itself at zero delay must not keep the
+            // tick from returning: the pump stops at the bound and leaves the
+            // remaining callbacks due for the next tick.
+            runtime->tick();
+            expect(runtime->ticks() == 1);
+            expect(runs == bound);
+            runtime->tick();
+            expect(runtime->ticks() == 2);
+            expect(runs == 2 * bound);
+        }
+        std::error_code error;
+        fs::remove_all(directory, error);
+    };
+
+    "sim/block edits are bounded and keep the newest entries"_test = [] {
+        const auto directory{scratch_directory()};
+        {
+            auto store{make_store(directory)};
+            expect(store.has_value());
+            if (!store) {
+                return;
+            }
+            auto runtime{refrain::sim::world::open(directory.string())};
+            expect(runtime.has_value());
+            if (!runtime) {
+                return;
+            }
+            auto loaded{runtime->ensure_chunk({0, 0})};
+            expect(loaded.has_value());
+            if (!loaded) {
+                return;
+            }
+            const auto stone{runtime->registry().find("minecraft:stone")};
+            const auto dirt{runtime->registry().intern("minecraft:dirt")};
+            expect(stone.has_value());
+            if (!stone) {
+                return;
+            }
+            const auto bound{refrain::sim::world::max_pending_edits};
+            const auto total{bound + 3};
+            const auto position_of = [](std::size_t iteration) {
+                const auto index{iteration % 256};
+                return refrain::sim::block_pos{
+                    static_cast<std::int32_t>(index % 16), 5,
+                    static_cast<std::int32_t>(index / 16)};
+            };
+            // Two states alternate every 256 edits, so every application is a
+            // real change and the newest-versus-oldest order is observable.
+            const auto state_of = [&stone, dirt](std::size_t iteration) {
+                return (iteration / 256) % 2 == 0 ? dirt : *stone;
+            };
+            const auto same_position =
+                [](const refrain::sim::block_pos &left,
+                   const refrain::sim::block_pos &right) {
+                    return left.x == right.x && left.y == right.y &&
+                           left.z == right.z;
+                };
+            for (std::size_t iteration{0}; iteration < total; ++iteration) {
+                const auto applied{runtime->set_block(position_of(iteration),
+                                                      state_of(iteration))};
+                expect(applied.has_value())
+                    << (applied ? "" : applied.error().message);
+            }
+            const auto edits{runtime->take_block_edits()};
+            expect(edits.size() == bound);
+            if (edits.size() == bound) {
+                // The three oldest entries were dropped; the batch starts at
+                // application order 3 and ends at the newest one.
+                for (std::size_t offset{0}; offset < 8; ++offset) {
+                    const auto iteration{3 + offset};
+                    expect(same_position(edits[offset].pos,
+                                         position_of(iteration)));
+                    expect(edits[offset].new_state == state_of(iteration));
+                }
+                const auto last{total - 1};
+                expect(same_position(edits.back().pos, position_of(last)));
+                expect(edits.back().new_state == state_of(last));
+            }
+            expect(runtime->take_block_edits().empty());
+            // A small batch after the overflow drains normally and the buffer
+            // is reusable. Position 0 ended as dirt in the last cycle, so
+            // stone is a real change there.
+            const auto changed{runtime->set_block(position_of(1), *stone)};
+            expect(changed.has_value())
+                << (changed ? "" : changed.error().message);
+            const auto small{runtime->take_block_edits()};
+            expect(small.size() == 1U);
+            if (small.size() == 1U) {
+                expect(small.front().new_state == *stone);
+            }
         }
         std::error_code error;
         fs::remove_all(directory, error);

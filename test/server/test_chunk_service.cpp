@@ -944,6 +944,85 @@ suite<"server/chunk-service-progressive"> chunk_service_progressive_tests = [] {
             expect(port->ticket_count(sim::chunk_pos{4, 0}) == 0U);
             expect(runtime.find_chunk(sim::chunk_pos{4, 0}) == nullptr);
         };
+
+    "server/chunk service reports an insert failure and retries the column"_test =
+        [] {
+            test_support::scratch_directory scratch;
+            const auto path{(scratch.path() / "world").string()};
+            expect(static_cast<bool>(world::create_world(path, 7, "probe")));
+            auto opened{sim::world::open(path)};
+            expect(static_cast<bool>(opened));
+            if (!opened) {
+                return;
+            }
+            auto &runtime{*opened};
+            const auto port{server::make_borrowed_world_port(runtime)};
+            recording_gateway gateway;
+            gateway.active = {13};
+            server::chunk_service service;
+            service.attach(gateway,
+                           server::chunk_packet_source{.world = port.get()});
+            auto *streamer{service.streamer()};
+            expect(streamer != nullptr);
+            if (streamer == nullptr) {
+                return;
+            }
+            auto log{std::make_shared<encode_log>()};
+            streamer->set_encoder(make_encoder(runtime, log));
+            std::vector<coordinate> requested{};
+            streamer->set_chunk_requester(
+                [&requested](std::int32_t x, std::int32_t z) {
+                    requested.push_back({x, z});
+                    return true;
+                });
+            session::play_session players{};
+            session::chunk_tracker views;
+            const auto tick_start{refrain::core::now_ns()};
+            const auto tick_once{
+                [&] { service.tick(*port, players, views, tick_start); }};
+
+            static_cast<void>(views.update(13, 0, 0, 0));
+            tick_once();
+            expect(requested.size() == 1U);
+
+            // A column whose record the world rejects is a failed answer. The
+            // streamer has to learn about it, or the column stays in flight for
+            // the whole session and the client keeps a hole.
+            const auto queue_bad_column = [&service] {
+                auto column{make_column()};
+                column.format_version =
+                    static_cast<std::uint16_t>(world::chunk_format_version + 1);
+                service.queue_generated(
+                    {{sim::chunk_pos{0, 0}, std::move(column)}});
+            };
+            queue_bad_column();
+            tick_once();
+            expect(requested.size() == 2U)
+                << "the failed insert did not re-request the column";
+
+            // The retry stays bounded like a generator failure.
+            for (std::uint32_t attempt{1};
+                 attempt < server::chunk_streamer::max_chunk_attempts - 1;
+                 ++attempt) {
+                queue_bad_column();
+                tick_once();
+            }
+            queue_bad_column();
+            for (int tick{0}; tick < 4; ++tick) {
+                tick_once();
+            }
+            expect(requested.size() ==
+                   server::chunk_streamer::max_chunk_attempts);
+
+            // A column the world does accept still reaches the client after
+            // the earlier failures, so the hole is repaired.
+            service.queue_generated({{sim::chunk_pos{0, 0}, make_column()}});
+            for (int tick{0}; tick < 4 && streamed(gateway, 13).empty();
+                 ++tick) {
+                tick_once();
+            }
+            expect(streamed(gateway, 13) == std::vector<coordinate>{{0, 0}});
+        };
 };
 
 } // namespace

@@ -243,6 +243,15 @@ auto chunk_service::adopt_generated(world_port &world) -> std::size_t {
             }
             log_chunk_gen.debug("failed to insert chunk ({}, {}): {}", pos.x,
                                 pos.z, inserted.error().message);
+            // Any other failure is a failed answer: tell the streamer, or the
+            // column stays in every waiting viewport's in-flight set and the
+            // client keeps a hole the viewport rebuild skips forever. The
+            // streamer re-queues the column while the attempt allowance lasts
+            // and abandons it after that, so a column the world keeps refusing
+            // cannot re-request itself once per tick.
+            if (streamer_) {
+                streamer_->chunk_failed(pos.x, pos.z);
+            }
             continue;
         }
         ++adopted;

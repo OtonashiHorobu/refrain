@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <list>
 #include <map>
 #include <set>
 #include <unordered_map>
@@ -228,6 +229,13 @@ class chunk_streamer {
         return cache_misses_;
     }
 
+    /// Bodies currently held in the encoded cache. Observation only: the
+    /// streamer keeps at most one viewport of bodies and releases them when the
+    /// last stream ends.
+    [[nodiscard]] auto cache_entries() const noexcept -> std::size_t {
+        return cache_.size();
+    }
+
   private:
     struct stream_state {
         std::int32_t center_x{0};
@@ -282,9 +290,18 @@ class chunk_streamer {
     /// hit is revalidated before it is served instead of trusting the key: a
     /// block edit (or a column that left memory and came back) must produce a
     /// new body, never the pre-edit one.
+    using cache_position = std::pair<std::int32_t, std::int32_t>;
+
+    /// Recency order of the cache: the front is the most recently served body
+    /// and the back is the eviction victim. The entry records its own position
+    /// so a hit or an erase finds it without scanning the map, which keeps one
+    /// eviction constant instead of a full map walk.
+    using cache_order = std::list<cache_position>;
+
     struct cache_entry {
         std::vector<std::byte> body{};
-        std::uint64_t last_use{0};
+        /// Position of this body in `cache_recent_`.
+        cache_order::iterator recent{};
         /// World revision of the column at encode time.
         std::uint64_t revision{0};
         /// True when the body was encoded from a world column and `revision`
@@ -292,6 +309,8 @@ class chunk_streamer {
         /// no revision and its bodies are not revalidated.
         bool world_backed{false};
     };
+
+    using cache_map = std::map<cache_position, cache_entry>;
 
     /// The largest view distance the game's configuration accepts (the
     /// protocol range is 2..32). The capacity below is capped at the viewport
@@ -331,6 +350,9 @@ class chunk_streamer {
 
     void evict_least_recently_used();
 
+    /// Drop one cache entry and its recency node.
+    void erase_cache_entry(cache_map::iterator entry);
+
     /// True when `entry` no longer describes the current column at `(x, z)`.
     ///
     /// A body is stale when the world revision moved after it was encoded, or
@@ -368,12 +390,12 @@ class chunk_streamer {
     chunk_packet_source source_{};
     chunk_encoder encoder_{};
     std::unordered_map<std::uint64_t, stream_state> streams_{};
-    std::map<std::pair<std::int32_t, std::int32_t>, cache_entry> cache_{};
+    cache_map cache_{};
+    cache_order cache_recent_{};
     std::size_t cache_capacity_{1};
     backlog_limits limits_{};
     std::uint64_t cache_hits_{0};
     std::uint64_t cache_misses_{0};
-    std::uint64_t clock_{0};
     chunk_requester requester_{};
     chunk_entity_source entity_source_{};
 };

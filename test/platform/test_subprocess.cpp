@@ -121,6 +121,30 @@ suite<"platform/subprocess"> subprocess_tests = [] {
         }
     };
 
+    "platform/subprocess: a child that exits before reading stdin does not "
+    "kill "
+    "the parent"_test = [] {
+        if (on_windows()) {
+            // Windows reports a broken stdin pipe as a write error; the
+            // SIGPIPE failure mode this pins is POSIX-only.
+            return;
+        }
+        // More input than a pipe buffer holds: the parent blocks in `write`
+        // until the child is gone, so the next write hits the closed read end.
+        // Without a SIGPIPE guard that write terminates the test process
+        // instead of returning a child status.
+        const auto result{platform::run_process(platform::subprocess_options{
+            .program = "/bin/sh",
+            .arguments = {"-c", "exit 0"},
+            .stdin_text = std::string(4U * 1024U * 1024U, 'x'),
+        })};
+        expect(static_cast<bool>(result))
+            << (result ? "" : result.error().message);
+        if (result) {
+            expect(result->exit_code == 0);
+        }
+    };
+
     "platform/subprocess: the working directory reaches the child"_test = [] {
         const test_support::scratch_directory directory{};
         {
