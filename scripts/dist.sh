@@ -63,6 +63,11 @@ fail() {
 DIST_MOD_PROFILE="${REFRAIN_DIST_MOD_PROFILE:-vanilla}"
 [[ "$DIST_MOD_PROFILE" =~ ^[a-z0-9][a-z0-9._-]*$ ]] \
     || fail "invalid REFRAIN_DIST_MOD_PROFILE: $DIST_MOD_PROFILE"
+DIST_ARCH_LEVEL="${REFRAIN_DIST_ARCH_LEVEL:-baseline}"
+case "$DIST_ARCH_LEVEL" in
+    baseline|x86-64-v2|x86-64-v3|x86-64-v4|native) ;;
+    *) fail "invalid REFRAIN_DIST_ARCH_LEVEL: $DIST_ARCH_LEVEL" ;;
+esac
 case "$DIST_MOD_PROFILE" in
     *..*) fail "invalid REFRAIN_DIST_MOD_PROFILE: $DIST_MOD_PROFILE" ;;
 esac
@@ -318,6 +323,7 @@ cmake_flags=(
     -DREFRAIN_BUILD_TESTS=OFF
     -DREFRAIN_BUILD_BENCH=OFF
     -DREFRAIN_MOD_PROFILE="$DIST_MOD_PROFILE"
+    -DREFRAIN_ARCH_LEVEL="$DIST_ARCH_LEVEL"
 )
 case "$TARGET" in
     linux)
@@ -335,7 +341,7 @@ if [[ -n "$host_tools_path" ]]; then
     cmake_flags+=(-DREFRAIN_HOST_TOOLS="$host_tools_path")
 fi
 
-log "configuring and building profile $DIST_MOD_PROFILE"
+log "configuring and building profile $DIST_MOD_PROFILE at $DIST_ARCH_LEVEL"
 cmake -S . -B "$BUILD" "${cmake_flags[@]}"
 cmake --build "$BUILD" -j "$JOBS" --target refrain-server refrain-tools
 
