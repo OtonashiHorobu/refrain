@@ -19,6 +19,8 @@
 #   REFRAIN_BENCH_DIR        remote checkout, relative to $HOME (default Projects/refrain)
 #   REFRAIN_BENCH_BUILD      remote build directory (default build/bench)
 #   REFRAIN_BENCH_ARCH       remote architecture level (default x86-64-v3)
+#   REFRAIN_BENCH_TARGET     benchmark executable to build and run (default
+#                            refrain-bench-runtime)
 #   REFRAIN_BENCH_REQUIRE    set to 1 to fail instead of falling back locally
 #
 # Exit code 0 means the benchmark ran; the numbers are on stdout and in
@@ -33,6 +35,7 @@ HOST="${REFRAIN_BENCH_HOST:-}"
 REMOTE_DIR="${REFRAIN_BENCH_DIR:-Projects/refrain}"
 REMOTE_BUILD="${REFRAIN_BENCH_BUILD:-build/bench}"
 ARCH_LEVEL="${REFRAIN_BENCH_ARCH:-x86-64-v3}"
+BENCH_TARGET="${REFRAIN_BENCH_TARGET:-refrain-bench-runtime}"
 REQUIRE_REMOTE="${REFRAIN_BENCH_REQUIRE:-0}"
 SSH_KEY="${REFRAIN_BENCH_SSH_KEY:-}"
 TAKE_LOCK="${REFRAIN_BENCH_LOCK:-1}"
@@ -77,8 +80,8 @@ run_local() {
             -DREFRAIN_ARCH_LEVEL="$ARCH_LEVEL" \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
     fi
-    cmake --build "$build" --target refrain-bench-runtime -j "$(nproc)"
-    "$build/bin/refrain-bench-runtime" "${BENCH_ARGS[@]}"
+    cmake --build "$build" --target "$BENCH_TARGET" -j "$(nproc)"
+    "$build/bin/$BENCH_TARGET" "${BENCH_ARGS[@]}"
 }
 
 if [[ -z "$HOST" ]]; then
@@ -170,8 +173,8 @@ if [ ! -f "\$build/build.ninja" ]; then
         -DREFRAIN_ARCH_LEVEL='${ARCH_LEVEL}' \
         -DCMAKE_CXX_COMPILER_LAUNCHER=ccache >/dev/null
 fi
-cmake --build "\$build" --target refrain-bench-runtime -j "\$(nproc)" >/dev/null
-"\$build/bin/refrain-bench-runtime" ${BENCH_ARGS[*]:-}
+cmake --build "\$build" --target ${BENCH_TARGET} -j "\$(nproc)" >/dev/null
+"\$build/bin/${BENCH_TARGET}" ${BENCH_ARGS[*]:-}
 REMOTE
 
 say "done: numbers above come from $HOST ($REMOTE_BUILD, LTO on, $ARCH_LEVEL)"

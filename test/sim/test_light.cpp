@@ -700,4 +700,73 @@ suite<"sim/light"> light_tests = [] {
         expect(eq(static_cast<int>(sky(*opened, 8, 319, 8)), 0));
         expect(eq(static_cast<int>(sky(*opened, 8, 64, 8)), 0));
     };
+
+    "the light counters advance for a column load and an edit and reset "
+    "cleanly"_test = [] {
+        world_fixture fixture{};
+        std::vector<std::pair<world::chunk_pos, storage::chunk>> columns{};
+        const std::array<block_override, 0> empty{};
+        columns.emplace_back(world::chunk_pos{0, 0}, make_column(empty));
+        write_columns(fixture, columns);
+        auto world{open_world(fixture)};
+        expect(world.has_value());
+        if (!world) {
+            return;
+        }
+        auto &engine{world->light()};
+        engine.reset_stats();
+        const auto empty_stats{engine.stats()};
+        expect(eq(empty_stats.columns_lit, std::uint64_t{0}));
+        expect(eq(empty_stats.initial_drain_calls, std::uint64_t{0}));
+        expect(eq(empty_stats.initial_nodes, std::uint64_t{0}));
+        expect(eq(empty_stats.initial_ns, std::uint64_t{0}));
+        expect(eq(empty_stats.drain_calls, std::uint64_t{0}));
+        expect(eq(empty_stats.drain_nodes, std::uint64_t{0}));
+        expect(eq(empty_stats.drain_ns, std::uint64_t{0}));
+        expect(eq(empty_stats.block_edits, std::uint64_t{0}));
+        expect(eq(empty_stats.pending_peak, std::uint64_t{0}));
+        expect(eq(empty_stats.pending, std::uint64_t{0}));
+
+        expect(world->ensure_chunk(world::chunk_pos{0, 0}).has_value());
+        const auto loaded{engine.stats()};
+        expect(eq(loaded.columns_lit, std::uint64_t{1}));
+        expect(loaded.initial_drain_calls > 0U);
+        expect(loaded.initial_nodes > 0U);
+        expect(loaded.drain_nodes >= loaded.initial_nodes);
+        expect(loaded.pending_peak > 0U);
+        expect(eq(loaded.block_edits, std::uint64_t{0}));
+
+        // A torch above the flat surface is a block light source: the edit
+        // queues an increase that the synchronous edit drain processes.
+        const auto torch{world->registry().intern("minecraft:torch")};
+        const auto nodes_before{loaded.drain_nodes};
+        const auto calls_before{loaded.drain_calls};
+        const auto edit_status{
+            world->set_block(sim::block_pos{8, 65, 8}, torch)};
+        expect(edit_status.has_value())
+            << (edit_status ? "" : edit_status.error().message);
+        expect(eq(static_cast<int>(block_light(*world, 8, 65, 8)), 14));
+        const auto edited{engine.stats()};
+        expect(edited.block_edits > loaded.block_edits);
+        expect(edited.drain_nodes > nodes_before);
+        expect(edited.drain_calls > calls_before);
+        expect(edited.pending_peak > 0U);
+        expect(eq(edited.pending, std::uint64_t{0}));
+
+        // The counters are observation only: reading and resetting them does
+        // not change the light the engine computed.
+        engine.reset_stats();
+        expect(eq(static_cast<int>(block_light(*world, 8, 65, 8)), 14));
+        const auto cleared{engine.stats()};
+        expect(eq(cleared.columns_lit, std::uint64_t{0}));
+        expect(eq(cleared.initial_drain_calls, std::uint64_t{0}));
+        expect(eq(cleared.initial_nodes, std::uint64_t{0}));
+        expect(eq(cleared.initial_ns, std::uint64_t{0}));
+        expect(eq(cleared.drain_calls, std::uint64_t{0}));
+        expect(eq(cleared.drain_nodes, std::uint64_t{0}));
+        expect(eq(cleared.drain_ns, std::uint64_t{0}));
+        expect(eq(cleared.block_edits, std::uint64_t{0}));
+        expect(eq(cleared.pending_peak, std::uint64_t{0}));
+        expect(eq(cleared.pending, std::uint64_t{0}));
+    };
 };

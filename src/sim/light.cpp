@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -304,6 +305,19 @@ struct layer_queues {
     std::deque<increase_entry> increase{};
 };
 
+/// Which entry point asked for a drain. The initial pass of a column runs its
+/// own drain; `run()` is the incremental path a block edit and the tick
+/// backstop use.
+enum class drain_origin : bool {
+    initial,
+    incremental,
+};
+
+/// Every `peak_sample_interval` processed entries the drain records the queue
+/// length as a peak sample. Sampling keeps the counter useful while a drain
+/// grows and shrinks the queues, without a store on every enqueue.
+constexpr std::size_t peak_sample_interval = 1024;
+
 } // namespace
 
 struct light_engine::impl {
@@ -323,6 +337,20 @@ struct light_engine::impl {
     std::set<light_section_change> changes_{};
     std::optional<chunk_pos> suppressed_origin_{};
     std::unordered_map<block_state_id, block_light_property> properties_{};
+
+    /// Observation counters. The engine is single-threaded, so these are plain
+    /// integers and the hot path pays one clock read per drain, not per node.
+    /// `pending_peak_` is mutable because a queue observation updates it
+    /// through the const `pending_nodes()` accessor.
+    std::uint64_t columns_lit_{0};
+    std::uint64_t initial_drain_calls_{0};
+    std::uint64_t initial_nodes_{0};
+    std::uint64_t initial_ns_{0};
+    std::uint64_t drain_calls_{0};
+    std::uint64_t drain_nodes_{0};
+    std::uint64_t drain_ns_{0};
+    std::uint64_t block_edits_{0};
+    mutable std::uint64_t pending_peak_{0};
 
     [[nodiscard]] auto find_column(std::int32_t chunk_x, std::int32_t chunk_z)
         -> column_state * {
@@ -1042,7 +1070,7 @@ struct light_engine::impl {
         seed_border_light(column, light_layer::block);
     }
 
-    [[nodiscard]] auto pending_nodes() const noexcept -> std::size_t {
+    [[nodiscard]] auto queue_size() const noexcept -> std::size_t {
         auto total{check_queue_.size()};
         for (const auto &queue : queues_) {
             total += queue.decrease.size() + queue.increase.size();
@@ -1050,16 +1078,38 @@ struct light_engine::impl {
         return total;
     }
 
+    /// Record the current queue length as a peak sample.
+    void note_pending() const noexcept {
+        pending_peak_ = std::max(pending_peak_, queue_size());
+    }
+
+    [[nodiscard]] auto pending_nodes() const noexcept -> std::size_t {
+        const auto total{queue_size()};
+        pending_peak_ = std::max(pending_peak_, total);
+        return total;
+    }
+
     /// Process every queued node, decrease and increase pass in layer order.
     /// Returns the number of entries processed.
-    auto drain(std::size_t budget) -> std::size_t {
+    ///
+    /// The drain records the queue peak at its boundaries and every
+    /// `peak_sample_interval` entries, and adds its processed nodes and wall
+    /// time to the counters of `origin`. The clock is read once per drain, not
+    /// per node.
+    auto drain(std::size_t budget, drain_origin origin) -> std::size_t {
+        const auto begin{std::chrono::steady_clock::now()};
+        note_pending();
         std::size_t processed{0};
         while (!check_queue_.empty() && processed < budget) {
             const auto node{check_queue_.front()};
             check_queue_.pop_front();
             check_node(node);
             ++processed;
+            if ((processed & (peak_sample_interval - 1U)) == 0) {
+                note_pending();
+            }
         }
+        note_pending();
         for (std::size_t index{0}; index < layer_count; ++index) {
             const auto which{index == 0 ? light_layer::sky
                                         : light_layer::block};
@@ -1069,8 +1119,12 @@ struct light_engine::impl {
                 queue.pop_front();
                 propagate_decrease(which, entry.node, entry.level);
                 ++processed;
+                if ((processed & (peak_sample_interval - 1U)) == 0) {
+                    note_pending();
+                }
             }
         }
+        note_pending();
         for (std::size_t index{0}; index < layer_count; ++index) {
             const auto which{index == 0 ? light_layer::sky
                                         : light_layer::block};
@@ -1080,9 +1134,53 @@ struct light_engine::impl {
                 queue.pop_front();
                 propagate_increase(which, entry.node, entry.level);
                 ++processed;
+                if ((processed & (peak_sample_interval - 1U)) == 0) {
+                    note_pending();
+                }
             }
         }
+        note_pending();
+        const auto elapsed_ns{static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - begin)
+                .count())};
+        if (origin == drain_origin::initial) {
+            ++initial_drain_calls_;
+            initial_nodes_ += processed;
+            initial_ns_ += elapsed_ns;
+        }
+        ++drain_calls_;
+        drain_nodes_ += processed;
+        drain_ns_ += elapsed_ns;
         return processed;
+    }
+
+    [[nodiscard]] auto stats() const noexcept -> light_stats {
+        const auto waiting{pending_nodes()};
+        return light_stats{
+            .columns_lit = columns_lit_,
+            .initial_drain_calls = initial_drain_calls_,
+            .initial_nodes = initial_nodes_,
+            .initial_ns = initial_ns_,
+            .drain_calls = drain_calls_,
+            .drain_nodes = drain_nodes_,
+            .drain_ns = drain_ns_,
+            .block_edits = block_edits_,
+            .pending_peak = pending_peak_,
+            .pending = static_cast<std::uint64_t>(waiting),
+        };
+    }
+
+    void reset_stats() noexcept {
+        columns_lit_ = 0;
+        initial_drain_calls_ = 0;
+        initial_nodes_ = 0;
+        initial_ns_ = 0;
+        drain_calls_ = 0;
+        drain_nodes_ = 0;
+        drain_ns_ = 0;
+        block_edits_ = 0;
+        pending_peak_ = 0;
     }
 };
 
@@ -1137,9 +1235,11 @@ void light_engine::column_loaded(chunk &column) {
     impl_->suppressed_origin_ = column.pos;
     impl_->initial_light(state);
     impl_->suppressed_origin_.reset();
+    ++impl_->columns_lit_;
     // The column's sections travel in its chunk packet; only light that
     // reached a neighbour column needs a separate update.
-    static_cast<void>(impl_->drain(std::numeric_limits<std::size_t>::max()));
+    static_cast<void>(impl_->drain(std::numeric_limits<std::size_t>::max(),
+                                   drain_origin::initial));
 }
 
 void light_engine::column_unloaded(const chunk_pos &pos) {
@@ -1148,6 +1248,7 @@ void light_engine::column_unloaded(const chunk_pos &pos) {
 }
 
 void light_engine::block_changed(const block_pos &pos) {
+    ++impl_->block_edits_;
     // A block edit can add a section above the current top (a sparse imported
     // column). The light layer range follows the section range, so the column
     // is rebuilt instead of extending the index in place.
@@ -1171,7 +1272,7 @@ void light_engine::block_changed(const block_pos &pos) {
 }
 
 auto light_engine::run(std::size_t budget) -> std::size_t {
-    return impl_->drain(budget);
+    return impl_->drain(budget, drain_origin::incremental);
 }
 
 auto light_engine::pending() const noexcept -> bool {
@@ -1192,6 +1293,12 @@ auto light_engine::take_changes() -> std::vector<light_section_change> {
     impl_->changes_.clear();
     return changes;
 }
+
+auto light_engine::stats() const noexcept -> light_stats {
+    return impl_->stats();
+}
+
+void light_engine::reset_stats() noexcept { impl_->reset_stats(); }
 
 auto light_engine::sky_light_at(const block_pos &pos) const -> std::uint8_t {
     return impl_->level_at(node_pos{.x = pos.x, .y = pos.y, .z = pos.z},

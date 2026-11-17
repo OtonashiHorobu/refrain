@@ -247,8 +247,67 @@ conan install . -pr gcc-release --build=missing -of build/bench \
     --lockfile=conan/locks/vendor.lock
 cmake --preset conan-release -DREFRAIN_LTO=ON -DREFRAIN_ARCH_LEVEL=x86-64-v3 \
     -B build/bench
-cmake --build build/bench --target refrain-bench-runtime
+cmake --build build/bench --target refrain-bench-runtime refrain-bench-light
 ```
+
+### Light engine benchmark
+
+`refrain-bench-light` measures the light engine through its own counters
+(`sim::light_engine::stats()`) instead of timing a benchmark body from the
+outside. It generates a deterministic square of overworld columns with the
+production chunk generator, adopts the columns into a fresh in-memory world in
+ascending position order, and then runs a deterministic block-edit storm. The
+data comes from the same extracted datapack the runtime generator benchmark
+uses; without it the binary prints a skip line and exits successfully.
+
+```bash
+REFRAIN_VANILLA_WORLDGEN=content/vanilla/26.3/data \
+    build/Release/bin/refrain-bench-light --chunks 64 --edits 8 --repeat 3
+```
+
+`--chunks` is rounded up to the nearest square because the production
+generator works on square tiles: `--chunks 64` is one 8×8 tile. The tile edge
+is 8 chunks, the production unit; a smaller `--tile-size` makes a smoke run
+cheaper but makes the chunk-ready numbers less representative.
+
+| Option | Effect |
+|---|---|
+| `--data-root` | datapack `data` directory; defaults to `REFRAIN_VANILLA_WORLDGEN` |
+| `--tables` | content table container; defaults to `REFRAIN_VANILLA_TABLES`, else `<data-root>/../tables.rvtb` |
+| `--templates-root` | structure templates; defaults to `REFRAIN_VANILLA_STRUCTURES` |
+| `--biome` | fixed biome; empty (default) runs the dimension's biome source like a production world |
+| `--chunks` | columns to generate and adopt, rounded up to a square (default 64) |
+| `--tile-size` | generator tile edge in chunks (default 8, the production unit) |
+| `--edits` | torch place/break edits per column (default 8) |
+| `--repeat` | workload repeats, each on a fresh world (default 1) |
+| `--target` | `full` (default, the served chunk path) or `terrain` |
+
+Each repeat prints `RESULT scenario=...` lines. The edit storm places a torch
+in the air cell above the highest block of every chunk's centre column and
+breaks it again, so every edit changes the cell and exercises both the increase
+and the decrease path. Read the fields as follows:
+
+- `columns_lit` is the number of columns whose initial light pass ran;
+  `initial_nodes` and `initial_nodes_per_column` are the queue entries that
+  pass processed, `initial_ns_per_column` is its share of `initial_ns`.
+  `initial_peak_pending` is the highest queue length the initial passes
+  seeded.
+- `generate_ms`, `convert_ms` and `adopt_ms` decompose the chunk-ready path:
+  tile generation, the storage bridge conversion and the world adoption that
+  runs the initial light pass. `chunk_ready_ms_per_column` is their sum over
+  the columns, light included: what a client waits for before the chunk packet
+  can carry light.
+- `drain_nodes` and `drain_nodes_per_edit` are the queue entries the
+  incremental edit drains processed; `drain_ns_per_edit` is their share of
+  `drain_ns`.
+- `pending_peak` is the highest queue length observed while the phase drained,
+  so it shows how close the workload came to the drain budget.
+- `tick_backstop_nodes` is the work the tick's backstop drain still had left
+  after the edit storm; a non-zero value means an edit left queued work behind.
+
+A number from a machine that is compiling or serving is a smoke test, not a
+baseline. Compare runs only from the same idle benchmark host; changing the host
+re-baselines every number.
 
 ### Benchmarking on a separate host
 
@@ -261,6 +320,15 @@ benchmark and prints the result:
 ```bash
 REFRAIN_BENCH_HOST=user@host scripts/dev/bench-remote.sh \
     --targets terrain,full --chunks 16 --workers 1,8 --repeat 5
+```
+
+The script builds and runs `refrain-bench-runtime` by default. Set
+`REFRAIN_BENCH_TARGET=refrain-bench-light` to run the light engine benchmark
+instead; its arguments pass through unchanged:
+
+```bash
+REFRAIN_BENCH_HOST=user@host REFRAIN_BENCH_TARGET=refrain-bench-light \
+    scripts/dev/bench-remote.sh --chunks 64 --edits 8 --repeat 3
 ```
 
 The host comes from the environment and is never committed. When the machine is

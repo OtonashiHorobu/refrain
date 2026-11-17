@@ -923,6 +923,17 @@ if(REFRAIN_BUILD_BENCH)
                           refrain-data refrain-kernel fmt::fmt)
     refrain_apply_warnings(refrain-bench-runtime)
 
+    # Light engine benchmark: a standalone executable because it reports the
+    # engine's own counters (initial light nodes and wall time, edit nodes and
+    # wall time, queue peak) rather than Google Benchmark timings. It skips
+    # itself when the datapack root or the content table container is absent.
+    add_executable(refrain-bench-light
+                   "${PROJECT_SOURCE_DIR}/bench/runtime/bench_light.cpp")
+    target_link_libraries(refrain-bench-light PRIVATE refrain-sim refrain-world
+                          refrain-worldgen refrain-data refrain-kernel
+                          fmt::fmt)
+    refrain_apply_warnings(refrain-bench-light)
+
     # Library-comparison benchmarks: the sources are optional and live outside
     # this tree, so the target exists only when the option is enabled and
     # REFRAIN_BENCH_VARIANTS_DIR actually contains sources.
