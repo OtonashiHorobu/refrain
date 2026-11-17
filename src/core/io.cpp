@@ -129,76 +129,41 @@ namespace fs = std::filesystem;
 
 auto read_file(std::string_view path, const read_options &options)
     -> result<std::vector<std::byte>> {
-    const fs::path target = to_path(path);
-    if (target.empty()) {
+    if (path.empty()) {
         return std::unexpected{empty_path_error()};
     }
 
-    // Untrusted input: reject a symlinked manifest before it can redirect the
-    // read outside the instance root. `symlink_status` does not follow the
-    // final component, so this inspects the path the caller named.
-    std::error_code link_error;
-    const auto link_status = fs::symlink_status(target, link_error);
-    if (link_error) {
-        return std::unexpected{
-            io_failure("failed to query file status", target, link_error)};
-    }
-    if (!options.allow_symlink && fs::is_symlink(link_status)) {
-        return std::unexpected{make_error(
-            error_code::permission_denied,
-            fmt::format("refusing to follow symlink '{}'", from_path(target)))};
+    // The platform handle performs the open and the regular-file check in one
+    // step. With `allow_symlink == false` a link at the final component is
+    // refused by the open itself (O_NOFOLLOW / reparse-point check), so a link
+    // swapped in after a status query can never redirect the read out of the
+    // tree being scanned; the open is non-blocking, so a FIFO is rejected as
+    // non-regular instead of blocking the caller.
+    auto file{
+        platform::file::read_only_file::open(path, options.allow_symlink)};
+    if (!file) {
+        return std::unexpected{std::move(file.error())};
     }
 
-    // Only regular files are readable. A directory, FIFO or device has no
-    // meaningful content and opening a FIFO would block forever, so this check
-    // must happen before the stream is opened.
-    std::error_code status_error;
-    const auto file_status = fs::status(target, status_error);
-    if (status_error) {
-        return std::unexpected{
-            io_failure("failed to query file status", target, status_error)};
-    }
-    if (file_status.type() == fs::file_type::not_found) {
-        return std::unexpected{
-            io_failure("failed to open for reading", target, {})};
-    }
-    if (!fs::is_regular_file(file_status)) {
-        return std::unexpected{io_failure(
-            "cannot read a non-regular file (directory, FIFO or device)",
-            target, {})};
-    }
-
-    // The declared size is only a hint (the file may grow between this check
-    // and the read), so the loop below enforces the same limit again. It is
+    // The declared size is only a hint (the file may grow between the open and
+    // the read), so the loop below enforces the same limit again. It is
     // checked *before* reserving: an oversized file never allocates.
-    std::error_code size_error;
-    const auto hinted_size = fs::file_size(target, size_error);
-    if (size_error) {
-        return std::unexpected{
-            io_failure("failed to query file size", target, size_error)};
-    }
-    if (hinted_size > static_cast<std::uintmax_t>(options.max_bytes)) {
+    const auto hinted_size{file->size()};
+    if (hinted_size > options.max_bytes) {
         return std::unexpected{make_error(
             error_code::invalid_argument,
             fmt::format("file '{}' is {} bytes, exceeding the {} byte limit",
-                        from_path(target), hinted_size, options.max_bytes))};
-    }
-
-    errno = 0;
-    std::ifstream in{target, std::ios::binary};
-    if (!in) {
-        return std::unexpected{
-            io_failure("failed to open for reading", target, stream_error())};
+                        path, hinted_size, options.max_bytes))};
     }
 
     std::vector<std::byte> bytes;
     if (hinted_size > 0) {
-        // Clamp instead of narrowing silently on 32-bit hosts (uintmax_t ->
+        // Clamp instead of narrowing silently on 32-bit hosts (uint64 ->
         // size_t). Never reserve more than the caller's limit.
-        const auto within_limit{std::min<std::uintmax_t>(
-            hinted_size, static_cast<std::uintmax_t>(options.max_bytes))};
-        const auto hint{static_cast<std::size_t>(std::min<std::uintmax_t>(
-            within_limit, static_cast<std::uintmax_t>(
+        const auto within_limit{std::min<std::uint64_t>(
+            hinted_size, static_cast<std::uint64_t>(options.max_bytes))};
+        const auto hint{static_cast<std::size_t>(std::min<std::uint64_t>(
+            within_limit, static_cast<std::uint64_t>(
                               std::numeric_limits<std::size_t>::max())))};
         if (hint > 0) {
             bytes.reserve(hint);
@@ -206,32 +171,26 @@ auto read_file(std::string_view path, const read_options &options)
     }
 
     constexpr std::size_t chunk_size = 64U * 1024U;
-    std::vector<char> chunk(chunk_size);
+    std::vector<std::byte> chunk(chunk_size);
     std::uint64_t total{0};
-    while (in) {
-        in.read(chunk.data(), static_cast<std::streamsize>(chunk.size()));
-        const auto read_count = in.gcount();
-        if (read_count > 0) {
-            const auto count = static_cast<std::uint64_t>(read_count);
-            // `total <= max_bytes` is an invariant, so the subtraction cannot
-            // underflow even when the limit is 0.
-            if (count > options.max_bytes - total) {
-                return std::unexpected{make_error(
-                    error_code::invalid_argument,
-                    fmt::format("file '{}' grew past the {} byte read limit",
-                                from_path(target), options.max_bytes))};
-            }
-            total += count;
-            const auto *first = chunk.data();
-            const auto count_size = static_cast<std::size_t>(read_count);
-            const auto chunk_bytes =
-                std::as_bytes(std::span<const char>{first, count_size});
-            bytes.append_range(chunk_bytes);
+    for (;;) {
+        auto count{file->read(std::span<std::byte>{chunk})};
+        if (!count) {
+            return std::unexpected{std::move(count.error())};
         }
-    }
-    if (!in.eof()) {
-        return std::unexpected{
-            io_failure("failed to read", target, stream_error())};
+        if (*count == 0) {
+            break; // end of file
+        }
+        // `total <= max_bytes` is an invariant, so the subtraction cannot
+        // underflow even when the limit is 0.
+        if (*count > options.max_bytes - total) {
+            return std::unexpected{make_error(
+                error_code::invalid_argument,
+                fmt::format("file '{}' grew past the {} byte read limit", path,
+                            options.max_bytes))};
+        }
+        total += *count;
+        bytes.append_range(std::span<const std::byte>{chunk.data(), *count});
     }
     return bytes;
 }

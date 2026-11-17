@@ -35,7 +35,8 @@ struct read_options {
     /// being read fails as well (`invalid_argument` in both cases).
     std::uint64_t max_bytes{64ULL * 1024ULL * 1024ULL};
     /// When false, a symlink at `path` is refused (`permission_denied`)
-    /// instead of being followed.
+    /// instead of being followed. The refusal is part of the open, so a link
+    /// cannot be swapped in between a check and the read.
     bool allow_symlink{true};
 };
 
@@ -44,8 +45,10 @@ struct read_options {
 /// Fails with `invalid_argument` for an empty path or a file over
 /// `options.max_bytes`, `permission_denied` for a symlink when
 /// `options.allow_symlink` is false, and `io_error` for a missing/unreadable
-/// file or a non-regular one (directory, FIFO, device). A FIFO is never opened,
-/// so the call cannot block on it.
+/// file or a non-regular one (directory, FIFO, device). The open itself
+/// refuses the symlink and is issued non-blocking, so a link swapped in after
+/// the caller started and a FIFO without a writer are both rejected instead of
+/// being followed or blocking the call.
 [[nodiscard]] auto read_file(std::string_view path,
                              const read_options &options = {})
     -> result<std::vector<std::byte>>;

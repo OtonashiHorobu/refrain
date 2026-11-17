@@ -636,6 +636,68 @@ suite<"kernel/service_registry"> service_registry_tests = [] {
     // hot composition epochs
     // -----------------------------------------------------------------------
 
+    // `select_active()` publishes the new payload and its generation in one
+    // step: a handle cached from the previous composition can neither validate
+    // nor acquire once the switch is visible, even before `commit_epoch()`.
+    "registry/select_active stales a cached handle immediately"_test = [] {
+        refrain::kernel::service_registry registry;
+        expect(registry
+                   .add_provider(
+                       make_provider("refrain:worldgen", "flat@1", "1.0.0"))
+                   .has_value());
+        expect(registry
+                   .add_provider(
+                       make_provider("refrain:worldgen", "noise@1", "1.0.0"))
+                   .has_value());
+        expect(
+            registry.select_active("refrain:worldgen", "flat@1").has_value());
+        expect(registry.commit_epoch().has_value());
+
+        const auto before{registry.query("refrain:worldgen")};
+        expect(before.has_value());
+        if (!before) {
+            return;
+        }
+        expect(before->provider.id == "flat@1");
+        expect(registry.validate(*before).has_value());
+
+        // Switch the slot without a commit in between: the new provider is
+        // already visible, so the cached handle must be stale now.
+        expect(
+            registry.select_active("refrain:worldgen", "noise@1").has_value());
+        expect(registry.active_provider("refrain:worldgen")->id == "noise@1");
+
+        const auto stale{registry.validate(*before)};
+        expect(!stale.has_value());
+        if (!stale) {
+            expect(stale.error().code == refrain::error_code::stale);
+        }
+        const auto stale_lease{registry.acquire(*before)};
+        expect(!stale_lease.has_value());
+        if (!stale_lease) {
+            expect(stale_lease.error().code == refrain::error_code::stale);
+        }
+
+        // A handle taken after the switch is current and stays valid across
+        // the commit that publishes the epoch: the commit does not stamp a
+        // second generation for a payload it did not change.
+        const auto after{registry.query("refrain:worldgen")};
+        expect(after.has_value());
+        if (!after) {
+            return;
+        }
+        expect(after->provider.id == "noise@1");
+        expect(after->generation != before->generation);
+        expect(registry.validate(*after).has_value());
+        expect(registry.acquire(*after).has_value());
+
+        const auto epoch_before{registry.epoch()};
+        expect(registry.commit_epoch().has_value());
+        expect(registry.epoch() == epoch_before + 1);
+        expect(registry.generation("refrain:worldgen") == after->generation);
+        expect(registry.validate(*after).has_value());
+    };
+
     "registry/commit publishes generations and advances the epoch"_test = [] {
         refrain::kernel::service_registry registry;
         expect(registry.epoch() == 0U);

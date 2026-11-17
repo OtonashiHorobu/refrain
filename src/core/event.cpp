@@ -15,7 +15,10 @@
 // - including the one currently running - can never shift the iteration cursor
 // and skip the listener that follows it. Subscriptions added during a
 // publish do not receive the in-flight event (the listener count is snapshotted
-// when the publish starts).
+// when the publish starts); they are appended and the outermost publish
+// restores dispatch order before it returns, so a listener added with a higher
+// priority than the listeners already registered still runs first on the next
+// publish.
 //
 // Event types are RTTI-free: `type_of<Event>()` in event.hpp is a compile-time
 // hash of the compiler-canonical type name, so -fno-rtti builds keep working
@@ -37,6 +40,21 @@ namespace {
 
 constexpr refrain::log::logger log_event{"event"};
 
+/// Keep `listeners` in dispatch order: priority descending, subscription id
+/// ascending (registration order) for equal priorities. The caller must not be
+/// iterating the vector: this is either a `subscribe()` outside a publish or
+/// the outermost publish, after its iteration has finished.
+template <typename Entry> void sort_listeners(std::vector<Entry> &listeners) {
+    std::stable_sort(listeners.begin(), listeners.end(),
+                     [](const Entry &lhs, const Entry &rhs) {
+                         if (lhs.priority != rhs.priority) {
+                             return static_cast<std::int32_t>(lhs.priority) >
+                                    static_cast<std::int32_t>(rhs.priority);
+                         }
+                         return lhs.id < rhs.id;
+                     });
+}
+
 } // namespace
 
 auto bus::subscribe(event_type type, listener fn, event_priority priority)
@@ -50,17 +68,10 @@ auto bus::subscribe(event_type type, listener fn, event_priority priority)
     });
     // Keep the vector in dispatch order. During a publish the snapshot count
     // means appending is safe and the new listener misses the in-flight event;
-    // sort after the outermost publish instead of shifting live entries.
+    // the outermost publish sorts once its iteration is over instead of
+    // shifting live entries now.
     if (publish_depth_ == 0) {
-        std::stable_sort(listeners_.begin(), listeners_.end(),
-                         [](const entry &lhs, const entry &rhs) {
-                             if (lhs.priority != rhs.priority) {
-                                 return static_cast<std::int32_t>(
-                                            lhs.priority) >
-                                        static_cast<std::int32_t>(rhs.priority);
-                             }
-                             return lhs.id < rhs.id;
-                         });
+        sort_listeners(listeners_);
     }
     return id;
 }
@@ -164,10 +175,15 @@ void bus::clear() noexcept {
 
 void bus::publish_raw(event_type type, const void *event) {
     // Snapshot the listener count: subscriptions added by a callback must not
-    // receive the event that is currently being published. The callback is
-    // copied so a listener may unsubscribe itself without destroying the
-    // std::function that is currently executing.
+    // receive the event that is currently being published, and must not shift
+    // the entries the loop is about to visit. The callback is copied so a
+    // listener may unsubscribe itself without destroying the std::function that
+    // is currently executing.
     const auto count{listeners_.size()};
+    // A subscription bumps `next_id_`; comparing it with this snapshot tells
+    // the outermost publish whether a listener subscribed during the dispatch
+    // and therefore appended an entry out of order.
+    const auto ids_before{next_id_};
     ++publish_depth_;
     std::exception_ptr failure{};
     for (std::size_t index{}; index < count && index < listeners_.size();
@@ -197,6 +213,14 @@ void bus::publish_raw(event_type type, const void *event) {
         }
     }
     finish_publish();
+    if (publish_depth_ == 0 && next_id_ != ids_before) {
+        // A listener subscribed while this event was being published, so its
+        // entry was appended after the iterated range. The outermost publish
+        // restores dispatch order once no iteration is live; a sort may
+        // allocate (hard OOM), which is why this is not part of the noexcept
+        // finish_publish().
+        sort_listeners(listeners_);
+    }
     if (failure) {
         std::rethrow_exception(failure);
     }

@@ -7,6 +7,7 @@
 // content identity, staging/atomicity, uninstall + GC reclaim, the single
 // receipt schema, and the receipt-only runtime catalog.
 
+#include <refrain/app/services.hpp>
 #include <refrain/core/io.hpp>
 #include <refrain/data/checksum.hpp>
 #include <refrain/data/content_maintenance.hpp>
@@ -1453,6 +1454,44 @@ const suite mod_catalog_tests = [] {
             if (!no_table) {
                 expect(no_table.error().code == error_code::not_found);
             }
+        };
+};
+
+// The CLI install path (`refrain-tools mods install`) defaults to the
+// production trust policy: with no `--policy-file` a signature is required, and
+// accepting an unsigned package needs an explicit development policy.
+const suite mod_install_cli_tests = [] {
+    "install/cli requires a signature unless a development policy is given"_test =
+        [] {
+            temp_workspace work{"cli-policy"};
+            expect(materialise(work, "mod", "refrain.test.cli", "1.0.0"));
+            auto archive{pack(work, "mod", "out/cli.rfmod")};
+            expect(archive.has_value());
+            if (!archive) {
+                return;
+            }
+
+            // No policy file: the built-in production default applies, so the
+            // unsigned package is refused and no receipt is written.
+            refrain::app::mods_install_options defaults{};
+            defaults.archive = *archive;
+            defaults.store = work.path("store-default").string();
+            defaults.cook = false;
+            expect(refrain::app::run_mods_install(defaults) != 0);
+            expect(!fs::exists(
+                work.path("store-default/mods/refrain.test.cli/1.0.0.json")));
+
+            // The explicit development policy is the only opt-out.
+            expect(work.write("dev-policy.toml",
+                              "[signature]\nrequire = false\n"));
+            refrain::app::mods_install_options development{};
+            development.archive = *archive;
+            development.store = work.path("store-dev").string();
+            development.policy_file = work.path("dev-policy.toml").string();
+            development.cook = false;
+            expect(refrain::app::run_mods_install(development) == 0);
+            expect(fs::exists(
+                work.path("store-dev/mods/refrain.test.cli/1.0.0.json")));
         };
 };
 

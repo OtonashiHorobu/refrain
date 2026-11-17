@@ -489,6 +489,44 @@ name = "x"
         }
     };
 
+    // A namespace file that cannot be inspected is an error, not "absent": a
+    // mounted file that exists but is unreadable must fail closed instead of
+    // silently running on defaults the operator never chose.
+    "config/store fails closed for an uninspectable namespace file"_test = [] {
+        const auto root{make_temp_dir()};
+        // A directory mounted as a namespace file exists but has no content.
+        std::error_code error;
+        std::filesystem::create_directories(root / "as-directory", error);
+        config::store blocking;
+        expect(static_cast<bool>(blocking.mount(
+            {.name = "game", .path = (root / "as-directory").string()})));
+        const auto blocking_loaded{blocking.load_all()};
+        expect(!blocking_loaded);
+        if (!blocking_loaded) {
+            expect(blocking_loaded.error().code ==
+                   refrain::error_code::io_error);
+        }
+
+#if !defined(_WIN32)
+        // A path component that is a regular file reports ENOTDIR when the
+        // path is inspected; an implementation that ignores the status error
+        // would treat the file as absent and fall back to defaults.
+        const auto file{root / "plain-file"};
+        write_text_file(file, "not a directory\n");
+        config::store store;
+        expect(static_cast<bool>(store.mount(
+            {.name = "game", .path = (file / "config.toml").string()})));
+        const auto loaded{store.load_all()};
+        expect(!loaded);
+        if (!loaded) {
+            expect(loaded.error().code == refrain::error_code::io_error);
+            expect(loaded.error().message.find("config") != std::string::npos);
+        }
+#endif
+
+        std::filesystem::remove_all(root, error);
+    };
+
     "config/store reports the mounted file path"_test = [] {
         config::store store;
         const auto path{std::string{REFRAIN_SOURCE_DIR} +

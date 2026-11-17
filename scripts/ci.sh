@@ -245,8 +245,12 @@ cp -R "$ROOT/test/fixtures/instance/mods/refrain.test.extra" \
     "$MODS_SRC/extra-1.0.0"
 "$BIN_DIR/refrain-tools" mods pack "$MODS_SRC/extra-1.0.0" \
     -o "$MODS_SRC/extra-1.0.0.rfmod" >"$MODS_SRC/pack-1.txt"
+# The fixture packages are unsigned: the explicit development policy is the
+# only way to accept them, because the tool default requires a signature.
 "$BIN_DIR/refrain-tools" mods install "$MODS_SRC/extra-1.0.0.rfmod" \
-    --store "$MODS_STORE" >"$MODS_SRC/install-1.txt"
+    --store "$MODS_STORE" \
+    --policy-file "$ROOT/test/fixtures/install-policy/dev-unsigned.toml" \
+    >"$MODS_SRC/install-1.txt"
 grep -q '^install: OK' "$MODS_SRC/install-1.txt" \
     || die "mods install: fixture mod install failed"
 [[ -f "$MODS_STORE/mods/refrain.test.extra/1.0.0.json" ]] \
@@ -322,7 +326,9 @@ PY
 "$BIN_DIR/refrain-tools" mods pack "$MODS_SRC/extra-1.0.1" \
     -o "$MODS_SRC/extra-1.0.1.rfmod" >/dev/null
 "$BIN_DIR/refrain-tools" mods install "$MODS_SRC/extra-1.0.1.rfmod" \
-    --store "$MODS_STORE" >"$MODS_SRC/install-2.txt"
+    --store "$MODS_STORE" \
+    --policy-file "$ROOT/test/fixtures/install-policy/dev-unsigned.toml" \
+    >"$MODS_SRC/install-2.txt"
 if "$BIN_DIR/refrain-server" --gamepack "$ROOT/gamepack/gamepack.toml" \
     --mods "$MODS_STORE" --auto-scan \
     --mods-lock "$SERVER_LOCK" --check >"$EXTRACT_DIR/auto-scan-drift.txt" 2>&1; then
@@ -355,7 +361,9 @@ grep -q 'already_exists' "$EXTRACT_DIR/case-collision.txt" \
 "$BIN_DIR/refrain-tools" mods pack "$ROOT/test/fixtures/abi99/mods/abi99.extra" \
     -o "$EXTRACT_DIR/abi99.rfmod" >/dev/null
 "$BIN_DIR/refrain-tools" mods install "$EXTRACT_DIR/abi99.rfmod" \
-    --store "$EXTRACT_DIR/abi99-store" >/dev/null
+    --store "$EXTRACT_DIR/abi99-store" \
+    --policy-file "$ROOT/test/fixtures/install-policy/dev-unsigned.toml" \
+    >/dev/null
 if "$BIN_DIR/refrain-server" --gamepack "$ROOT/gamepack/gamepack.toml" \
     "${CI_SERVER_ARGS[@]}" --auto-scan --mods "$EXTRACT_DIR/abi99-store" \
     --mods-lock "$EXTRACT_DIR/abi99.lock" \

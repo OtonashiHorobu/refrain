@@ -766,9 +766,12 @@ old_key_id = "example-2025"
 new_key_id = "example-2026"
 ```
 
-The server's built-in default is the production default: a trusted signature is
-required and updates are strict. A development store may set `require = false`
-and still install unsigned packages.
+The built-in default is the production default for the server and for
+`refrain-tools mods install`: a trusted signature is required and updates are
+strict. With no `--policy-file` the tool applies that default and prints the
+policy it used, so a missing policy file cannot be mistaken for a lax one. A
+development store that installs unsigned packages opts out explicitly with a
+policy file that sets `require = false`.
 
 Update semantics are Android-style:
 

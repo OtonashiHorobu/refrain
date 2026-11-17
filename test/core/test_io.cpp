@@ -397,9 +397,44 @@ suite<"core/io"> io_tests = [] {
         }
     };
 
+    // The symlink refusal and the regular-file check are part of the open: a
+    // link that points at a FIFO is refused as a link when following is off
+    // and rejected as non-regular when following is on, and neither call may
+    // block on the FIFO.
+    "io/read_file refuses a symlink to a FIFO without blocking"_test = [] {
+#if !defined(_WIN32)
+        temp_directory dir;
+        const std::string fifo = (dir.path() / "pipe").string();
+        if (::mkfifo(fifo.c_str(), 0600) != 0) {
+            return; // host without FIFO support
+        }
+        const std::string link = (dir.path() / "pipe-link").string();
+        std::error_code link_error;
+        fs::create_symlink(fifo, link, link_error);
+        if (link_error) {
+            return;
+        }
+
+        const auto refused =
+            refrain::core::io::read_file(link, {.allow_symlink = false});
+        expect(!refused.has_value());
+        if (!refused.has_value()) {
+            expect(refused.error().code ==
+                   refrain::error_code::permission_denied);
+        }
+
+        const auto followed =
+            refrain::core::io::read_file(link, {.allow_symlink = true});
+        expect(!followed.has_value());
+        if (!followed.has_value()) {
+            expect(followed.error().code == refrain::error_code::io_error);
+        }
+#endif
+    };
+
     // Directories and FIFOs have no readable content. The FIFO case is the
-    // important one: the status check must reject it *before* opening, because
-    // opening a FIFO without a writer blocks forever.
+    // important one: the open is non-blocking, so a FIFO without a writer is
+    // rejected as a non-regular file instead of hanging the caller.
     "io/read_file rejects non-regular files"_test = [] {
         temp_directory dir;
         const auto directory =
@@ -411,11 +446,14 @@ suite<"core/io"> io_tests = [] {
 #if !defined(_WIN32)
         const std::string fifo = (dir.path() / "pipe").string();
         if (::mkfifo(fifo.c_str(), 0600) == 0) {
-            const auto pipe{refrain::core::io::read_file(
-                fifo, {.max_bytes = 1024U * 1024U, .allow_symlink = false})};
-            expect(!pipe.has_value());
-            if (!pipe.has_value()) {
-                expect(pipe.error().code == refrain::error_code::io_error);
+            for (const bool allow_symlink : {false, true}) {
+                const auto pipe{refrain::core::io::read_file(
+                    fifo, {.max_bytes = 1024U * 1024U,
+                           .allow_symlink = allow_symlink})};
+                expect(!pipe.has_value());
+                if (!pipe.has_value()) {
+                    expect(pipe.error().code == refrain::error_code::io_error);
+                }
             }
         }
 #endif

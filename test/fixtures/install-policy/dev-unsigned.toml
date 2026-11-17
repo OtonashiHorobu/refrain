@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: MIT
+#
+# SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
+#
+# Development-only install policy: accepts unsigned packages. Test and CI
+# stores install unsigned fixture packages with this explicit policy rather
+# than relying on a lax tool default, so the default stays the production one
+# (a trusted signature is required).
+
+[signature]
+require = false
