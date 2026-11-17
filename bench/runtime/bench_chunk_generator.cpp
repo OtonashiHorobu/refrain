@@ -68,6 +68,9 @@ struct options {
     bool climate_ties{false};
     /// Generate through whole tiles instead of one chunk at a time.
     bool tiled{false};
+    /// Generate through the per-chunk status pipeline, which keeps a proto
+    /// chunk cache between requests, instead of the single-chunk path.
+    bool pipeline{false};
     /// Edge in chunks of one generated tile.
     jint tile_size{8};
 };
@@ -251,6 +254,7 @@ struct scenario_result {
     std::string target{};
     jint chunks{0};
     jint tile{1};
+    bool pipeline{false};
     std::size_t workers{0};
     double create_ms{0.0};
     double cold_batch_ms{0.0};
@@ -303,7 +307,7 @@ auto run_scenario(const options &config, generation_target target, jint chunks,
         make_positions(config.origin_x, config.origin_z, width, depth);
     for (jint repeat = 0; repeat < config.repeat; ++repeat) {
         const auto begin = clock_type::now();
-        if (workers == 1 && !config.tiled) {
+        if (workers == 1 && !config.tiled && !config.pipeline) {
             // The serial path is also the per-chunk latency sample: it runs
             // the same stage sequence the batch entry point uses for one
             // worker.
@@ -326,7 +330,11 @@ auto run_scenario(const options &config, generation_target target, jint chunks,
             batch_ms.push_back(elapsed);
         } else {
             auto generated =
-                config.tiled
+                config.pipeline
+                    ? generator->generate_chunk_area(
+                          chunk_pos{.x = config.origin_x, .z = config.origin_z},
+                          width, depth, workers)
+                : config.tiled
                     ? generator->generate_area_tiled(
                           chunk_pos{.x = config.origin_x, .z = config.origin_z},
                           width, depth, workers)
@@ -357,7 +365,7 @@ auto run_scenario(const options &config, generation_target target, jint chunks,
         static_cast<double>(chunks) * 1000.0 / median_batch_ms;
     const double cold_chunks_per_second =
         static_cast<double>(chunks) * 1000.0 / cold_batch_ms;
-    if (workers != 1 || config.tiled) {
+    if (workers != 1 || config.tiled || config.pipeline) {
         // The batch entry point does not expose per-chunk completion times, so
         // the tail statistics use each batch's per-chunk amortised time. A
         // tile is one batch of `tile_size` squared chunks, so its per-chunk
@@ -372,6 +380,7 @@ auto run_scenario(const options &config, generation_target target, jint chunks,
     result.target = std::string{target_name(target)};
     result.chunks = chunks;
     result.tile = config.tiled ? config.tile_size : 1;
+    result.pipeline = config.pipeline;
     result.workers = workers;
     result.create_ms = create_ms;
     result.cold_batch_ms = cold_batch_ms;
@@ -384,16 +393,17 @@ auto run_scenario(const options &config, generation_target target, jint chunks,
     result.peak_rss_kib = read_peak_rss_kib();
 
     const auto line = fmt::format(
-        "RESULT target={} chunks={} tile={} workers={} create_ms={:.1f} "
+        "RESULT target={} chunks={} tile={} pipeline={} workers={} "
+        "create_ms={:.1f} "
         "cold_batch_ms={:.1f} median_batch_ms={:.1f} "
         "cold_chunks_per_s={:.3f} warm_chunks_per_s={:.3f} "
         "p50_ms_per_chunk={:.1f} p95_ms_per_chunk={:.1f} rss_mib={:.1f} "
         "peak_rss_mib={:.1f}",
-        result.target, result.chunks, result.tile, result.workers,
-        result.create_ms, result.cold_batch_ms, result.median_batch_ms,
-        result.cold_chunks_per_second, result.warm_chunks_per_second,
-        result.p50_ms_per_chunk, result.p95_ms_per_chunk,
-        static_cast<double>(result.rss_kib) / 1024.0,
+        result.target, result.chunks, result.tile, result.pipeline,
+        result.workers, result.create_ms, result.cold_batch_ms,
+        result.median_batch_ms, result.cold_chunks_per_second,
+        result.warm_chunks_per_second, result.p50_ms_per_chunk,
+        result.p95_ms_per_chunk, static_cast<double>(result.rss_kib) / 1024.0,
         static_cast<double>(result.peak_rss_kib) / 1024.0);
     fmt::print("{}\n", line);
     if (stream != nullptr) {
@@ -981,6 +991,8 @@ auto parse_options(int argc, char **argv) -> std::optional<options> {
             }
         } else if (argument == "--chunk-hash") {
             config.chunk_hash = true;
+        } else if (argument == "--pipeline") {
+            config.pipeline = true;
         } else if (argument == "--tiles") {
             config.tiled = true;
         } else if (argument == "--tile-size") {

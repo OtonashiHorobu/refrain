@@ -29,7 +29,19 @@ void chunk_region::set_write_focus(const chunk_pos &center, jint radius) {
 }
 
 void chunk_region::attach(proto_chunk &chunk) {
-    chunks_[chunk_pos{.x = chunk.chunk_x(), .z = chunk.chunk_z()}] = &chunk;
+    const chunk_pos pos{.x = chunk.chunk_x(), .z = chunk.chunk_z()};
+    chunks_[pos] = &chunk;
+    read_only_.erase(pos);
+}
+
+void chunk_region::attach_read_only(proto_chunk &chunk) {
+    const chunk_pos pos{.x = chunk.chunk_x(), .z = chunk.chunk_z()};
+    chunks_[pos] = &chunk;
+    read_only_[pos] = true;
+}
+
+auto chunk_region::read_only(const chunk_pos &pos) const -> bool {
+    return read_only_.contains(pos);
 }
 
 auto chunk_region::find(const chunk_pos &pos) const -> proto_chunk * {
@@ -55,7 +67,7 @@ auto chunk_region::set_block_state(jint x, jint y, jint z, block_state_id state)
     -> bool {
     const chunk_pos pos{.x = floor_div16(x), .z = floor_div16(z)};
     auto *chunk = find(pos);
-    if (chunk == nullptr || !within_write_zone(pos)) {
+    if (chunk == nullptr || !within_write_zone(pos) || read_only(pos)) {
         ++dropped_writes_;
         return false;
     }
@@ -65,7 +77,7 @@ auto chunk_region::set_block_state(jint x, jint y, jint z, block_state_id state)
 auto chunk_region::mark_post_processing(jint x, jint y, jint z) -> bool {
     const chunk_pos pos{.x = floor_div16(x), .z = floor_div16(z)};
     auto *chunk = find(pos);
-    if (chunk == nullptr) {
+    if (chunk == nullptr || read_only(pos)) {
         return false;
     }
     chunk->mark_post_processing(x - pos.x * 16, y, z - pos.z * 16);
@@ -76,7 +88,7 @@ auto chunk_region::set_block_entity(jint x, jint y, jint z,
                                     data::nbt::compound entity) -> bool {
     const chunk_pos pos{.x = floor_div16(x), .z = floor_div16(z)};
     auto *chunk = find(pos);
-    if (chunk == nullptr || !within_write_zone(pos)) {
+    if (chunk == nullptr || !within_write_zone(pos) || read_only(pos)) {
         ++dropped_writes_;
         return false;
     }

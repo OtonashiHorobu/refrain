@@ -264,6 +264,8 @@ chunk_generator::chunk_generator(
     : config_{std::move(config)}, shared_{std::move(shared)},
       dimension_{std::move(dimension)}, features_{std::move(features)},
       templates_{std::move(templates)},
+      proto_cache_{static_cast<std::size_t>(
+          std::max<jint>(config_.proto_cache_capacity, 1))},
       has_structures_{config_.target != generation_target::terrain},
       has_features_{!config_.reference_world && has_structures_} {}
 
@@ -278,6 +280,11 @@ auto chunk_generator::create(chunk_generator_config config)
         return std::unexpected{
             fail(error_code::invalid_argument,
                  "generation tile edge is outside its supported range")};
+    }
+    if (config.proto_cache_capacity < 25) {
+        return std::unexpected{
+            fail(error_code::invalid_argument,
+                 "the per-chunk cache cannot hold a terrain neighbourhood")};
     }
     if (config.neighbour_radius < 0 || config.neighbour_radius > 8) {
         return std::unexpected{
@@ -1825,6 +1832,516 @@ auto chunk_generator::generate_area_tiled(chunk_pos origin, jint width,
                 } catch (...) {
                     errors[index] =
                         fail(error_code::unknown, "tile generation failed");
+                }
+            }
+        });
+        begin = end;
+    }
+    for (auto &thread : threads) {
+        thread.join();
+    }
+    for (const auto &error : errors) {
+        if (error.has_value()) {
+            return std::unexpected{*error};
+        }
+    }
+    return chunks;
+}
+
+// ---------------------------------------------------------------------------
+// Per-chunk status pipeline
+// ---------------------------------------------------------------------------
+
+namespace {
+
+/// The inclusive square of chunk positions around `center`.
+auto square_positions(const chunk_pos &center, jint radius)
+    -> std::vector<chunk_pos> {
+    auto offsets = square_offsets(radius);
+    std::vector<chunk_pos> positions;
+    positions.reserve(offsets.size());
+    for (const auto &offset : offsets) {
+        positions.push_back(
+            chunk_pos{.x = center.x + offset.x, .z = center.z + offset.z});
+    }
+    return positions;
+}
+
+/// The inclusive square of chunk coordinates around `center`.
+auto square_box(const chunk_pos &center, jint radius) -> chunk_rectangle {
+    return chunk_rectangle{.min_x = center.x - radius,
+                           .min_z = center.z - radius,
+                           .max_x = center.x + radius,
+                           .max_z = center.z + radius};
+}
+
+} // namespace
+
+void chunk_generator::clear_proto_cache() noexcept {
+    proto_cache_.clear();
+    start_cache_.clear();
+    start_cache_order_.clear();
+}
+
+auto chunk_generator::cached_start_at(const chunk_pos &pos)
+    -> result<const std::vector<structure::structure_start> *> {
+    if (!has_structures_) {
+        static const std::vector<structure::structure_start> empty{};
+        return &empty;
+    }
+    if (const auto found = start_cache_.find(pos);
+        found != start_cache_.end()) {
+        return &found->second;
+    }
+    std::optional<error> height_error;
+    auto context = make_start_context(height_error);
+    // The starts of a chunk must not depend on which chunk this worker scanned
+    // before it, so the biome search starts from the same empty hint every
+    // time. That is what makes a cached start reusable across request orders.
+    dimension_->reset_biome_search();
+    auto generated = structure::generate_structure_starts(pos, context);
+    if (height_error) {
+        return std::unexpected{*height_error};
+    }
+    while (start_cache_order_.size() >= start_cache_capacity) {
+        start_cache_.erase(start_cache_order_.front());
+        start_cache_order_.pop_front();
+    }
+    start_cache_order_.push_back(pos);
+    const auto [found, inserted] =
+        start_cache_.try_emplace(pos, std::move(generated));
+    return &found->second;
+}
+
+auto chunk_generator::start_window(const chunk_rectangle &box)
+    -> result<cached_start_window> {
+    cached_start_window window;
+    if (!has_structures_ || box.empty()) {
+        return window;
+    }
+    for (jint x = box.min_x; x <= box.max_x; ++x) {
+        for (jint z = box.min_z; z <= box.max_z; ++z) {
+            const auto found = cached_start_at(chunk_pos{.x = x, .z = z});
+            if (!found) {
+                return std::unexpected{found.error()};
+            }
+            window.starts.append_range(**found);
+        }
+    }
+    return window;
+}
+
+auto chunk_generator::attach_cached(chunk_region &region,
+                                    const chunk_rectangle &box) -> void {
+    const auto &readable = std::as_const(proto_cache_);
+    for (jint x = box.min_x; x <= box.max_x; ++x) {
+        for (jint z = box.min_z; z <= box.max_z; ++z) {
+            const auto *entry = readable.find(chunk_pos{.x = x, .z = z});
+            if (entry == nullptr || entry->chunk == nullptr) {
+                continue;
+            }
+            if (entry->sealed) {
+                region.attach_read_only(*entry->chunk);
+            } else {
+                region.attach(*entry->chunk);
+            }
+        }
+    }
+}
+
+auto chunk_generator::ensure_terrain(
+    const chunk_rectangle &box,
+    const std::vector<structure::structure_start> &starts) -> result<void> {
+    for (jint x = box.min_x; x <= box.max_x; ++x) {
+        for (jint z = box.min_z; z <= box.max_z; ++z) {
+            const chunk_pos position{.x = x, .z = z};
+            if (proto_cache_.find(position) != nullptr) {
+                continue;
+            }
+            std::optional<structure::structure_beard> beard;
+            if (has_structures_) {
+                const stage_timer timer{profile_, "structure.beard"};
+                auto collected = structure::collect_beard(
+                    starts, shared_->structure_data, position);
+                if (!collected.pieces.empty() || !collected.junctions.empty() ||
+                    collected.affected_box.has_value()) {
+                    beard = std::move(collected);
+                }
+            }
+            auto generated =
+                fill_terrain(position, beard.has_value() ? &*beard : nullptr);
+            if (!generated) {
+                return std::unexpected{generated.error()};
+            }
+            (void)proto_cache_.insert(position, std::move(*generated));
+        }
+    }
+    return {};
+}
+
+auto chunk_generator::ensure_structure_pieces(
+    std::span<const chunk_pos> positions, const chunk_rectangle &box,
+    const std::vector<structure::structure_start> &starts) -> result<void> {
+    if (positions.empty()) {
+        return {};
+    }
+    bool pending = false;
+    for (const auto &position : positions) {
+        const auto *entry = proto_cache_.find(position);
+        if (entry == nullptr) {
+            return std::unexpected{fail(
+                error_code::unknown,
+                "the per-chunk pipeline lost a chunk of its terrain ring")};
+        }
+        pending = pending || !entry->structures;
+    }
+    if (!pending) {
+        return {};
+    }
+    if (!has_structures_) {
+        for (const auto &position : positions) {
+            if (auto *entry = proto_cache_.find(position); entry != nullptr) {
+                entry->structures = true;
+            }
+        }
+        return {};
+    }
+    auto *center = proto_cache_.find(positions.front());
+    if (center == nullptr || center->chunk == nullptr) {
+        return std::unexpected{
+            fail(error_code::unknown,
+                 "the per-chunk pipeline lost its structure centre")};
+    }
+    chunk_region region{*center->chunk, 1};
+    attach_cached(region, box);
+    // Only the starts that reach one of the pending chunks can place a piece
+    // in this pass, so only their feature pools are resolved. A window around
+    // a village can hold dozens of starts whose pieces stay in other chunks.
+    std::vector<const structure::structure_start *> start_pointers;
+    start_pointers.reserve(starts.size());
+    for (const auto &start : starts) {
+        const bool reaches =
+            std::ranges::any_of(positions, [&start](const chunk_pos &position) {
+                return start.bounds.intersects_chunk(position);
+            });
+        if (reaches) {
+            start_pointers.push_back(&start);
+        }
+    }
+    std::unique_ptr<structure_placement> placement;
+    {
+        const stage_timer timer{profile_, "structure.features"};
+        auto created = make_structure_placement(region, start_pointers);
+        if (!created) {
+            return std::unexpected{created.error()};
+        }
+        placement = std::move(*created);
+    }
+    for (const auto &position : positions) {
+        auto *entry = proto_cache_.find(position);
+        if (entry == nullptr || entry->chunk == nullptr) {
+            return std::unexpected{fail(
+                error_code::unknown,
+                "the per-chunk pipeline lost a chunk of its structure ring")};
+        }
+        if (entry->structures) {
+            continue;
+        }
+        auto piece_context = placement->context;
+        piece_context.chunk = entry->chunk.get();
+        region.set_write_focus(position, 0);
+        worldgen_random decoration{
+            std::make_unique<xoroshiro_random_source>(0)};
+        const jlong decoration_seed = decoration.set_decoration_seed(
+            config_.seed, position.x * 16, position.z * 16);
+        // The reference starts stage places the starts owned by the chunk
+        // before the ones that reach it from elsewhere, and both groups in
+        // scan order. The placement random stream of each start is derived
+        // from the decorated chunk, not from this list, so only overlapping
+        // writes between two starts can depend on the order.
+        for (const auto &start : starts) {
+            if (start.chunk != position ||
+                !start.bounds.intersects_chunk(position)) {
+                continue;
+            }
+            const auto structure_index = structure::structure_step_index(
+                shared_->structure_data, start.structure);
+            if (!structure_index.has_value()) {
+                continue;
+            }
+            auto start_context = piece_context;
+            if (!start.pieces.empty()) {
+                start_context.reference = structure::start_reference_position(
+                    structure::to_piece_record(start.pieces.front()));
+            }
+            worldgen_random random{
+                std::make_unique<xoroshiro_random_source>(0)};
+            random.set_feature_seed(
+                decoration_seed, *structure_index,
+                structure::generation_step_ordinal(start.step));
+            for (const auto &piece : start.pieces) {
+                if (!piece.bounds.intersects_chunk(position)) {
+                    continue;
+                }
+                entry->shape_dirty = true;
+                structure::place_structure_piece(
+                    start_context, structure::to_piece_record(piece), random);
+            }
+        }
+        for (const auto &start : starts) {
+            if (start.chunk == position ||
+                !start.bounds.intersects_chunk(position)) {
+                continue;
+            }
+            const auto structure_index = structure::structure_step_index(
+                shared_->structure_data, start.structure);
+            if (!structure_index.has_value()) {
+                continue;
+            }
+            auto start_context = piece_context;
+            if (!start.pieces.empty()) {
+                start_context.reference = structure::start_reference_position(
+                    structure::to_piece_record(start.pieces.front()));
+            }
+            worldgen_random random{
+                std::make_unique<xoroshiro_random_source>(0)};
+            random.set_feature_seed(
+                decoration_seed, *structure_index,
+                structure::generation_step_ordinal(start.step));
+            for (const auto &piece : start.pieces) {
+                if (!piece.bounds.intersects_chunk(position)) {
+                    continue;
+                }
+                entry->shape_dirty = true;
+                structure::place_structure_piece(
+                    start_context, structure::to_piece_record(piece), random);
+            }
+        }
+        entry->structures = true;
+    }
+    return {};
+}
+
+auto chunk_generator::ensure_decorated(std::span<const chunk_pos> positions,
+                                       const chunk_rectangle &box)
+    -> result<void> {
+    std::vector<chunk_pos> pending;
+    pending.reserve(positions.size());
+    for (const auto &position : positions) {
+        const auto *entry = proto_cache_.find(position);
+        if (entry == nullptr) {
+            return std::unexpected{fail(
+                error_code::unknown,
+                "the per-chunk pipeline lost a chunk of its terrain ring")};
+        }
+        if (entry->stage != proto_stage::decorated) {
+            pending.push_back(position);
+        }
+    }
+    if (pending.empty()) {
+        return {};
+    }
+    if (!has_features_) {
+        for (const auto &position : pending) {
+            if (auto *entry = proto_cache_.find(position); entry != nullptr) {
+                entry->stage = proto_stage::decorated;
+                entry->chunk->set_status(chunk_status::features);
+            }
+        }
+        return {};
+    }
+    auto *center = proto_cache_.find(pending.front());
+    if (center == nullptr || center->chunk == nullptr) {
+        return std::unexpected{
+            fail(error_code::unknown,
+                 "the per-chunk pipeline lost its decoration centre")};
+    }
+    chunk_region region{*center->chunk, 1};
+    attach_cached(region, box);
+    // The candidate biomes of a decorated chunk are the palettes of its own
+    // three-by-three, exactly the reference possible-biome set of the features
+    // step, so the plan neither depends on the request order nor on the size of
+    // the requested rectangle.
+    std::vector<std::vector<std::string>> plans;
+    plans.reserve(pending.size());
+    for (const auto &position : pending) {
+        plans.push_back(candidate_biomes_at(region, position));
+    }
+    std::vector<decoration_target> targets;
+    targets.reserve(pending.size());
+    for (std::size_t index = 0; index < pending.size(); ++index) {
+        auto *entry = proto_cache_.find(pending[index]);
+        if (entry == nullptr || entry->chunk == nullptr) {
+            return std::unexpected{
+                fail(error_code::unknown,
+                     "the per-chunk pipeline lost a decoration chunk")};
+        }
+        targets.push_back(decoration_target{.position = pending[index],
+                                            .chunk = entry->chunk.get(),
+                                            .candidate_biomes = &plans[index]});
+    }
+    if (const auto decorated = decorate_chunks(region, targets); !decorated) {
+        return std::unexpected{decorated.error()};
+    }
+    for (const auto &position : pending) {
+        if (auto *entry = proto_cache_.find(position); entry != nullptr) {
+            entry->stage = proto_stage::decorated;
+            entry->chunk->set_status(chunk_status::features);
+        }
+    }
+    return {};
+}
+
+auto chunk_generator::serve_cached(
+    const chunk_pos &pos, const std::vector<structure::structure_start> &starts)
+    -> result<std::unique_ptr<proto_chunk>> {
+    auto *entry = proto_cache_.find(pos);
+    if (entry == nullptr || entry->chunk == nullptr) {
+        return std::unexpected{
+            fail(error_code::unknown,
+                 "the per-chunk pipeline lost the served chunk")};
+    }
+    auto served = entry->chunk->clone();
+    // The structure records of the served chunk are the ones the reference
+    // starts and references stages write: its own starts plus one reference
+    // for every start of the window whose box overlaps it. They live on the
+    // returned copy, so a repeat request produces the same records again.
+    for (const auto &start : starts) {
+        if (start.chunk == pos) {
+            served->add_structure_start(make_start_record(start));
+        }
+    }
+    auto reference_starts = starts;
+    for (const auto &reference : structure::collect_references(
+             reference_starts, pos, pipeline_structure_radius)) {
+        served->add_structure_reference(reference.structure, reference.chunk_x,
+                                        reference.chunk_z, reference.count);
+    }
+    served->set_status(target_status(config_.target));
+    entry->sealed = true;
+    return served;
+}
+
+auto chunk_generator::generate_chunk(const chunk_pos &pos)
+    -> result<std::unique_ptr<proto_chunk>> {
+    if (config_.target == generation_target::terrain) {
+        // A terrain target has no neighbour writes to settle, so the single
+        // chunk path already produces exactly the requested chunk.
+        return generate_impl(pos);
+    }
+    const chunk_rectangle decorated =
+        square_box(pos, pipeline_decoration_radius);
+    const chunk_rectangle terrain = square_box(pos, pipeline_terrain_radius);
+    const chunk_rectangle start_box =
+        expand(decorated, pipeline_structure_radius);
+    auto window = start_window(start_box);
+    if (!window) {
+        return std::unexpected{window.error()};
+    }
+    const auto positions = square_positions(pos, pipeline_decoration_radius);
+    if (auto ensured = ensure_terrain(terrain, window->starts); !ensured) {
+        return std::unexpected{ensured.error()};
+    }
+    if (auto placed =
+            ensure_structure_pieces(positions, terrain, window->starts);
+        !placed) {
+        return std::unexpected{placed.error()};
+    }
+    // The shape repair of the served chunk runs after every piece of its
+    // three-by-three landed, so a border wall sees the pieces on both sides of
+    // the seam, and before the features write over it, like the reference
+    // single-chunk stage order.
+    if (auto *entry = proto_cache_.find(pos);
+        entry != nullptr && entry->shape_dirty && !entry->shapes) {
+        chunk_region region{*entry->chunk, 1};
+        attach_cached(region, terrain);
+        region.set_write_focus(pos, 0);
+        const stage_timer timer{profile_, "structure.shapes"};
+        structure::refresh_chunk_shapes(*entry->chunk, region,
+                                        dimension_->states());
+        entry->shapes = true;
+    }
+    if (auto decorated_ok = ensure_decorated(positions, terrain);
+        !decorated_ok) {
+        return std::unexpected{decorated_ok.error()};
+    }
+    return serve_cached(pos, window->starts);
+}
+
+auto chunk_generator::generate_chunk_area(chunk_pos origin, jint width,
+                                          jint depth, std::size_t workers)
+    -> result<std::vector<std::unique_ptr<proto_chunk>>> {
+    if (width <= 0 || depth <= 0) {
+        return std::unexpected{
+            fail(error_code::invalid_argument,
+                 "generation area needs a positive width and depth")};
+    }
+    std::vector<chunk_pos> positions;
+    positions.reserve(static_cast<std::size_t>(width) *
+                      static_cast<std::size_t>(depth));
+    for (jint x = 0; x < width; ++x) {
+        for (jint z = 0; z < depth; ++z) {
+            positions.push_back(
+                chunk_pos{.x = origin.x + x, .z = origin.z + z});
+        }
+    }
+    std::vector<std::unique_ptr<proto_chunk>> chunks(positions.size());
+    std::size_t worker_count = workers;
+    if (worker_count == 0) {
+        worker_count = std::thread::hardware_concurrency();
+        if (worker_count == 0) {
+            worker_count = 1;
+        }
+    }
+    worker_count = std::min(worker_count, positions.size());
+    if (worker_count <= 1) {
+        for (std::size_t index = 0; index < positions.size(); ++index) {
+            auto generated = generate_chunk(positions[index]);
+            if (!generated) {
+                return std::unexpected{generated.error()};
+            }
+            chunks[index] = std::move(*generated);
+        }
+        return chunks;
+    }
+    auto instances = worker_instances(worker_count);
+    if (!instances) {
+        return std::unexpected{instances.error()};
+    }
+    // The neighbour writes of one chunk reach into the next, so a worker that
+    // serves the later part of the rectangle replays the earlier requests on
+    // its own cache instead of starting from its own first served chunk. The
+    // served blocks are then exactly the serial blocks, which is what the
+    // worker-count digest compares; the scheduler that removes the replay is a
+    // separate step.
+    const std::size_t base = positions.size() / worker_count;
+    const std::size_t extra = positions.size() % worker_count;
+    std::vector<std::optional<error>> errors(positions.size());
+    std::vector<std::jthread> threads;
+    threads.reserve(worker_count);
+    std::size_t begin = 0;
+    for (std::size_t worker = 0; worker < worker_count; ++worker) {
+        const std::size_t end = begin + base + (worker < extra ? 1U : 0U);
+        auto *generator = (*instances)[worker];
+        threads.emplace_back([&, generator, begin, end] {
+            for (std::size_t index = 0; index < end; ++index) {
+                try {
+                    auto generated =
+                        generator->generate_chunk(positions[index]);
+                    if (!generated) {
+                        errors[index] = generated.error();
+                        return;
+                    }
+                    if (index >= begin) {
+                        chunks[index] = std::move(*generated);
+                    }
+                } catch (const std::exception &exception) {
+                    errors[index] = fail(error_code::unknown, exception.what());
+                    return;
+                } catch (...) {
+                    errors[index] =
+                        fail(error_code::unknown, "chunk generation failed");
+                    return;
                 }
             }
         });
