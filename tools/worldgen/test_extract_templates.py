@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+#
+# SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 """Negative tests for the structure-template extractor.
 
 The extractor writes files from an untrusted jar, so every entry name that can

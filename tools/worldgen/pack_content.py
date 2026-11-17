@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+#
+# SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 """Copy the worldgen datapack documents into a locally generated snapshot.
 
 The snapshot contains only the files world generation reads: every
