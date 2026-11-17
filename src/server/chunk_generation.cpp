@@ -81,54 +81,41 @@ tile_distance(std::span<const refrain::world::chunk_pos> centres,
     return best;
 }
 
-/// Orders `wanted` tiles by the Chebyshev distance of their nearest chunk to
-/// the nearest centre, then by the tile corner. An empty centre list ranks
-/// every tile equally, so the corner tie-break alone decides.
+/// Nearest distance to any of `centres`, or a sentinel that ranks a tile
+/// behind every tile a centre list names when the list is empty. A primary
+/// list is always non-empty in the dispatch path; the look-ahead list may be
+/// empty, and then its key must not change the primary order.
 [[nodiscard]] auto
-rank_tiles_by_distance(std::span<const refrain::world::chunk_pos> wanted,
-                       std::span<const refrain::world::chunk_pos> centres,
-                       std::int32_t tile_size)
-    -> std::vector<refrain::world::chunk_pos> {
-    struct ranked {
-        std::int64_t distance{0};
-        std::int32_t x{0};
-        std::int32_t z{0};
-    };
-    std::vector<ranked> entries{};
-    entries.reserve(wanted.size());
-    for (const auto &pos : wanted) {
-        entries.push_back(
-            ranked{.distance = tile_distance(centres, pos, tile_size),
-                   .x = pos.x,
-                   .z = pos.z});
+secondary_distance(std::span<const refrain::world::chunk_pos> centres,
+                   refrain::world::chunk_pos tile, std::int32_t tile_size)
+    -> std::int64_t {
+    if (centres.empty()) {
+        return 0;
     }
-    std::sort(entries.begin(), entries.end(),
-              [](const ranked &left, const ranked &right) {
-                  return std::tie(left.distance, left.x, left.z) <
-                         std::tie(right.distance, right.x, right.z);
-              });
-    std::vector<refrain::world::chunk_pos> ordered{};
-    ordered.reserve(entries.size());
-    for (const auto &entry : entries) {
-        ordered.push_back({.x = entry.x, .z = entry.z});
-    }
-    return ordered;
+    return tile_distance(centres, tile, tile_size);
 }
 
-/// The tile a full queue evicts: the farthest from the centres, greatest
-/// corner on a tie. `wanted` must not be empty.
+/// The tile a full queue evicts: the farthest from the accepted centres, then
+/// the farthest from the look-ahead centres, greatest corner on a tie.
+/// `wanted` must not be empty.
 [[nodiscard]] auto
 farthest_tile(std::span<const refrain::world::chunk_pos> wanted,
               std::span<const refrain::world::chunk_pos> centres,
+              std::span<const refrain::world::chunk_pos> lookahead,
               std::int32_t tile_size) -> refrain::world::chunk_pos {
     auto victim{wanted.front()};
     auto victim_distance{tile_distance(centres, victim, tile_size)};
+    auto victim_ahead{secondary_distance(lookahead, victim, tile_size)};
     for (const auto &pos : wanted.subspan(1)) {
         const auto distance{tile_distance(centres, pos, tile_size)};
+        const auto ahead{secondary_distance(lookahead, pos, tile_size)};
         if (distance > victim_distance ||
-            (distance == victim_distance && key_of(pos) > key_of(victim))) {
+            (distance == victim_distance && ahead > victim_ahead) ||
+            (distance == victim_distance && ahead == victim_ahead &&
+             key_of(pos) > key_of(victim))) {
             victim = pos;
             victim_distance = distance;
+            victim_ahead = ahead;
         }
     }
     return victim;
@@ -303,7 +290,8 @@ auto chunk_generation::request(refrain::world::chunk_pos pos) -> bool {
     for (const auto &entry : wanted_) {
         queued.push_back({.x = entry.first, .z = entry.second});
     }
-    const auto victim{farthest_tile(queued, centres_, settings_.tile_size)};
+    const auto victim{farthest_tile(queued, centres_, lookahead_centres_,
+                                    settings_.tile_size)};
     const bool admitted{key_of(victim) != key};
     wanted_.erase(key_of(victim));
     return admitted;
@@ -318,6 +306,50 @@ void chunk_generation::set_priority_centres(
     std::span<const refrain::world::chunk_pos> centres) {
     const std::lock_guard lock{mutex_};
     centres_.assign(centres.begin(), centres.end());
+    lookahead_centres_.clear();
+}
+
+void chunk_generation::set_priority_centres(
+    std::span<const refrain::world::chunk_pos> centres,
+    std::span<const refrain::world::chunk_pos> lookahead) {
+    const std::lock_guard lock{mutex_};
+    centres_.assign(centres.begin(), centres.end());
+    lookahead_centres_.assign(lookahead.begin(), lookahead.end());
+}
+
+auto rank_tiles_by_distance(
+    std::span<const refrain::world::chunk_pos> wanted,
+    std::span<const refrain::world::chunk_pos> accepted,
+    std::span<const refrain::world::chunk_pos> lookahead,
+    std::int32_t tile_size) -> std::vector<refrain::world::chunk_pos> {
+    struct ranked {
+        std::int64_t distance{0};
+        std::int64_t ahead{0};
+        std::int32_t x{0};
+        std::int32_t z{0};
+    };
+    std::vector<ranked> entries{};
+    entries.reserve(wanted.size());
+    for (const auto &pos : wanted) {
+        entries.push_back(ranked{
+            .distance = tile_distance(accepted, pos, tile_size),
+            .ahead = secondary_distance(lookahead, pos, tile_size),
+            .x = pos.x,
+            .z = pos.z,
+        });
+    }
+    std::sort(entries.begin(), entries.end(),
+              [](const ranked &left, const ranked &right) {
+                  return std::tie(left.distance, left.ahead, left.x, left.z) <
+                         std::tie(right.distance, right.ahead, right.x,
+                                  right.z);
+              });
+    std::vector<refrain::world::chunk_pos> ordered{};
+    ordered.reserve(entries.size());
+    for (const auto &entry : entries) {
+        ordered.push_back({.x = entry.x, .z = entry.z});
+    }
+    return ordered;
 }
 
 auto rank_columns_by_distance(
@@ -399,8 +431,8 @@ auto chunk_generation::dispatch(std::uint64_t tick_elapsed_ns) -> std::size_t {
     for (const auto &key : wanted_) {
         candidates.push_back({.x = key.first, .z = key.second});
     }
-    const auto ordered{
-        rank_tiles_by_distance(candidates, centres_, settings_.tile_size)};
+    const auto ordered{rank_tiles_by_distance(
+        candidates, centres_, lookahead_centres_, settings_.tile_size)};
     std::size_t admitted{0};
     for (const auto &pos : ordered) {
         if (admitted >= available) {
@@ -421,25 +453,52 @@ auto chunk_generation::dispatch(std::uint64_t tick_elapsed_ns) -> std::size_t {
 
 auto chunk_generation::take_results() -> std::vector<
     std::pair<refrain::world::chunk_pos, refrain::world::chunk>> {
+    return take_results(std::numeric_limits<std::size_t>::max());
+}
+
+auto chunk_generation::take_results(std::size_t max_columns) -> std::vector<
+    std::pair<refrain::world::chunk_pos, refrain::world::chunk>> {
     std::vector<std::pair<refrain::world::chunk_pos, refrain::world::chunk>>
         results{};
     {
         const std::lock_guard lock{mutex_};
-        auto tiles{std::exchange(finished_, {})};
-        in_flight_ -= std::min(in_flight_, tiles.size());
-        for (auto &tile : tiles) {
+        // The flattening order decides which columns reach the world's apply
+        // queue first when the adoption budget cannot take every finished
+        // tile, so it is taken from the tile positions and never from the
+        // order the workers happened to finish.
+        std::sort(finished_.begin(), finished_.end(),
+                  [](const tile_result &left, const tile_result &right) {
+                      return key_of(left.origin) < key_of(right.origin);
+                  });
+        // Flatten finished tiles only while the ready queue has room. A tile
+        // left unflattened stays in flight, so its admission credit is not
+        // released and the caller's slow adoption throttles generation
+        // instead of growing this queue without bound.
+        while (!finished_.empty() && ready_.size() < max_ready_columns) {
+            auto tile{std::move(finished_.front())};
+            finished_.erase(finished_.begin());
+            in_flight_ -= std::min<std::size_t>(in_flight_, 1);
             active_.erase(key_of(tile.origin));
             for (auto &column : tile.columns) {
-                results.push_back(std::move(column));
+                // The ready map keeps the world's apply order by position, so
+                // the order never depends on which worker finished first, and
+                // a limited take leaves the remaining columns sorted for the
+                // next tick.
+                ready_.insert_or_assign(key_of(column.first),
+                                        std::move(column.second));
             }
         }
+        const auto count{std::min(max_columns, ready_.size())};
+        results.reserve(count);
+        for (std::size_t index{0}; index < count; ++index) {
+            auto first{ready_.begin()};
+            results.emplace_back(
+                refrain::world::chunk_pos{.x = first->first.first,
+                                          .z = first->first.second},
+                std::move(first->second));
+            ready_.erase(first);
+        }
     }
-    // The world is applied in ascending position order, never in completion
-    // order, so admission has no influence on the resulting state.
-    std::sort(results.begin(), results.end(),
-              [](const auto &left, const auto &right) {
-                  return key_of(left.first) < key_of(right.first);
-              });
     return results;
 }
 
