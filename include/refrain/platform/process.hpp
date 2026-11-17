@@ -66,6 +66,16 @@ void restore_fault_handlers() noexcept;
 
 [[nodiscard]] auto process_id() noexcept -> std::uint64_t;
 
+/// Set and clear an environment variable for the current process.
+///
+/// The platform layer owns the environment API so callers never branch on the
+/// operating system. Names and values are UTF-8; an empty value sets an empty
+/// variable (use `unset_environment_variable` to remove it). A failure returns
+/// `io_error` with the operating-system message.
+[[nodiscard]] auto set_environment_variable(std::string_view name,
+                                            std::string_view value) -> status;
+[[nodiscard]] auto unset_environment_variable(std::string_view name) -> status;
+
 /// Absolute path of the running executable, as a UTF-8 string.
 ///
 /// The path is resolved by the operating system, not from `argv[0]`: a

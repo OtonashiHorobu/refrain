@@ -24,6 +24,7 @@
 #include <refrain/mod/package.hpp>
 #include <refrain/mod/rfmod.hpp>
 #include <refrain/mod/static_mod.hpp>
+#include <refrain/platform/process.hpp>
 
 #include "support/scratch_directory.hpp"
 
@@ -43,20 +44,6 @@
 #include <fmt/format.h>
 
 namespace {
-
-#if defined(_WIN32)
-auto set_test_env(const char *name, const char *value) -> bool {
-    return ::_putenv_s(name, value) == 0;
-}
-auto clear_test_env(const char *name) -> bool {
-    return ::_putenv_s(name, "") == 0;
-}
-#else
-auto set_test_env(const char *name, const char *value) -> bool {
-    return ::setenv(name, value, 1) == 0;
-}
-auto clear_test_env(const char *name) -> bool { return ::unsetenv(name) == 0; }
-#endif
 
 using namespace boost::ut;
 
@@ -1182,11 +1169,11 @@ const suite mod_lifecycle_native_tests = [] {
             return;
         }
         // The fixture reports a failed unload while this variable is set.
-        static_cast<void>(
-            set_test_env("REFRAIN_TEST_EXTERNAL_MOD_FAIL_UNLOAD", "1"));
+        static_cast<void>(refrain::platform::set_environment_variable(
+            "REFRAIN_TEST_EXTERNAL_MOD_FAIL_UNLOAD", "1"));
         auto committed{host.commit_epoch()};
-        static_cast<void>(
-            clear_test_env("REFRAIN_TEST_EXTERNAL_MOD_FAIL_UNLOAD"));
+        static_cast<void>(refrain::platform::unset_environment_variable(
+            "REFRAIN_TEST_EXTERNAL_MOD_FAIL_UNLOAD"));
         expect(static_cast<bool>(committed));
         if (!committed) {
             return;
