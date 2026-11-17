@@ -39,6 +39,29 @@ namespace {
 
 } // namespace
 
+entity_store::entity_store() {
+    // The player table is a component of this registry, not a side table: it
+    // shares the store's logical-id sequence and lives next to the runtime
+    // entity components.
+    players_entity_ = registry_.create();
+    registry_.emplace<component::players>(
+        players_entity_, component::players{.table = player_table{ids_}});
+}
+
+entity_store::~entity_store() = default;
+
+auto entity_store::players() noexcept -> player_table & {
+    return registry_.get<component::players>(players_entity_).table;
+}
+
+auto entity_store::players() const noexcept -> const player_table & {
+    return registry_.get<component::players>(players_entity_).table;
+}
+
+auto entity_store::allocate_id() -> result<entity_id> {
+    return ids_.allocate();
+}
+
 auto entity_store::find(entity_id id) const noexcept -> entt::entity {
     const auto found{by_id_.find(id)};
     return found == by_id_.end() ? entt::null : found->second;

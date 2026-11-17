@@ -481,9 +481,10 @@ class world {
     [[nodiscard]] auto random() noexcept -> rng &;
     [[nodiscard]] auto random() const noexcept -> const rng &;
 
-    /// Player records, addressed by entity id. The table is the one
-    /// authoritative player model: the console and the session layer read and
-    /// mutate these records, never a copy.
+    /// Player records, addressed by entity id. The records live in the entity
+    /// store's registry next to the runtime entity components; the console and
+    /// the session layer read and mutate them through this accessor, never a
+    /// copy.
     [[nodiscard]] auto players() noexcept -> player_table &;
     [[nodiscard]] auto players() const noexcept -> const player_table &;
 
@@ -879,7 +880,6 @@ class world {
     mutable std::vector<block_collision> collisions_{};
     std::map<chunk_pos, chunk, chunk_order> chunks_{};
     std::map<chunk_pos, std::uint32_t, chunk_order> tickets_{};
-    player_table players_{};
     item_table items_{};
     /// Per-state light properties. Declared before the light engine so a
     /// column's light arrays are only ever read while the table they were

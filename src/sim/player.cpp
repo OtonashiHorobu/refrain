@@ -12,6 +12,43 @@
 
 namespace refrain::sim {
 
+auto detail::id_sequence::allocate() -> result<entity_id> {
+    // Entity ids travel as VarInts, so the representable ceiling is the signed
+    // 32-bit maximum rather than the width of entity_id.
+    if (next_ >
+        static_cast<entity_id>(std::numeric_limits<std::int32_t>::max())) {
+        return std::unexpected{make_error(error_code::invalid_argument,
+                                          "entity id space exhausted")};
+    }
+    return next_++;
+}
+
+player_table::player_table(player_table &&other) noexcept
+    : own_ids_{other.own_ids_},
+      ids_{other.ids_ == &other.own_ids_ ? &own_ids_ : other.ids_},
+      players_{std::move(other.players_)}, order_{std::move(other.order_)},
+      by_connection_{std::move(other.by_connection_)} {
+    // The moved-from table keeps pointing at its own sequence so its remaining
+    // lifetime is harmless.
+    other.ids_ = &other.own_ids_;
+}
+
+auto player_table::operator=(player_table &&other) noexcept -> player_table & {
+    if (this != &other) {
+        // A table attached to a store keeps that store's shared sequence; a
+        // standalone destination takes over the source's counter.
+        const auto owns_sequence{ids_ == &own_ids_};
+        players_ = std::move(other.players_);
+        order_ = std::move(other.order_);
+        by_connection_ = std::move(other.by_connection_);
+        if (owns_sequence) {
+            own_ids_ = other.own_ids_;
+        }
+        other.ids_ = &other.own_ids_;
+    }
+    return *this;
+}
+
 auto player_table::add(registration record) -> result<entity_id> {
     if (record.name.empty()) {
         return std::unexpected{make_error(error_code::invalid_argument,
@@ -128,14 +165,7 @@ auto player_table::nth(std::size_t index) const noexcept
 }
 
 auto player_table::allocate_entity_id() -> result<entity_id> {
-    // Entity ids travel as VarInts, so the representable ceiling is the signed
-    // 32-bit maximum rather than the width of entity_id.
-    if (next_entity_id_ >
-        static_cast<entity_id>(std::numeric_limits<std::int32_t>::max())) {
-        return std::unexpected{make_error(error_code::invalid_argument,
-                                          "entity id space exhausted")};
-    }
-    return next_entity_id_++;
+    return ids_->allocate();
 }
 
 } // namespace refrain::sim

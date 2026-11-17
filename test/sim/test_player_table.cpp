@@ -154,8 +154,52 @@ suite player_table_tests = [] {
         // Entity 2 is the pig, not a player.
         expect(world->player(2) == nullptr);
         expect(world->entity(*pig).has_value());
+        // Removing a record does not return its id to the sequence: the next
+        // registration or spawn takes a fresh id above every id handed out so
+        // far, so a client never sees an id reused for another entity.
+        expect(world->remove_player(2));
+        expect(world->player(3) == nullptr);
+        const auto cow{world->spawn_entity("minecraft:cow", 0.5, 64.0, 0.5)};
+        expect(cow.has_value());
+        if (cow) {
+            expect(*cow == 4U);
+            expect(world->entity(*cow).has_value());
+        }
+        expect(register_player(*world, 3, "Carol", 0.0, 64.0, 0.0) == 5U);
+        expect(world->player(4) == nullptr);
+        expect(world->player(5) != nullptr);
         std::error_code error;
         fs::remove_all(directory, error);
+    };
+
+    "sim/a standalone player table allocates its own id sequence"_test = [] {
+        sim::player_table first{};
+        sim::player_table second{};
+        const auto alice{first.add(sim::player_table::registration{
+            .connection = 1, .name = "Alice", .world = "overworld"})};
+        const auto bob{second.add(sim::player_table::registration{
+            .connection = 1, .name = "Bob", .world = "overworld"})};
+        expect(alice.has_value() && *alice == 1U);
+        expect(bob.has_value() && *bob == 1U);
+        const auto carol{first.add(sim::player_table::registration{
+            .connection = 2, .name = "Carol", .world = "overworld"})};
+        expect(carol.has_value() && *carol == 2U);
+    };
+
+    "sim/a moved player table keeps its records and id sequence"_test = [] {
+        sim::player_table source{};
+        const auto alice{source.add(sim::player_table::registration{
+            .connection = 1, .name = "Alice", .world = "overworld"})};
+        expect(alice.has_value() && *alice == 1U);
+        sim::player_table moved{std::move(source)};
+        expect(moved.find(1) != nullptr);
+        if (moved.find(1) != nullptr) {
+            expect(moved.find(1)->name == "Alice");
+        }
+        expect(moved.find_by_connection(1) != nullptr);
+        const auto bob{moved.add(sim::player_table::registration{
+            .connection = 2, .name = "Bob", .world = "overworld"})};
+        expect(bob.has_value() && *bob == 2U);
     };
 
     "sim/state hash covers every player record in entity id order"_test = [] {

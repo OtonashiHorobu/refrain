@@ -61,6 +61,14 @@ struct column_origin {
     ::refrain::world::chunk_pos pos{};
 };
 
+/// The player records, stored as one component table inside the same registry
+/// as the runtime entities. The table keeps its records in ascending logical id
+/// order and draws ids from the store's shared sequence, so player registration
+/// and entity spawn can never hand out the same id twice.
+struct players {
+    player_table table{};
+};
+
 } // namespace component
 
 /// EnTT-backed entity storage and the ascending logical-id order over it.
@@ -71,19 +79,37 @@ struct column_origin {
 /// `by_id_` is the forward logical-id index, and the `identity` component is
 /// the reverse one, so both directions of the mapping are available without a
 /// second copy of the entity data.
+///
+/// The player table is a component of the same registry, and `ids_` is the one
+/// logical-id sequence player registration and entity spawn both draw from.
+/// Keeping the table in the registry is what lets a later change address a
+/// player through its own components instead of a side table.
 class entity_store {
   public:
-    entity_store() = default;
+    entity_store();
     entity_store(const entity_store &) = delete;
     auto operator=(const entity_store &) -> entity_store & = delete;
-    entity_store(entity_store &&) noexcept = default;
-    auto operator=(entity_store &&) noexcept -> entity_store & = default;
-    ~entity_store() = default;
+    /// A store is not movable: the player table component refers to the
+    /// store's own id sequence, which a move would leave pointing into the
+    /// moved-from object. Callers that need to move a world move its owning
+    /// pointer instead.
+    entity_store(entity_store &&) = delete;
+    auto operator=(entity_store &&) -> entity_store & = delete;
+    ~entity_store();
 
     [[nodiscard]] auto size() const noexcept -> std::size_t {
         return order_.size();
     }
     [[nodiscard]] auto empty() const noexcept -> bool { return order_.empty(); }
+
+    /// Player records owned by the registry.
+    [[nodiscard]] auto players() noexcept -> player_table &;
+    [[nodiscard]] auto players() const noexcept -> const player_table &;
+
+    /// Allocate the next logical id from the sequence player registration and
+    /// entity spawn share. Fails when the signed 32-bit wire range is
+    /// exhausted.
+    [[nodiscard]] auto allocate_id() -> result<entity_id>;
 
     /// Handle of the live entity with `id`; `entt::null` when it is absent.
     [[nodiscard]] auto find(entity_id id) const noexcept -> entt::entity;
@@ -130,7 +156,13 @@ class entity_store {
         -> std::optional<entity_state>;
 
   private:
+    /// One sequence for player registration and entity spawn. Declared before
+    /// the registry so the player table component that refers to it is
+    /// destroyed first.
+    detail::id_sequence ids_{};
     entt::registry registry_{};
+    /// Entity that carries the player table component.
+    entt::entity players_entity_{entt::null};
     /// Live handles in ascending logical-id order. The only iteration order.
     std::vector<entt::entity> order_{};
     /// Logical id to handle. Only asked for lookups, never iterated.
