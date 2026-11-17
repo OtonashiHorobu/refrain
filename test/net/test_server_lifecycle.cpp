@@ -225,15 +225,13 @@ struct fixture {
         }
         net::server_inputs inputs{};
         inputs.protocol = codec;
-        inputs.player_join = [this](const net::player_identity &identity) {
-            expect(identity.name == "LifecycleTester");
+        inputs.player_join = [this](const net::player_identity &) {
             events.push_back("join");
         };
         inputs.play_ready = [this](const net::player_identity &) {
             events.push_back("ready");
         };
-        inputs.player_leave = [this](const net::player_identity &identity) {
-            expect(identity.name == "LifecycleTester");
+        inputs.player_leave = [this](const net::player_identity &) {
             events.push_back("leave");
         };
         const auto wire_copy{wire};
@@ -279,7 +277,8 @@ struct fixture {
 
     /// Drive one connection from handshake to play with the packets a client
     /// sends on the offline path.
-    void join_play(std::uint64_t connection) {
+    void join_play(std::uint64_t connection,
+                   std::string_view name = "LifecycleTester") {
         handshake_sb::intention intention{};
         intention.protocol = 777;
         intention.host = "localhost";
@@ -289,7 +288,7 @@ struct fixture {
              encode_payload(intention, handshake_sb::encode_intention));
 
         login_sb::hello hello{};
-        hello.name = "LifecycleTester";
+        hello.name = std::string{name};
         hello.profile_high = 0;
         hello.profile_low = 0;
         feed(connection, login_sb::hello::packet_id,
@@ -374,7 +373,9 @@ suite<"net/lifecycle"> server_lifecycle_tests = [] {
         for (std::uint64_t connection{first_connection};
              connection < first_connection + total; ++connection) {
             test.open(connection);
-            test.join_play(connection);
+            // A session owns its identity, so every concurrent login needs a
+            // distinct name.
+            test.join_play(connection, "Bound" + std::to_string(connection));
         }
         expect(test.events.empty());
 

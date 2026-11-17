@@ -55,6 +55,8 @@ class transport_impl final : public transport {
     [[nodiscard]] auto backlog(std::uint64_t connection) const
         -> std::size_t override;
     void set_connection_limit(std::size_t limit) override;
+    void set_write_queue_limits(std::size_t per_connection,
+                                std::size_t total) override;
     [[nodiscard]] auto peer_address(std::uint64_t connection) const
         -> std::string override;
     [[nodiscard]] auto local_port() const -> std::uint16_t override;
@@ -87,9 +89,8 @@ class transport_impl final : public transport {
         std::deque<std::vector<std::byte>> writes{};
         /// Bytes currently queued for the socket. A client that stops reading
         /// would otherwise grow this without bound, so the session is closed
-        /// once the backlog passes the cap.
+        /// once the backlog passes the per-connection or the aggregate cap.
         std::atomic<std::size_t> queued_bytes{0};
-        static constexpr std::size_t max_queued_bytes = 16U * 1024U * 1024U;
         std::atomic<bool> connected{false};
         bool writing{false};
         std::atomic<bool> closed{false};
@@ -99,6 +100,9 @@ class transport_impl final : public transport {
     void remove(std::uint64_t connection);
     [[nodiscard]] auto session_for(std::uint64_t connection) const
         -> std::shared_ptr<session>;
+    /// Subtract `bytes` from the aggregate backlog without underflowing when
+    /// a close and a completed write race.
+    void release_queued_bytes(std::size_t bytes) noexcept;
 
     transport_handler handler_{};
     asio::io_context context_{};
@@ -113,6 +117,16 @@ class transport_impl final : public transport {
     /// Inbound session ceiling; zero means unlimited. Set once by the owner
     /// before `listen` and read in the accept callback.
     std::atomic<std::size_t> connection_limit_{0};
+    /// Outbound queue ceilings: 8 MiB for one connection and 64 MiB for the
+    /// transport together. A process with 28 accepted players can therefore
+    /// hold at most 64 MiB of undelivered frames instead of 448 MiB.
+    static constexpr std::size_t default_write_queue_bytes{8U * 1024U * 1024U};
+    static constexpr std::size_t default_write_queue_bytes_total{64U * 1024U *
+                                                                 1024U};
+    std::atomic<std::size_t> write_queue_limit_{default_write_queue_bytes};
+    std::atomic<std::size_t> write_queue_limit_total_{
+        default_write_queue_bytes_total};
+    std::atomic<std::size_t> write_queued_total_{0};
     std::vector<std::thread> threads_{};
     std::atomic<bool> stopping_{false};
 };
@@ -339,6 +353,24 @@ void transport_impl::set_connection_limit(std::size_t limit) {
     connection_limit_.store(limit, std::memory_order_relaxed);
 }
 
+void transport_impl::set_write_queue_limits(std::size_t per_connection,
+                                            std::size_t total) {
+    if (per_connection != 0) {
+        write_queue_limit_.store(per_connection, std::memory_order_relaxed);
+    }
+    if (total != 0) {
+        write_queue_limit_total_.store(total, std::memory_order_relaxed);
+    }
+}
+
+void transport_impl::release_queued_bytes(std::size_t bytes) noexcept {
+    auto current{write_queued_total_.load(std::memory_order_relaxed)};
+    while (!write_queued_total_.compare_exchange_weak(
+        current, current > bytes ? current - bytes : 0U,
+        std::memory_order_relaxed)) {
+    }
+}
+
 auto transport_impl::peer_address(std::uint64_t connection) const
     -> std::string {
     const auto target{session_for(connection)};
@@ -413,10 +445,13 @@ void transport_impl::session::writer() {
                     self->finish(error.message());
                     return;
                 }
-                self->queued_bytes.store(
-                    self->queued_bytes.load(std::memory_order_relaxed) -
-                        self->writes.front().size(),
-                    std::memory_order_relaxed);
+                const auto delivered{self->writes.front().size()};
+                self->owner->release_queued_bytes(delivered);
+                const auto queued{
+                    self->queued_bytes.load(std::memory_order_relaxed)};
+                self->queued_bytes.store(queued > delivered ? queued - delivered
+                                                            : 0U,
+                                         std::memory_order_relaxed);
                 self->writes.pop_front();
                 self->writer();
             }));
@@ -429,7 +464,19 @@ void transport_impl::session::send_copy(std::vector<std::byte> bytes) {
             return;
         }
         const auto queued{self->queued_bytes.load(std::memory_order_relaxed)};
-        if (queued + data.size() > session::max_queued_bytes) {
+        const auto limit{
+            self->owner->write_queue_limit_.load(std::memory_order_relaxed)};
+        if (limit != 0 && queued + data.size() > limit) {
+            self->finish("write backlog");
+            return;
+        }
+        self->owner->write_queued_total_.fetch_add(data.size(),
+                                                   std::memory_order_relaxed);
+        const auto total_limit{self->owner->write_queue_limit_total_.load(
+            std::memory_order_relaxed)};
+        if (total_limit != 0 && self->owner->write_queued_total_.load(
+                                    std::memory_order_relaxed) > total_limit) {
+            self->owner->release_queued_bytes(data.size());
             self->finish("write backlog");
             return;
         }
@@ -449,6 +496,12 @@ void transport_impl::session::finish(std::string reason) {
         return;
     }
     connected.store(false, std::memory_order_relaxed);
+    // Frames still queued when the session ends no longer count against the
+    // aggregate budget.
+    const auto remaining{queued_bytes.exchange(0, std::memory_order_relaxed)};
+    if (remaining != 0) {
+        owner->release_queued_bytes(remaining);
+    }
     std::error_code error{};
     socket.close(error);
     owner->remove(id);

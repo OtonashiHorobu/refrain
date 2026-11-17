@@ -103,6 +103,15 @@ class transport {
     /// descriptor is committed to the peer; an outbound transport ignores it.
     virtual void set_connection_limit(std::size_t /*limit*/) {}
 
+    /// Bound the bytes queued for writing: `per_connection` for one session
+    /// and `total` for every session of this transport together. A send that
+    /// would cross either ceiling closes the connection instead of growing the
+    /// queue, so a peer that stops reading cannot grow memory without bound.
+    /// Zero leaves the provider default. A transport without an internal
+    /// write queue ignores the call.
+    virtual void set_write_queue_limits(std::size_t /*per_connection*/,
+                                        std::size_t /*total*/) {}
+
     /// Remote transport address of one connection, or an empty string when the
     /// transport does not expose one. The address is used for diagnostics and
     /// for per-address abuse throttling; it is not an identity. Implementations

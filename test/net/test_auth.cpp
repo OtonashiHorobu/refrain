@@ -112,6 +112,23 @@ suite auth_tests = [] {
         expect(transport.last.url.empty());
     };
 
+    "auth/timeout and TLS failures keep their typed category"_test = [] {
+        // The transport reports a deadline or a certificate failure through
+        // `make_auth_error`; the login handler distinguishes them from a
+        // client that has not joined. No network is involved.
+        for (const auto reason :
+             {net::auth_error::timeout, net::auth_error::tls_failure,
+              net::auth_error::transport_failure}) {
+            const auto error{net::make_auth_error(reason, "synthetic failure")};
+            expect(net::auth_error_of(error) == reason);
+            expect(error.code == net::to_error_code(reason));
+        }
+        expect(net::to_error_code(net::auth_error::timeout) ==
+               refrain::error_code::timeout);
+        expect(net::to_error_code(net::auth_error::tls_failure) ==
+               refrain::error_code::permission_denied);
+    };
+
     "auth/offline profile is deterministic and has no properties"_test = [] {
         auto first{net::offline_profile("Player")};
         auto second{net::offline_profile("Player")};

@@ -110,6 +110,26 @@ namespace play_sb = ::refrain::protocol::current::play::serverbound;
     return true;
 }
 
+/// Vanilla's fallback ceiling for the payload of one `custom_payload`, by
+/// direction: the bytes after the channel identifier. A registered payload
+/// channel may define its own ceiling, but the server registers no payload
+/// codec, so every channel it reads is a fallback.
+inline constexpr std::size_t clientbound_custom_payload_limit{1U << 20U};
+inline constexpr std::size_t serverbound_custom_payload_limit{32'767U};
+
+/// True when the rest of a `custom_payload` body fits `limit` after its
+/// channel identifier. The probe reader is a copy, so the caller still
+/// decodes the packet from the original reader; this check runs first and
+/// keeps the generated decoder from copying an oversized payload.
+[[nodiscard]] auto custom_payload_fits(reader probe, std::size_t limit)
+    -> bool {
+    auto channel{probe.read_identifier()};
+    if (!channel) {
+        return false;
+    }
+    return probe.remaining() <= limit;
+}
+
 [[nodiscard]] auto brand_payload() -> std::vector<std::byte> {
     constexpr std::string_view name{"refrain"};
     std::vector<std::byte> bytes;
@@ -310,6 +330,11 @@ struct server::impl {
     [[nodiscard]] auto playing_connections() const
         -> std::vector<std::uint64_t>;
     [[nodiscard]] auto playing_count() const -> std::int32_t;
+    /// True when `payload` (channel identifier and data) obeys the direction
+    /// ceiling of the `custom_payload` packet id that is valid in `state`.
+    [[nodiscard]] static auto
+    outbound_packet_fits(connection_state state, std::uint16_t packet_id,
+                         std::span<const std::byte> payload) -> bool;
 
     /// Run `read` against one connection's state while holding its mutex.
     /// Returns false when the connection is gone or closed. `read` must not
@@ -447,6 +472,10 @@ struct server::impl {
     };
     std::mutex login_attempt_mutex{};
     std::map<std::string, login_attempt_window> login_attempts{};
+    /// Serialises the duplicate-login decision together with the login
+    /// completion it guards, so two connections that complete one identity at
+    /// the same time cannot both survive.
+    std::mutex duplicate_login_mutex{};
 
     [[nodiscard]] auto start() -> status;
     void stop();
@@ -490,6 +519,13 @@ struct server::impl {
     void close(std::uint64_t id);
     void reject(std::uint64_t id, std::string_view reason);
     void send_login_disconnect(std::uint64_t id, std::string_view text);
+    /// Disconnect one play connection with a clientbound play `disconnect`.
+    void send_play_disconnect(std::uint64_t id, std::string_view text);
+    /// Close every other connection that owns `profile` or `name`. A login
+    /// that completes wins the identity; the older session receives a
+    /// duplicate-login disconnect first.
+    void kick_duplicate_sessions(std::uint64_t id, uuid profile,
+                                 std::string_view name);
     void send_login_hello(std::uint64_t id);
     void complete_login(std::uint64_t id);
     void handle_login_key(std::uint64_t id, reader &in);
@@ -634,6 +670,22 @@ auto server::impl::playing_count() const -> std::int32_t {
         }
     }
     return online;
+}
+
+auto server::impl::outbound_packet_fits(connection_state state,
+                                        std::uint16_t packet_id,
+                                        std::span<const std::byte> payload)
+    -> bool {
+    const bool custom_payload =
+        (state == connection_state::configuration &&
+         packet_id == config_cb::custom_payload::packet_id) ||
+        (state == connection_state::play &&
+         packet_id == play_cb::custom_payload::packet_id);
+    if (!custom_payload) {
+        return true;
+    }
+    return custom_payload_fits(reader{payload},
+                               clientbound_custom_payload_limit);
 }
 
 auto server::impl::start() -> status {
@@ -955,6 +1007,17 @@ void server::impl::handle(std::uint64_t id, std::span<const std::byte> body) {
             "state {}",
             id, intention.protocol, intention.next);
         if (intention.next == 1) {
+            // A disabled status listener must not leak the description,
+            // version, player count or samples. The connection is closed
+            // without a response, which is the vanilla behaviour for
+            // `enable-status = false`.
+            if (!config.status.replies_to_status) {
+                log_net.info(
+                    "connection {} requested status while status replies are "
+                    "disabled",
+                    id);
+                close(id);
+            }
             return;
         }
         if (intention.next == 2) {
@@ -1237,6 +1300,10 @@ void server::impl::handle(std::uint64_t id, std::span<const std::byte> body) {
             return;
         }
         case config_sb::custom_payload::packet_id: {
+            if (!custom_payload_fits(in, serverbound_custom_payload_limit)) {
+                reject(id, "serverbound custom_payload exceeds its limit");
+                return;
+            }
             config_sb::custom_payload packet{};
             if (auto decoded{config_sb::decode_custom_payload(in, packet)};
                 !decoded) {
@@ -1343,6 +1410,53 @@ void server::impl::send_login_disconnect(std::uint64_t id,
                 login_cb::encode_login_disconnect);
 }
 
+void server::impl::send_play_disconnect(std::uint64_t id,
+                                        std::string_view text) {
+    play_cb::disconnect packet{.payload =
+                                   text_component{.text = std::string{text}}};
+    send_packet(id, play_cb::disconnect::packet_id, packet,
+                play_cb::encode_disconnect);
+}
+
+void server::impl::kick_duplicate_sessions(std::uint64_t id, uuid profile,
+                                           std::string_view name) {
+    const std::lock_guard serial{duplicate_login_mutex};
+    std::vector<std::uint64_t> duplicates;
+    for (const auto &entry : connection_snapshot()) {
+        if (entry.id == id ||
+            entry.handle->closed.load(std::memory_order_acquire)) {
+            continue;
+        }
+        const std::lock_guard lock{entry.handle->mutex};
+        const auto &data{entry.handle->data};
+        if (data.name.empty()) {
+            continue;
+        }
+        const bool same_identity{data.profile == profile || data.name == name};
+        const bool owns_identity{data.state == connection_state::login ||
+                                 data.state ==
+                                     connection_state::configuration ||
+                                 data.state == connection_state::play};
+        if (same_identity && owns_identity) {
+            duplicates.push_back(entry.id);
+        }
+    }
+    for (const auto duplicate : duplicates) {
+        connection_state state{connection_state::handshake};
+        static_cast<void>(
+            with_connection(duplicate, [&state](connection_state_data &data) {
+                state = data.state;
+            }));
+        if (state == connection_state::play) {
+            send_play_disconnect(duplicate,
+                                 "You logged in from another location");
+        }
+        log_net.info("connection {} replaced by a new login of player {}",
+                     duplicate, name);
+        close(duplicate);
+    }
+}
+
 void server::impl::send_login_hello(std::uint64_t id) {
     secret_buffer token;
     bool present{false};
@@ -1378,6 +1492,18 @@ void server::impl::send_login_hello(std::uint64_t id) {
 void server::impl::complete_login(std::uint64_t id) {
     const auto live{find_connection(id)};
     if (!live || live->closed.load(std::memory_order_acquire)) {
+        return;
+    }
+    uuid profile{};
+    std::string name;
+    if (!with_connection(id, [&profile, &name](connection_state_data &data) {
+            profile = data.profile;
+            name = data.name;
+        })) {
+        return;
+    }
+    kick_duplicate_sessions(id, profile, name);
+    if (live->closed.load(std::memory_order_acquire)) {
         return;
     }
     bool failed{false};
@@ -3619,6 +3745,10 @@ void server::impl::handle_play(std::uint64_t id,
                                              play_sb::decode_cookie_response);
         return;
     case play_sb::custom_payload::packet_id:
+        if (!custom_payload_fits(in, serverbound_custom_payload_limit)) {
+            reject(id, "serverbound custom_payload exceeds its limit");
+            return;
+        }
         parse_only<play_sb::custom_payload>(id, in,
                                             play_sb::decode_custom_payload);
         return;
@@ -3782,6 +3912,13 @@ void server::impl::send(std::uint64_t id, std::uint16_t packet_id,
     // table shard lock is not held here.
     const std::lock_guard lock{live->mutex};
     if (live->closed.load(std::memory_order_relaxed)) {
+        return;
+    }
+    if (!outbound_packet_fits(live->data.state, packet_id, payload)) {
+        log_net.error(
+            "connection {} dropped an oversized clientbound custom_payload of "
+            "{} bytes",
+            id, payload.size());
         return;
     }
     packets_out.fetch_add(1, std::memory_order_relaxed);

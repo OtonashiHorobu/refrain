@@ -216,7 +216,8 @@ struct sound_selector {
     -> status;
 
 /// Scoreboard objective add/change/remove. The optional number format is not
-/// yet supported and is rejected when present.
+/// modelled: the encoder writes its absent form and the decoder rejects a
+/// present one.
 struct objective_update {
     std::string name{};
     std::uint8_t method{0};
@@ -430,7 +431,8 @@ struct item_stack {
 /// unsupported, because its payload cannot be skipped without its codec.
 [[nodiscard]] auto decode_item_stack(reader &in, item_stack &value) -> status;
 
-/// An exact data-component predicate. Only the empty predicate is implemented.
+/// An exact data-component predicate. The encoder writes the empty predicate
+/// and the decoder rejects a non-empty list.
 struct component_predicate {
     friend auto operator==(const component_predicate &,
                            const component_predicate &) -> bool = default;
@@ -475,7 +477,7 @@ struct merchant_offer {
     -> status;
 
 /// An item with a count and an empty component patch, used by advancement
-/// icons.
+/// icons. A non-empty patch is rejected by the decoder.
 struct item_stack_template {
     std::uint32_t item_id{0};
     std::uint32_t count{1};
