@@ -6,11 +6,14 @@
 
 #include <refrain/app/mod_management.hpp>
 #include <refrain/command/parsers.hpp>
+#include <refrain/server/command_tree_wire.hpp>
+
+#include <fmt/format.h>
 
 #include <algorithm>
 #include <array>
-#include <charconv>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -37,35 +40,21 @@ namespace {
     return player_identity_key(identity.id);
 }
 
-[[nodiscard]] auto parse_mode(std::string_view text)
-    -> std::optional<net::game_mode> {
-    if (text == "survival" || text == "0") {
+/// The command module's typed game mode and the network layer's enum enumerate
+/// the same four modes in the same order; keep the conversion explicit so a
+/// renumbering on either side fails to compile instead of silently mapping.
+[[nodiscard]] auto to_net_mode(command::game_mode mode) -> net::game_mode {
+    switch (mode) {
+    case command::game_mode::survival:
         return net::game_mode::survival;
-    }
-    if (text == "creative" || text == "1") {
+    case command::game_mode::creative:
         return net::game_mode::creative;
-    }
-    if (text == "adventure" || text == "2") {
+    case command::game_mode::adventure:
         return net::game_mode::adventure;
-    }
-    if (text == "spectator" || text == "3") {
+    case command::game_mode::spectator:
         return net::game_mode::spectator;
     }
-    return std::nullopt;
-}
-
-[[nodiscard]] auto mode_name(net::game_mode mode) -> std::string_view {
-    switch (mode) {
-    case net::game_mode::survival:
-        return "survival";
-    case net::game_mode::creative:
-        return "creative";
-    case net::game_mode::adventure:
-        return "adventure";
-    case net::game_mode::spectator:
-        return "spectator";
-    }
-    return "creative";
+    return net::game_mode::survival;
 }
 
 [[nodiscard]] auto make_source(const std::shared_ptr<command_environment> &env,
@@ -73,13 +62,24 @@ namespace {
     -> command::player_source {
     const auto key{identity_key(identity)};
     env->remember_key(key, identity.connection, identity.id.to_string());
+    auto online = [env]() -> std::vector<std::string> {
+        std::vector<std::string> names{};
+        if (env->listener == nullptr) {
+            return names;
+        }
+        for (auto &player : env->listener->player_names()) {
+            names.push_back(std::move(player.name));
+        }
+        return names;
+    };
     return command::player_source{
         std::string{identity.name}, key, env->permission,
         [env, connection = identity.connection](std::string_view message) {
             if (env->listener != nullptr) {
                 env->listener->send_system_chat(connection, message);
             }
-        }};
+        },
+        std::move(online)};
 }
 
 /// First whitespace-delimited word of a command line, used to answer an
@@ -127,70 +127,6 @@ execute_mods_command(const std::shared_ptr<command_environment> &environment,
         return 1;
     }
     return 1;
-}
-
-[[nodiscard]] auto to_wire_tree(const command::tree &tree)
-    -> net::command_tree {
-    net::command_tree wire{};
-    wire.root_index = tree.root;
-    wire.nodes.reserve(tree.nodes.size());
-    for (const auto &source : tree.nodes) {
-        net::command_node node{};
-        switch (source.kind) {
-        case command::node_kind::root:
-            break;
-        case command::node_kind::literal:
-            node.flags = static_cast<std::uint8_t>(1U);
-            break;
-        case command::node_kind::argument:
-            node.flags = static_cast<std::uint8_t>(2U);
-            break;
-        }
-        if (source.executable) {
-            node.flags = static_cast<std::uint8_t>(node.flags | 4U);
-        }
-        if (source.redirect) {
-            node.flags = static_cast<std::uint8_t>(node.flags | 8U);
-            node.redirect = source.redirect_index;
-        }
-        node.children = source.children;
-        node.name = source.name;
-        const auto &parser{source.parser};
-        switch (parser.kind) {
-        case command::parser_kind::boolean:
-            node.parser_id = 0U;
-            break;
-        case command::parser_kind::float_number:
-            node.parser_id = 1U;
-            break;
-        case command::parser_kind::double_number:
-            node.parser_id = 2U;
-            break;
-        case command::parser_kind::integer:
-            node.parser_id = 3U;
-            break;
-        case command::parser_kind::long_integer:
-            node.parser_id = 4U;
-            break;
-        case command::parser_kind::string:
-            node.parser_id = 5U;
-            node.string_type = static_cast<std::uint32_t>(parser.string);
-            break;
-        case command::parser_kind::enum_values:
-            // The protocol adapter uses a greedy string and asks the server
-            // for suggestions; the enum remains a server-side parser.
-            node.parser_id = 5U;
-            node.string_type = 2U;
-            break;
-        case command::parser_kind::resource_location:
-            node.parser_id = 34U;
-            break;
-        case command::parser_kind::none:
-            break;
-        }
-        wire.nodes.push_back(std::move(node));
-    }
-    return wire;
 }
 
 } // namespace
@@ -403,8 +339,8 @@ void register_runtime_commands(
     mode_argument.require(command::level::gamemode);
     mode_argument.executes(
         [environment](command::context &context) -> refrain::result<int> {
-            const auto mode{parse_mode(context.string("mode"))};
-            if (!mode) {
+            const auto mode{context.gamemode("mode")};
+            if (!mode.has_value()) {
                 context.fail("Unknown game mode");
                 return std::unexpected{make_error(error_code::invalid_argument,
                                                   "unknown game mode")};
@@ -418,7 +354,7 @@ void register_runtime_commands(
             }
             {
                 const std::lock_guard lock{environment->mode_mutex};
-                environment->modes[*connection] = *mode;
+                environment->modes[*connection] = to_net_mode(*mode);
             }
             // The simulation owns the game-mode rules; the network push only
             // tells the client what changed. Applying both in the same command
@@ -432,15 +368,17 @@ void register_runtime_commands(
                         record != nullptr) {
                         refrain::sim::set_player_game_mode(
                             *sim_level, *record,
-                            static_cast<std::uint32_t>(*mode));
+                            static_cast<std::uint32_t>(
+                                static_cast<std::uint8_t>(*mode)));
                     }
                 }
             }
             if (environment->listener != nullptr) {
-                environment->listener->set_player_game_mode(*connection, *mode);
+                environment->listener->set_player_game_mode(*connection,
+                                                            to_net_mode(*mode));
             }
-            context.reply(std::string{"Set game mode to "} +
-                          std::string{mode_name(*mode)});
+            context.reply(
+                fmt::format("Set game mode to {}", command::to_string(*mode)));
             return 1;
         });
     gamemode.then(mode_argument);
@@ -450,8 +388,8 @@ void register_runtime_commands(
     default_argument.require(command::level::gamemode);
     default_argument.executes(
         [environment](command::context &context) -> refrain::result<int> {
-            const auto mode{parse_mode(context.string("mode"))};
-            if (!mode) {
+            const auto mode{context.gamemode("mode")};
+            if (!mode.has_value()) {
                 context.fail("Unknown game mode");
                 return std::unexpected{make_error(error_code::invalid_argument,
                                                   "unknown game mode")};
@@ -466,7 +404,8 @@ void register_runtime_commands(
                 context.fail("Cannot read world gameplay settings");
                 return std::unexpected{std::move(settings.error())};
             }
-            settings->game_mode = static_cast<std::int32_t>(*mode);
+            settings->game_mode =
+                static_cast<std::int32_t>(static_cast<std::uint8_t>(*mode));
             if (auto written{environment->world->write_gameplay(*settings)};
                 !written) {
                 context.fail("Cannot persist the default game mode");
@@ -474,10 +413,10 @@ void register_runtime_commands(
             }
             {
                 const std::lock_guard lock{environment->mode_mutex};
-                environment->default_mode = *mode;
+                environment->default_mode = to_net_mode(*mode);
             }
-            context.reply(std::string{"Default game mode set to "} +
-                          std::string{mode_name(*mode)});
+            context.reply(fmt::format("Default game mode set to {}",
+                                      command::to_string(*mode)));
             return 1;
         });
     default_gamemode.then(default_argument);
@@ -600,45 +539,30 @@ void register_runtime_commands(
             return static_cast<int>(clock->total_ticks() % 2147483647LL);
         }));
     auto time_set{dispatcher.literal("set")};
-    auto time_set_argument{dispatcher.argument("time", command::word_arg())};
-    time_set_argument.executes([world_clock_of,
-                                publish_clock](command::context &context)
-                                   -> refrain::result<int> {
-        auto *clock{world_clock_of(context)};
-        if (clock == nullptr) {
-            return std::unexpected{
-                make_error(error_code::not_found, "no world clock")};
-        }
-        const auto name{context.string("time")};
-        std::int64_t ticks{0};
-        if (name == "day" || name == "morning") {
-            ticks = 1000;
-        } else if (name == "noon") {
-            ticks = 6000;
-        } else if (name == "night") {
-            ticks = 13000;
-        } else if (name == "midnight") {
-            ticks = 18000;
-        } else {
-            const auto parsed{
-                std::from_chars(name.data(), name.data() + name.size(), ticks)};
-            if (parsed.ec != std::errc{} ||
-                parsed.ptr != name.data() + name.size()) {
-                context.fail("Time must be a tick count or day, noon, night or "
-                             "midnight");
-                return std::unexpected{make_error(error_code::invalid_argument,
-                                                  "invalid time value")};
+    // The clock's day markers are named arguments of the same parser that
+    // accepts a tick count with the reference's `d`/`s`/`t` suffixes, so
+    // `/time set day` and `/time set 1000` stay one executable node.
+    auto time_set_argument{dispatcher.argument(
+        "time", command::time_arg(0, command::world_time_markers()))};
+    time_set_argument.executes(
+        [world_clock_of,
+         publish_clock](command::context &context) -> refrain::result<int> {
+            auto *clock{world_clock_of(context)};
+            if (clock == nullptr) {
+                return std::unexpected{
+                    make_error(error_code::not_found, "no world clock")};
             }
-        }
-        clock->set_total_ticks(ticks);
-        publish_clock();
-        context.reply("Set the overworld clock to " + std::to_string(ticks) +
-                      " ticks");
-        return static_cast<int>(ticks % 2147483647LL);
-    });
+            const auto ticks{context.integer("time")};
+            clock->set_total_ticks(ticks);
+            publish_clock();
+            context.reply(
+                fmt::format("Set the overworld clock to {} ticks", ticks));
+            return static_cast<int>(ticks % 2147483647LL);
+        });
     time_set.then(time_set_argument);
     auto time_add{dispatcher.literal("add")};
-    auto time_add_argument{dispatcher.argument("time", command::long_arg())};
+    auto time_add_argument{dispatcher.argument(
+        "time", command::time_arg(std::numeric_limits<std::int32_t>::min()))};
     time_add_argument.executes(
         [world_clock_of,
          publish_clock](command::context &context) -> refrain::result<int> {

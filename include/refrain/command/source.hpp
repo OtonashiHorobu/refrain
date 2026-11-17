@@ -8,6 +8,8 @@
 #include <functional>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 namespace refrain::command {
 
@@ -42,10 +44,11 @@ struct source_identity {
     bool player{false};
 };
 
-/// A command source: who runs a command, what they may use, and where feedback
-/// goes. The interface deliberately mentions no network or world types so a
-/// caller can implement console, player, command-block or test sources without
-/// linking those layers.
+/// A command source: who runs a command, what they may use, where feedback
+/// goes, and which player names completions may offer. The interface
+/// deliberately mentions no network or world types so a caller can implement
+/// console, player, command-block or test sources without linking those
+/// layers.
 class source {
   public:
     source() = default;
@@ -67,6 +70,14 @@ class source {
     /// Deliver one feedback line. Implementations must not throw.
     virtual void reply(std::string_view message) = 0;
 
+    /// Names offered for player-name completion. The default is empty; a
+    /// server source returns its live player list. The command module never
+    /// reads a player table directly, so the list is a snapshot per call.
+    [[nodiscard]] virtual auto online_players() const
+        -> std::vector<std::string> {
+        return {};
+    }
+
     [[nodiscard]] auto name() const noexcept -> std::string_view {
         return identity().name;
     }
@@ -74,38 +85,51 @@ class source {
 
 using reply_sink = std::function<void(std::string_view)>;
 
+/// Supplies the current player names for completion; called once per
+/// suggestion request.
+using player_name_source = std::function<std::vector<std::string>()>;
+
 /// Console source. Console commands traditionally run at the highest level.
 class console_source final : public source {
   public:
     explicit console_source(permission_level required = level::owner,
                             reply_sink sink = {});
+    explicit console_source(permission_level required,
+                            player_name_source online, reply_sink sink = {});
 
     [[nodiscard]] auto identity() const noexcept -> source_identity override;
     [[nodiscard]] auto permission() const noexcept -> permission_level override;
     void reply(std::string_view message) override;
+    [[nodiscard]] auto online_players() const
+        -> std::vector<std::string> override;
 
   private:
     permission_level permission_;
+    player_name_source online_{};
     reply_sink sink_;
 };
 
 /// Player source implemented without the network or world layers. The caller
-/// supplies the already-resolved permission level and an opaque identity key.
+/// supplies the already-resolved permission level, an opaque identity key and
+/// optionally the live player list used by name completion.
 class player_source final : public source {
   public:
     player_source(std::string name, std::uint64_t identity_key,
                   permission_level required = level::everyone,
-                  reply_sink sink = {});
+                  reply_sink sink = {}, player_name_source online = {});
 
     [[nodiscard]] auto identity() const noexcept -> source_identity override;
     [[nodiscard]] auto permission() const noexcept -> permission_level override;
     void reply(std::string_view message) override;
+    [[nodiscard]] auto online_players() const
+        -> std::vector<std::string> override;
 
   private:
     std::string name_;
     std::uint64_t identity_key_;
     permission_level permission_;
     reply_sink sink_;
+    player_name_source online_{};
 };
 
 } // namespace refrain::command

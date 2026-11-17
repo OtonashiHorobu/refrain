@@ -42,6 +42,20 @@ auto to_string(parser_kind kind) noexcept -> std::string_view {
         return "enum_values";
     case parser_kind::resource_location:
         return "resource_location";
+    case parser_kind::block_position:
+        return "block_position";
+    case parser_kind::rotation:
+        return "rotation";
+    case parser_kind::player_name:
+        return "player_name";
+    case parser_kind::gamemode:
+        return "gamemode";
+    case parser_kind::time:
+        return "time";
+    case parser_kind::dimension:
+        return "dimension";
+    case parser_kind::uuid:
+        return "uuid";
     }
     return "unknown";
 }
@@ -72,7 +86,7 @@ auto dispatcher::tree(const source &src) const
     // child and redirect indices through the mapping. The root is always
     // present, even when a root requirement hides the whole graph; callers
     // always receive a valid root node to serialize.
-    const auto root_allowed = is_allowed(0, src);
+    const auto root_allowed = is_visible(0, src);
     std::vector<std::size_t> stack{};
     stack.push_back(0);
     while (!stack.empty()) {
@@ -99,7 +113,7 @@ auto dispatcher::tree(const source &src) const
         const auto &children = nodes_[index].children;
         for (auto child = children.rbegin(); child != children.rend();
              ++child) {
-            if (is_allowed(*child, src)) {
+            if (is_visible(*child, src)) {
                 stack.push_back(*child);
             }
         }

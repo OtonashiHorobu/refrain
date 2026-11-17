@@ -57,22 +57,22 @@ class even_parser final : public refrain::command::argument_parser {
     }
 
     [[nodiscard]] auto parse(refrain::command::reader &in) const
-        -> refrain::result<refrain::command::argument_value> override {
+        -> refrain::command::parse_result override {
         const auto word = in.read_word();
         std::int64_t value{0};
         const auto parsed =
             std::from_chars(word.data(), word.data() + word.size(), value);
         if (parsed.ec != std::errc{} ||
             parsed.ptr != word.data() + word.size() || value % 2 != 0) {
-            return std::unexpected{refrain::make_error(
-                refrain::error_code::parse_error, "expected an even integer")};
+            return std::unexpected{refrain::command::make_argument_error(
+                "expected an even integer")};
         }
         return refrain::command::argument_value{value};
     }
 
-    void suggest(std::string_view prefix, const refrain::command::source &,
+    void suggest(std::string_view remaining, const refrain::command::source &,
                  refrain::command::suggestion_builder &out) const override {
-        if (std::string_view{"24"}.starts_with(prefix)) {
+        if (std::string_view{"24"}.starts_with(remaining)) {
             out.add("24");
         }
     }
@@ -326,12 +326,16 @@ class even_parser final : public refrain::command::argument_parser {
         expect(!dispatcher.execute("loc minecraft:block//stone", source));
     };
 
-    "enum parser accepts names, numeric aliases and mixed case"_test = [] {
+    "gamemode parser accepts names, numeric aliases and mixed case"_test = [] {
         refrain::command::dispatcher dispatcher;
         dispatcher.literal("gamemode")
             .then(dispatcher.argument("mode", refrain::command::gamemode_arg())
                       .executes([](refrain::command::context &ctx) -> int {
-                          ctx.reply(ctx.string("mode"));
+                          const auto mode = ctx.gamemode("mode");
+                          if (!mode.has_value()) {
+                              return 0;
+                          }
+                          ctx.reply(refrain::command::to_string(*mode));
                           return 1;
                       }));
 
@@ -344,7 +348,14 @@ class even_parser final : public refrain::command::argument_parser {
         expect(static_cast<bool>(
             dispatcher.execute("gamemode spectator", source)));
         expect(source.replies.back() == "spectator");
-        expect(!dispatcher.execute("gamemode builder", source));
+        auto invalid = dispatcher.execute("gamemode builder", source);
+        expect(!invalid);
+        if (!invalid) {
+            expect(invalid.error().message.find("unknown game mode") !=
+                   std::string::npos);
+            expect(invalid.error().message.find("at position 9") !=
+                   std::string::npos);
+        }
     };
 
     "custom parsers plug into argument registration"_test = [] {
@@ -371,7 +382,11 @@ class even_parser final : public refrain::command::argument_parser {
             .require(refrain::command::level::gamemode)
             .then(dispatcher.argument("mode", refrain::command::gamemode_arg())
                       .executes([](refrain::command::context &ctx) -> int {
-                          ctx.reply(ctx.string("mode"));
+                          const auto mode = ctx.gamemode("mode");
+                          if (!mode.has_value()) {
+                              return 0;
+                          }
+                          ctx.reply(refrain::command::to_string(*mode));
                           return 1;
                       }));
 

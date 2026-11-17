@@ -10,6 +10,7 @@
 #include <refrain/command/argument.hpp>
 #include <refrain/command/context.hpp>
 #include <refrain/command/dispatcher.hpp>
+#include <refrain/command/examples.hpp>
 #include <refrain/command/parsers.hpp>
 #include <refrain/command/reader.hpp>
 #include <refrain/command/source.hpp>

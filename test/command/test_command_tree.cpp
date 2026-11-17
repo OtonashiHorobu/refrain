@@ -131,12 +131,7 @@ class tree_source final : public refrain::command::source {
             expect(mode.name == "mode");
             expect(mode.is_argument());
             expect(mode.executable);
-            expect(mode.parser.kind ==
-                   refrain::command::parser_kind::enum_values);
-            expect(mode.parser.enum_values.size() == 4U);
-            expect(contains(mode.parser.enum_values, "survival"));
-            expect(contains(mode.parser.enum_values, "spectator"));
-            expect(mode.parser.suggestion_type.empty());
+            expect(mode.parser.kind == refrain::command::parser_kind::gamemode);
         }
 
         const auto *help_node = find_node(*snapshot, "help");
@@ -226,6 +221,113 @@ class tree_source final : public refrain::command::source {
                 expect(node.redirect_index < snapshot->nodes.size());
             }
         }
+    };
+
+    "tree describes every typed parser kind"_test = [] {
+        refrain::command::dispatcher dispatcher;
+        auto shell{dispatcher.literal("typed")};
+        auto flag{dispatcher.argument("flag", refrain::command::bool_arg())};
+        auto pos{
+            dispatcher.argument("pos", refrain::command::block_position_arg())};
+        auto rot{dispatcher.argument("rot", refrain::command::rotation_arg())};
+        auto who{
+            dispatcher.argument("who", refrain::command::player_name_arg())};
+        auto mode{
+            dispatcher.argument("mode", refrain::command::gamemode_arg())};
+        auto wait{dispatcher.argument("wait", refrain::command::time_arg(5))};
+        auto dimension{dispatcher.argument("dimension",
+                                           refrain::command::dimension_arg())};
+        auto identifier{
+            dispatcher.argument("identifier", refrain::command::uuid_arg())};
+        rot.then(who);
+        who.then(mode);
+        mode.then(wait);
+        wait.then(dimension);
+        dimension.then(identifier);
+        pos.then(rot);
+        flag.then(pos);
+        shell.then(flag);
+
+        tree_source source;
+        const auto snapshot = dispatcher.tree(source);
+        expect(snapshot != nullptr);
+        if (snapshot == nullptr) {
+            return;
+        }
+        const auto *pos_node = find_node(*snapshot, "pos");
+        expect(pos_node != nullptr);
+        if (pos_node != nullptr) {
+            expect(pos_node->parser.kind ==
+                   refrain::command::parser_kind::block_position);
+        }
+        const auto *rot_node = find_node(*snapshot, "rot");
+        expect(rot_node != nullptr);
+        if (rot_node != nullptr) {
+            expect(rot_node->parser.kind ==
+                   refrain::command::parser_kind::rotation);
+        }
+        const auto *who_node = find_node(*snapshot, "who");
+        expect(who_node != nullptr);
+        if (who_node != nullptr) {
+            expect(who_node->parser.kind ==
+                   refrain::command::parser_kind::player_name);
+        }
+        const auto *mode_node = find_node(*snapshot, "mode");
+        expect(mode_node != nullptr);
+        if (mode_node != nullptr) {
+            expect(mode_node->parser.kind ==
+                   refrain::command::parser_kind::gamemode);
+        }
+        const auto *wait_node = find_node(*snapshot, "wait");
+        expect(wait_node != nullptr);
+        if (wait_node != nullptr) {
+            expect(wait_node->parser.kind ==
+                   refrain::command::parser_kind::time);
+            expect(wait_node->parser.integer_min == 5);
+        }
+        const auto *dimension_node = find_node(*snapshot, "dimension");
+        expect(dimension_node != nullptr);
+        if (dimension_node != nullptr) {
+            expect(dimension_node->parser.kind ==
+                   refrain::command::parser_kind::dimension);
+        }
+        const auto *uuid_node = find_node(*snapshot, "identifier");
+        expect(uuid_node != nullptr);
+        if (uuid_node != nullptr) {
+            expect(uuid_node->parser.kind ==
+                   refrain::command::parser_kind::uuid);
+        }
+        for (const auto *name :
+             {"pos", "rot", "who", "mode", "wait", "dimension", "identifier"}) {
+            const auto *node = find_node(*snapshot, name);
+            expect(node != nullptr) << name;
+        }
+    };
+
+    "visibility hook hides a subtree from the tree snapshot"_test = [] {
+        refrain::command::dispatcher dispatcher;
+        dispatcher.literal("public").executes(
+            [](refrain::command::context &) { return 1; });
+        auto hidden = dispatcher.literal("secret");
+        hidden.executes([](refrain::command::context &) { return 1; });
+        hidden.then(
+            dispatcher.argument("value", refrain::command::word_arg())
+                .executes([](refrain::command::context &) { return 1; }));
+        dispatcher.set_visibility_filter(
+            [](const refrain::command::source &, std::string_view name) {
+                return name != "secret";
+            });
+
+        tree_source source;
+        const auto snapshot = dispatcher.tree(source);
+        expect(snapshot != nullptr);
+        if (snapshot == nullptr) {
+            return;
+        }
+        expect(find_node(*snapshot, "public") != nullptr);
+        expect(find_node(*snapshot, "secret") == nullptr);
+        expect(find_node(*snapshot, "value") == nullptr);
+        expect(!dispatcher.execute("secret", source));
     };
 
     "tree carries a configured suggestion provider string"_test = [] {

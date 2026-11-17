@@ -9,6 +9,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -19,8 +20,9 @@ using namespace boost::ut::literals;
 class source_impl final : public refrain::command::source {
   public:
     explicit source_impl(refrain::command::permission_level required =
-                             refrain::command::level::owner)
-        : level_{required} {}
+                             refrain::command::level::owner,
+                         std::vector<std::string> online = {})
+        : level_{required}, online_{std::move(online)} {}
 
     [[nodiscard]] auto identity() const noexcept
         -> refrain::command::source_identity override {
@@ -32,9 +34,14 @@ class source_impl final : public refrain::command::source {
         return level_;
     }
     void reply(std::string_view) override {}
+    [[nodiscard]] auto online_players() const
+        -> std::vector<std::string> override {
+        return online_;
+    }
 
   private:
     refrain::command::permission_level level_;
+    std::vector<std::string> online_;
 };
 
 [[nodiscard]] auto find_entry(const refrain::command::suggestions &offered,
@@ -46,6 +53,11 @@ class source_impl final : public refrain::command::source {
         }
     }
     return nullptr;
+}
+
+[[nodiscard]] auto contains(const refrain::command::suggestions &offered,
+                            std::string_view text) -> bool {
+    return find_entry(offered, text) != nullptr;
 }
 
 [[maybe_unused]] const suite command_suggestion_tests = [] {
@@ -83,12 +95,9 @@ class source_impl final : public refrain::command::source {
         expect(leading.start == 2U);
         expect(leading.end == 4U);
         expect(leading.entries.size() == 1U);
-
-        auto wrong_case = dispatcher.suggest("GA", 2, source);
-        expect(wrong_case.empty());
     };
 
-    "enum suggestions complete names and numeric aliases"_test = [] {
+    "gamemode suggestions complete canonical names only"_test = [] {
         refrain::command::dispatcher dispatcher;
         dispatcher.literal("gamemode")
             .then(dispatcher.argument("mode", refrain::command::gamemode_arg())
@@ -111,9 +120,16 @@ class source_impl final : public refrain::command::source {
         expect(creative.end == 11U);
         expect(creative.entries.front().text == "creative");
 
+        // A cursor on the last byte of a parsed argument completes that
+        // argument, so a complete value suggests itself.
+        auto complete = dispatcher.suggest("gamemode creative", 17, source);
+        expect(complete.entries.size() == 1U);
+        expect(complete.entries.front().text == "creative");
+        expect(complete.start == 9U);
+        expect(complete.end == 17U);
+        // A numeric alias parses but is not a completion candidate.
         auto numeric = dispatcher.suggest("gamemode 0", 10, source);
-        expect(numeric.entries.size() == 1U);
-        expect(numeric.entries.front().text == "survival");
+        expect(numeric.empty());
 
         auto middle = dispatcher.suggest("gamemode creative", 12, source);
         expect(middle.start == 9U);
@@ -136,6 +152,113 @@ class source_impl final : public refrain::command::source {
         expect(only_true.entries.front().text == "true");
     };
 
+    "block position suggestions replace the whole partial argument"_test = [] {
+        refrain::command::dispatcher dispatcher;
+        dispatcher.literal("blocks").then(
+            dispatcher.argument("pos", refrain::command::block_position_arg())
+                .executes([](refrain::command::context &) { return 1; }));
+        source_impl source;
+
+        auto empty = dispatcher.suggest("blocks ", 7, source);
+        expect(empty.start == 7U);
+        expect(empty.end == 7U);
+        expect(contains(empty, "~"));
+        expect(contains(empty, "~ ~"));
+        expect(contains(empty, "~ ~ ~"));
+
+        auto first = dispatcher.suggest("blocks 1", 8, source);
+        expect(first.start == 7U);
+        expect(first.end == 8U);
+        expect(contains(first, "1 ~"));
+        expect(contains(first, "1 ~ ~"));
+
+        auto second = dispatcher.suggest("blocks 1 2", 10, source);
+        expect(second.start == 7U);
+        expect(second.end == 10U);
+        expect(contains(second, "1 2 ~"));
+
+        auto local = dispatcher.suggest("blocks ^", 8, source);
+        expect(contains(local, "^ ^"));
+        expect(contains(local, "^ ^ ^"));
+
+        // A trailing separator after a complete position moves completion to
+        // the node's children, of which there are none.
+        auto complete = dispatcher.suggest("blocks 1 2 3 ", 12, source);
+        expect(complete.empty());
+    };
+
+    "rotation suggestions fill the missing pitch"_test = [] {
+        refrain::command::dispatcher dispatcher;
+        dispatcher.literal("rotate").then(
+            dispatcher.argument("rot", refrain::command::rotation_arg())
+                .executes([](refrain::command::context &) { return 1; }));
+        source_impl source;
+        auto all = dispatcher.suggest("rotate ", 7, source);
+        expect(all.start == 7U);
+        expect(contains(all, "~"));
+        expect(contains(all, "~ ~"));
+        auto partial = dispatcher.suggest("rotate 90", 9, source);
+        expect(contains(partial, "90 ~"));
+    };
+
+    "time suggestions offer units and clock markers"_test = [] {
+        refrain::command::dispatcher dispatcher;
+        dispatcher.literal("set").then(
+            dispatcher
+                .argument("time",
+                          refrain::command::time_arg(
+                              0, refrain::command::world_time_markers()))
+                .executes([](refrain::command::context &) { return 1; }));
+        source_impl source;
+        auto markers = dispatcher.suggest("set ", 4, source);
+        expect(markers.start == 4U);
+        expect(contains(markers, "day"));
+        expect(contains(markers, "noon"));
+        expect(contains(markers, "midnight"));
+        expect(contains(markers, "1d"));
+
+        auto units = dispatcher.suggest("set 2", 5, source);
+        expect(contains(units, "2d"));
+        expect(contains(units, "2s"));
+        expect(contains(units, "2t"));
+
+        auto marker = dispatcher.suggest("set mi", 6, source);
+        expect(marker.entries.size() == 1U);
+        expect(marker.entries.front().text == "midnight");
+    };
+
+    "player name suggestions come from the source player list"_test = [] {
+        refrain::command::dispatcher dispatcher;
+        dispatcher.literal("msg").then(
+            dispatcher.argument("target", refrain::command::player_name_arg())
+                .executes([](refrain::command::context &) { return 1; }));
+        source_impl source{refrain::command::level::owner, {"Alice", "Bob"}};
+        auto all = dispatcher.suggest("msg ", 4, source);
+        expect(all.entries.size() == 2U);
+        expect(contains(all, "Alice"));
+        expect(contains(all, "Bob"));
+        auto prefix = dispatcher.suggest("msg Al", 6, source);
+        expect(prefix.entries.size() == 1U);
+        expect(prefix.entries.front().text == "Alice");
+
+        source_impl empty;
+        expect(dispatcher.suggest("msg ", 4, empty).empty());
+    };
+
+    "dimension suggestions offer installed ids"_test = [] {
+        refrain::command::dispatcher dispatcher;
+        dispatcher.literal("dimension")
+            .then(dispatcher.argument("id", refrain::command::dimension_arg())
+                      .executes([](refrain::command::context &) { return 1; }));
+        source_impl source;
+        auto all = dispatcher.suggest("dimension ", 10, source);
+        expect(all.entries.size() == 3U);
+        expect(contains(all, "minecraft:overworld"));
+        auto prefix = dispatcher.suggest("dimension minecraft:n", 21, source);
+        expect(prefix.entries.size() == 1U);
+        expect(prefix.entries.front().text == "minecraft:nether");
+    };
+
     "suggestions are filtered by requirements"_test = [] {
         refrain::command::dispatcher dispatcher;
         dispatcher.literal("gamemode")
@@ -152,8 +275,24 @@ class source_impl final : public refrain::command::source {
 
         auto hidden = dispatcher.suggest("gamemode ", 9, low);
         expect(hidden.empty());
-        expect(hidden.start == 9U);
+        expect(hidden.start == 0U);
         expect(hidden.end == 9U);
+    };
+
+    "suggestions are filtered by the visibility hook"_test = [] {
+        refrain::command::dispatcher dispatcher;
+        dispatcher.literal("public").executes(
+            [](refrain::command::context &) { return 1; });
+        dispatcher.literal("secret").executes(
+            [](refrain::command::context &) { return 1; });
+        dispatcher.set_visibility_filter(
+            [](const refrain::command::source &, std::string_view name) {
+                return name != "secret";
+            });
+        source_impl source;
+        auto all = dispatcher.suggest("", 0, source);
+        expect(all.entries.size() == 1U);
+        expect(all.entries.front().text == "public");
     };
 
     "redirected nodes suggest the target children"_test = [] {

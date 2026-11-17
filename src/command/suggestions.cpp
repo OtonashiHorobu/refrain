@@ -2,7 +2,7 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 
-#include <refrain/command/dispatcher.hpp>
+#include <refrain/command/suggestions.hpp>
 
 #include <algorithm>
 #include <utility>
@@ -64,42 +64,5 @@ auto suggestion_builder::full() const noexcept -> bool {
 }
 
 auto suggestion_builder::build() && -> suggestions { return std::move(out_); }
-
-auto dispatcher::suggest(std::string_view input, std::size_t cursor,
-                         const source &src) const -> suggestions {
-    const auto clamped = std::min(cursor, input.size());
-    if (input.size() > max_command_bytes) {
-        return suggestions{clamped, clamped, {}, false};
-    }
-
-    auto token_start = clamped;
-    while (token_start > 0 && !reader::is_whitespace(input[token_start - 1])) {
-        --token_start;
-    }
-    const auto prefix = input.substr(0, token_start);
-    auto parsed = parse_command(prefix, src, true);
-    if (!parsed) {
-        return suggestions{clamped, clamped, {}, false};
-    }
-
-    const auto token = input.substr(token_start, clamped - token_start);
-    suggestion_builder builder{token_start, clamped};
-    for (const auto child : nodes_[parsed->node].children) {
-        if (!is_allowed(child, src)) {
-            continue;
-        }
-        const auto &entry = nodes_[child];
-        if (entry.kind == node_kind::literal) {
-            if (entry.name.starts_with(token)) {
-                builder.add(entry.name, entry.tooltip);
-            }
-            continue;
-        }
-        if (entry.parser != nullptr) {
-            entry.parser->suggest(token, src, builder);
-        }
-    }
-    return std::move(builder).build();
-}
 
 } // namespace refrain::command

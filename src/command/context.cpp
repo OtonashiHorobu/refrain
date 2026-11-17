@@ -88,6 +88,26 @@ auto context::location(std::string_view name) const noexcept
     return get<data::resource_location>(name);
 }
 
+auto context::position(std::string_view name) const noexcept
+    -> const block_position * {
+    return get<block_position>(name);
+}
+
+auto context::rotation_value(std::string_view name) const noexcept
+    -> const rotation * {
+    return get<rotation>(name);
+}
+
+auto context::uuid_value(std::string_view name) const noexcept -> const uuid * {
+    return get<uuid>(name);
+}
+
+auto context::gamemode(std::string_view name) const noexcept
+    -> std::optional<game_mode> {
+    const auto *value = get<game_mode>(name);
+    return value == nullptr ? std::nullopt : std::optional<game_mode>{*value};
+}
+
 void context::reply(std::string_view message) {
     if (feedback_.size() < max_feedback_messages &&
         message.size() <= max_feedback_bytes - feedback_bytes_) {
