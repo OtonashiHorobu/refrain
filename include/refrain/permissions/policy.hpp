@@ -22,7 +22,7 @@
 //   nodes = ["*"]             # nodes every operator holds
 //
 //   [ops]
-//   players = ["<uuid>", "Notch"]   # player identities that count as operators
+//   players = ["<uuid>", "Notch"]   # identities that count as operators
 //
 //   [grants]
 //   "player:<uuid>" = ["refrain.mods.admin", "!refrain.command.stop"]
@@ -42,6 +42,12 @@
 // `[op].nodes` even though no vanilla op list is persisted yet.
 // `[op].min_level` stays the ladder rule for a host that supplies a real op
 // level in the query.
+//
+// A profile name is accepted for compatibility with an existing policy, but a
+// name identifies whoever holds it rather than the account: an online-mode
+// player who renames can pass a `[ops].players` entry or a `player:<name>`
+// grant to the account that claims the old name. Every name-keyed entry emits a
+// load-time warning that names the entry and recommends the uuid form.
 //
 // Resolution order for one query:
 //   1. console holds every node;
@@ -129,7 +135,8 @@ struct policy {
     node_set default_nodes{};
     /// Player identities that count as operators (`[ops].players`): canonical
     /// lowercase uuids and profile names, matched against a player subject's
-    /// uuid and profile name.
+    /// uuid and profile name. A profile name is a compatibility fallback and
+    /// warns at load, because another account can hold the name after a rename.
     std::vector<std::string> operators{};
     /// Keyed by configured subject key, for example `player:<uuid>`.
     std::map<std::string, subject_rules, std::less<>> subjects{};

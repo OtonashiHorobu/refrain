@@ -9,14 +9,21 @@
 
 #include <refrain/core/config.hpp>
 #include <refrain/core/error.hpp>
+#include <refrain/core/log.hpp>
 
 #include <fmt/format.h>
 
 #include <boost/ut.hpp>
 
+#include <cstddef>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <string>
 #include <string_view>
 #include <utility>
+
+#include "support/scratch_directory.hpp"
 
 namespace {
 
@@ -59,6 +66,23 @@ constexpr std::string_view entity_uuid{"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"};
     }
     expect(parsed.error().code == refrain::error_code::parse_error);
     return parsed.error().message;
+}
+
+[[nodiscard]] auto read_text(const std::filesystem::path &path) -> std::string {
+    std::ifstream stream{path, std::ios::binary};
+    return std::string{std::istreambuf_iterator<char>{stream},
+                       std::istreambuf_iterator<char>{}};
+}
+
+[[nodiscard]] auto count_occurrences(std::string_view text,
+                                     std::string_view needle) -> std::size_t {
+    auto count{std::size_t{0}};
+    auto position{text.find(needle)};
+    while (position != std::string_view::npos) {
+        ++count;
+        position = text.find(needle, position + needle.size());
+    }
+    return count;
 }
 
 [[nodiscard]] auto answer(const permissions::policy &policy, subject_kind kind,
@@ -663,6 +687,76 @@ builders = []
             expect(groups[1].members[1] == "plugin:com.example.mymod");
         }
     };
+};
+
+const suite warning_tests = [] {
+    // A name-keyed entry stays in effect for compatibility, but a profile
+    // name belongs to whichever account holds it, so the load has to say
+    // that the rule follows a mutable name instead of the configured
+    // account.
+    "policy/name-keyed entries warn at load and keep matching by name"_test =
+        [] {
+            refrain::test_support::scratch_directory directory{};
+            const auto log_path{directory.path() / "permissions.log"};
+
+            refrain::log::shutdown();
+            refrain::log::config settings{};
+            settings.console_level = refrain::log::level::off;
+            settings.file_path = log_path.string();
+            settings.file_level = refrain::log::level::warn;
+            settings.enable_colors = false;
+            const auto initialized{refrain::log::init(settings)};
+            expect(static_cast<bool>(initialized))
+                << "cannot capture the policy warnings";
+
+            const auto policy{parse_ok(fmt::format(R"(
+[defaults]
+default = "deny"
+[op]
+min_level = 1
+nodes = ["refrain.mods.admin"]
+[ops]
+players = ["Alex", "{}"]
+[grants]
+"player:Alex" = ["refrain.command.teleport"]
+"player:{}" = ["refrain.command.gamemode"]
+)",
+                                                   player_uuid, player_uuid))};
+
+            // The uuid entries are name independent and keep their meaning.
+            expect(answer(policy, "refrain.mods.admin") ==
+                   permission_result::allowed);
+            expect(answer(policy, "refrain.command.gamemode") ==
+                   permission_result::allowed);
+            // The name-keyed entries decide for whoever currently holds the
+            // name: a rename transfers both the operator entry and the
+            // grant.
+            expect(answer(policy, subject_kind::player, other_uuid,
+                          "refrain.mods.admin", 0,
+                          "Alex") == permission_result::allowed);
+            expect(answer(policy, subject_kind::player, other_uuid,
+                          "refrain.command.teleport", 0,
+                          "Alex") == permission_result::allowed);
+            expect(answer(policy, subject_kind::player, other_uuid,
+                          "refrain.mods.admin", 0,
+                          "Steve") == permission_result::denied);
+            expect(answer(policy, subject_kind::player, other_uuid,
+                          "refrain.command.teleport", 0,
+                          "Steve") == permission_result::denied);
+
+            refrain::log::shutdown();
+            const auto text{read_text(log_path)};
+
+            // One warning per name-keyed entry: the operator name and the
+            // grant key. The uuid entries never warn.
+            expect(count_occurrences(text, "[permissions]") == 2U) << text;
+            expect(text.find("[ops].players") != std::string::npos) << text;
+            expect(text.find("'Alex'") != std::string::npos) << text;
+            expect(text.find("player:Alex") != std::string::npos) << text;
+            expect(count_occurrences(text, "player uuid instead") == 2U)
+                << text;
+            expect(text.find(player_uuid) == std::string::npos) << text;
+        };
 };
 
 } // namespace
