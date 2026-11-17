@@ -107,9 +107,11 @@ set_fallback_dump_directory(std::string_view utf8_directory) noexcept -> bool;
 ///
 /// POSIX: `kill(pid, 0)` — false when the process does not exist (ESRCH), true
 /// when it exists or exists but is owned by another user (EPERM). Windows:
-/// `OpenProcess` + `GetExitCodeProcess`. The result is advisory only: it is
-/// never a security decision, and a caller that cannot tell treats the lock as
-/// live (the owner mtime window is the portable fallback).
+/// `OpenProcess` + `GetExitCodeProcess` — false only when the pid names no
+/// process; a process the caller may not open, such as one owned by another
+/// account or a protected process, counts as alive. The result is advisory
+/// only and never a security decision. A caller that has no usable pid at all
+/// falls back to the age of the owner record instead of this probe.
 [[nodiscard]] auto process_alive(std::uint64_t pid) noexcept -> bool;
 
 [[noreturn]] void abort_process() noexcept;

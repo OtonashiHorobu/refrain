@@ -4,6 +4,7 @@
 
 #include <refrain/core/io.hpp>
 #include <refrain/data/store_lock.hpp>
+#include <refrain/platform/process.hpp>
 
 #include <boost/ut.hpp>
 
@@ -129,6 +130,41 @@ const suite store_lock_tests = [] {
         expect(saw_stale);
         // The reclaimed directory is gone; only the new lock remains.
         expect(fs::exists(fs::path{scratch.path()} / "content" / ".lock"));
+    };
+
+    "store lock does not reclaim a live owner"_test = [] {
+        temp_directory scratch;
+        expect(scratch.valid());
+        if (!scratch.valid()) {
+            return;
+        }
+        // The owner record names this test process, which is certainly alive:
+        // the lock is held, not stale.
+        const auto lock{fs::path{scratch.path()} / "content" / ".lock"};
+        std::error_code error;
+        fs::create_directories(lock, error);
+        expect(!error);
+        expect(static_cast<bool>(io::write_text(
+            (lock / "owner").string(),
+            "pid=" + std::to_string(refrain::platform::process_id()) + "\n")));
+        std::vector<std::string> lines;
+        auto acquired{store_lock::acquire(
+            scratch.path(), 0,
+            [&lines](std::string_view line) { lines.emplace_back(line); })};
+        expect(!acquired);
+        if (!acquired) {
+            expect(acquired.error().code == refrain::error_code::io_error);
+        }
+        // The live owner's lock was left untouched: acquiring again still
+        // reports it busy rather than stealing it.
+        expect(fs::exists(lock / "owner"));
+        bool saw_stale{false};
+        for (const auto &line : lines) {
+            if (line.find("stale lock") != std::string::npos) {
+                saw_stale = true;
+            }
+        }
+        expect(!saw_stale);
     };
 
     "store lock never grants two holders during a stale-lock race"_test = [] {
