@@ -30,6 +30,9 @@ auto play_session::add_player(std::uint64_t connection, net::uuid id,
     }
     auto added{players_->add(sim::player_table::registration{
         .connection = connection,
+        // A connection-backed player reports its own position every tick; the
+        // simulation validates the reports instead of predicting the motion.
+        .client_driven = true,
         .profile_id = id.bytes,
         .name = std::move(name),
         .world = std::move(world),

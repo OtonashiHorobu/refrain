@@ -201,13 +201,24 @@ The simulation owns each player's authoritative position, velocity, health,
 hunger, air, experience and death state; the session projection and the
 console read that one record. A client movement packet is a request, not a
 position: `world::submit_player_move()` accepts it only when it is finite,
-within the speed envelope, reachable through the block collision sweep (Y,
-then X, then Z, with step-up over partial shapes) and not higher than a jump
-can reach above the last ground contact. The runtime answers a rejected
-request with a teleport back to the authoritative position, and the client's
-acknowledgement of that teleport is adopted without a second validation. A
-provider-owned simulation keeps its own movement rules; the runtime then only
-projects the reported position for visibility and chunk streaming.
+inside the teleport-sized displacement gate, reachable through the block
+collision sweep (Y, then X, then Z, with step-up over partial shapes) and —
+for a body that is not flying — within the walking speed envelope and not
+higher than a jump can reach above the last ground contact. The runtime
+answers a rejected request with a teleport back to the authoritative position,
+and the client's acknowledgement of that teleport is adopted without a second
+validation. A provider-owned simulation keeps its own movement rules; the
+runtime then only projects the reported position for visibility and chunk
+streaming.
+
+A record owned by a network connection is client-driven: the simulation only
+applies its validated requests and never predicts its motion between reports.
+The client stops reporting while it stands still or hovers, so a prediction
+would walk the record away from the body the client actually has; the next
+report would then read as a correction and its displacement as a fall
+velocity, and the record would be pulled away from the client until the
+distance gate rejects it. Console and replay records have no client and stay
+fully input-driven.
 
 Each tick advances the record the same way on the ground, in air, in water and
 in lava: input-driven acceleration, gravity, friction, a collision sweep, fall

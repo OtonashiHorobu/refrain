@@ -367,95 +367,112 @@ void tick_player(world &level, player_state &player) noexcept {
     const auto wants_shift{has_input(player.input, player_input::shift)};
     const auto sprint{sprinting(player)};
 
-    if (flying) {
-        const auto speed{player_fly_speed * (sprint ? 2.0 : 1.0)};
-        player.vx += intent.x * speed;
-        player.vz += intent.z * speed;
-        if (wants_jump) {
-            player.vy += speed;
-        } else if (wants_shift) {
-            player.vy -= speed;
-        }
-        apply_predicted_move(level, player);
-        player.vx *= player_air_drag;
-        player.vy *= player_air_drag;
-        player.vz *= player_air_drag;
-        player.on_ground = false;
-        player.fall_distance = 0.0;
-    } else if (water || lava) {
-        const auto gravity{player_gravity / (lava ? 4.0 : 16.0)};
-        player.vx += intent.x * 0.02;
-        player.vz += intent.z * 0.02;
-        if (wants_jump) {
-            player.vy += 0.04;
-        }
-        player.vy -= gravity;
-        apply_predicted_move(level, player);
-        const auto drag{lava ? 0.5 : 0.8};
-        player.vx *= drag;
-        player.vz *= drag;
-        player.vy *= 0.8;
-        player.on_ground = false;
-        player.fall_distance = 0.0;
-        player.air_supply = std::min(player.air_supply, player_max_air_supply);
-    } else if (was_on_ground) {
-        const auto below{level.block_at(
-            block_pos{static_cast<std::int32_t>(std::floor(player.x)),
-                      static_cast<std::int16_t>(std::floor(player.y - 0.2)),
-                      static_cast<std::int32_t>(std::floor(player.z))})};
-        const auto friction{level.block_friction(below)};
-        player.vx += intent.x * player_walk_speed *
-                     (sprint ? player_sprint_factor : 1.0);
-        player.vz += intent.z * player_walk_speed *
-                     (sprint ? player_sprint_factor : 1.0);
-        if (wants_jump) {
-            player.vy = player_jump_velocity;
-            if (sprint) {
-                const auto radians{static_cast<double>(player.yaw) *
-                                   (std::numbers::pi / 180.0)};
-                player.vx -= std::sin(radians) * 0.2;
-                player.vz += std::cos(radians) * 0.2;
+    // A record owned by a network client is only moved by that client's
+    // validated requests. The client stops reporting while it hovers or stands
+    // still, and any server-side prediction would then walk the record away
+    // from the body the client actually has: the next report would look like a
+    // correction, its displacement would be read as a fall velocity, and the
+    // record would dive away from the client until the distance gate rejects
+    // it. The client owns the position; the server owns the verdict. Console
+    // and replay records have no client and are simulated from their input.
+    if (!player.client_driven) {
+        if (flying) {
+            const auto speed{player_fly_speed * (sprint ? 2.0 : 1.0)};
+            player.vx += intent.x * speed;
+            player.vz += intent.z * speed;
+            if (wants_jump) {
+                player.vy += speed;
+            } else if (wants_shift) {
+                player.vy -= speed;
             }
-            player.exhaustion =
-                std::min(player.exhaustion + (sprint ? 0.2F : 0.05F), 40.0F);
+            apply_predicted_move(level, player);
+            player.vx *= player_air_drag;
+            player.vy *= player_air_drag;
+            player.vz *= player_air_drag;
+            player.on_ground = false;
+            player.fall_distance = 0.0;
+        } else if (water || lava) {
+            const auto gravity{player_gravity / (lava ? 4.0 : 16.0)};
+            player.vx += intent.x * 0.02;
+            player.vz += intent.z * 0.02;
+            if (wants_jump) {
+                player.vy += 0.04;
+            }
+            player.vy -= gravity;
+            apply_predicted_move(level, player);
+            const auto drag{lava ? 0.5 : 0.8};
+            player.vx *= drag;
+            player.vz *= drag;
+            player.vy *= 0.8;
+            player.on_ground = false;
+            player.fall_distance = 0.0;
+            player.air_supply =
+                std::min(player.air_supply, player_max_air_supply);
+        } else if (was_on_ground) {
+            const auto below{level.block_at(
+                block_pos{static_cast<std::int32_t>(std::floor(player.x)),
+                          static_cast<std::int16_t>(std::floor(player.y - 0.2)),
+                          static_cast<std::int32_t>(std::floor(player.z))})};
+            const auto friction{level.block_friction(below)};
+            player.vx += intent.x * player_walk_speed *
+                         (sprint ? player_sprint_factor : 1.0);
+            player.vz += intent.z * player_walk_speed *
+                         (sprint ? player_sprint_factor : 1.0);
+            if (wants_jump) {
+                player.vy = player_jump_velocity;
+                if (sprint) {
+                    const auto radians{static_cast<double>(player.yaw) *
+                                       (std::numbers::pi / 180.0)};
+                    player.vx -= std::sin(radians) * 0.2;
+                    player.vz += std::cos(radians) * 0.2;
+                }
+                player.exhaustion = std::min(
+                    player.exhaustion + (sprint ? 0.2F : 0.05F), 40.0F);
+            } else {
+                player.vy -= player_gravity;
+            }
+            apply_predicted_move(level, player);
+            player.vx *= friction * player_air_drag;
+            player.vz *= friction * player_air_drag;
+            player.vy *= player_vertical_drag;
+            player.on_ground = grounded(level, player);
+            if (player.on_ground && player.vy < 0.0) {
+                player.vy = 0.0;
+            }
         } else {
+            const auto speed{sprint ? player_sprint_air_speed
+                                    : player_air_speed};
+            player.vx += intent.x * speed;
+            player.vz += intent.z * speed;
             player.vy -= player_gravity;
-        }
-        apply_predicted_move(level, player);
-        player.vx *= friction * player_air_drag;
-        player.vz *= friction * player_air_drag;
-        player.vy *= player_vertical_drag;
-        player.on_ground = grounded(level, player);
-        if (player.on_ground && player.vy < 0.0) {
-            player.vy = 0.0;
-        }
-    } else {
-        const auto speed{sprint ? player_sprint_air_speed : player_air_speed};
-        player.vx += intent.x * speed;
-        player.vz += intent.z * speed;
-        player.vy -= player_gravity;
-        if (wants_jump && climbing) {
-            player.vy = 0.2;
-        }
-        apply_predicted_move(level, player);
-        player.vx *= player_air_drag;
-        player.vz *= player_air_drag;
-        player.vy *= player_vertical_drag;
-        player.on_ground = grounded(level, player);
-        if (player.on_ground && player.vy < 0.0) {
-            player.vy = 0.0;
+            if (wants_jump && climbing) {
+                player.vy = 0.2;
+            }
+            apply_predicted_move(level, player);
+            player.vx *= player_air_drag;
+            player.vz *= player_air_drag;
+            player.vy *= player_vertical_drag;
+            player.on_ground = grounded(level, player);
+            if (player.on_ground && player.vy < 0.0) {
+                player.vy = 0.0;
+            }
         }
     }
 
     // A validated client request is authoritative for the final position of
-    // the tick. The prediction above only fills ticks without a request; the
-    // client's position already encodes its own movement and jump arc, while
-    // fall distance and landing still come from the displacement the server
-    // observed.
+    // the tick. For a client-driven record it is the only thing that moves the
+    // body; for a simulated record the prediction above fills ticks without a
+    // request, and the request still decides where the body ends up. Either
+    // way fall distance and landing come from the displacement the server
+    // observed, never from the prediction.
     if (player.has_move_request) {
         player.x = player.move_x;
         player.y = player.move_y;
         player.z = player.move_z;
+        // Recorded vertical displacement of the report. A simulated record
+        // also seeds the next prediction with it, so it is bounded by the jump
+        // and terminal-fall speeds; a client-driven record never predicts from
+        // it, because the client is the only source of its motion.
         player.vy =
             std::clamp(player.move_y - start_y, -3.92, player_jump_velocity);
         player.on_ground = player.move_on_ground || grounded(level, player);
