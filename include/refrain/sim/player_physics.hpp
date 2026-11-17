@@ -119,6 +119,13 @@ void set_player_game_mode(world &world, player_state &player,
 /// damage, drowning, void and in-wall damage, hunger, natural regeneration and
 /// starvation. Called by `world::tick()` for every record in ascending entity
 /// id order.
+///
+/// Only records without a client are simulated this way. A client-driven
+/// record (see `player_state::client_driven`) is moved exclusively by the
+/// validated requests it reports: it keeps the survival half of the tick but
+/// no movement is predicted between reports, because the client stops
+/// reporting whenever it stands still or hovers and a prediction would drift
+/// away from the body the client actually has.
 void tick_player(world &world, player_state &player) noexcept;
 
 /// Validate one client movement request against the authoritative record.
@@ -126,9 +133,13 @@ void tick_player(world &world, player_state &player) noexcept;
 /// Accepted requests are stored on the record and applied by the next
 /// `tick()`; a rejected request leaves the record untouched and reports that
 /// the caller must send the authoritative position back. Rejection covers
-/// non-finite values, a teleport-sized displacement, horizontal speed above
-/// the walking/sprint envelope, upward movement no jump or flight can produce,
-/// and a target the collision sweep cannot reach.
+/// non-finite values, a teleport-sized displacement, a target the collision
+/// sweep cannot reach, and, for a body that is not flying, horizontal speed
+/// above the walking/sprint envelope and upward movement no jump can produce.
+/// Flight is exempt from the walking envelope because the client's flying
+/// speed is not the walking speed, but it is not exempt from the sweep or the
+/// teleport-sized displacement gate: a flying client still cannot report a
+/// position inside a wall or across the map.
 [[nodiscard]] auto submit_player_move(world &world, player_state &player,
                                       const player_move_request &request)
     -> player_move_verdict;

@@ -30,6 +30,7 @@ auto player_table::add(registration record) -> result<entity_id> {
     player_state value{};
     value.id = *id;
     value.connection = record.connection;
+    value.client_driven = record.client_driven;
     value.profile_id = record.profile_id;
     value.name = std::move(record.name);
     value.world = std::move(record.world);

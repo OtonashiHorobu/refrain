@@ -1854,9 +1854,18 @@ auto world::submit_player_move(player_state &player,
         !std::isfinite(request.pitch)) {
         return player_move_verdict::corrected;
     }
-    const auto dx{request.x - player.x};
-    const auto dy{request.y - player.y};
-    const auto dz{request.z - player.z};
+    // Anchor the report on the position of the previous accepted report when
+    // one is still pending. A late server tick or a batched connection can
+    // deliver several one-tick reports in the same tick; each one describes
+    // the movement since the report before it, so comparing it with the
+    // record (which only advances once per tick) would turn a legitimate
+    // batched flight into teleport-sized displacements.
+    const auto anchor_x{player.has_move_request ? player.move_x : player.x};
+    const auto anchor_y{player.has_move_request ? player.move_y : player.y};
+    const auto anchor_z{player.has_move_request ? player.move_z : player.z};
+    const auto dx{request.x - anchor_x};
+    const auto dy{request.y - anchor_y};
+    const auto dz{request.z - anchor_z};
     const auto distance{std::sqrt(dx * dx + dy * dy + dz * dz)};
     if (distance > player_max_move_distance) {
         return player_move_verdict::corrected;
@@ -1864,13 +1873,13 @@ auto world::submit_player_move(player_state &player,
     const auto spectator{player.game_mode == game_mode_spectator};
     if (!spectator) {
         const auto feet{block_at(
-            block_pos{static_cast<std::int32_t>(std::floor(player.x)),
-                      static_cast<std::int16_t>(std::floor(player.y + 0.1)),
-                      static_cast<std::int32_t>(std::floor(player.z))})};
+            block_pos{static_cast<std::int32_t>(std::floor(anchor_x)),
+                      static_cast<std::int16_t>(std::floor(anchor_y + 0.1)),
+                      static_cast<std::int32_t>(std::floor(anchor_z))})};
         const auto body{block_at(
-            block_pos{static_cast<std::int32_t>(std::floor(player.x)),
-                      static_cast<std::int16_t>(std::floor(player.y + 0.9)),
-                      static_cast<std::int32_t>(std::floor(player.z))})};
+            block_pos{static_cast<std::int32_t>(std::floor(anchor_x)),
+                      static_cast<std::int16_t>(std::floor(anchor_y + 0.9)),
+                      static_cast<std::int32_t>(std::floor(anchor_z))})};
         const auto in_fluid{block_fluid(feet) != fluid_kind::none ||
                             block_fluid(body) != fluid_kind::none};
         const auto climbing{block_climbable(feet) || block_climbable(body)};
@@ -1890,7 +1899,7 @@ auto world::submit_player_move(player_state &player,
         // The collision sweep must be able to carry the player to the
         // reported position. A request that ends inside a wall or past the
         // step height is a modified client, not movement.
-        const auto resolved{resolve_movement(player.x, player.y, player.z, dx,
+        const auto resolved{resolve_movement(anchor_x, anchor_y, anchor_z, dx,
                                              dy, dz, player.on_ground)};
         const auto miss_x{resolved.x - request.x};
         const auto miss_y{resolved.y - request.y};
@@ -1995,6 +2004,7 @@ auto world::state_hash() const -> data::digest32 {
         append_u64(std::bit_cast<std::uint64_t>(player.fall_distance));
         append_u32(static_cast<std::uint32_t>(player.input));
         append_u32(player.flying ? 1U : 0U);
+        append_u32(player.client_driven ? 1U : 0U);
         append_u32(static_cast<std::uint32_t>(player.age));
         append_u32(static_cast<std::uint32_t>(player.inventory.size()));
         for (const auto &stack : player.inventory) {

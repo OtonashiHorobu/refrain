@@ -936,6 +936,12 @@ auto run_server(const server_run_options &options,
                 // teleport confirmation handshake, so the client's next
                 // packets are not validated against the stale position. A
                 // break in flight must not finish from the old position.
+                log_net.debug(
+                    "rejected the movement report of connection {} at "
+                    "({:.3f}, {:.3f}, {:.3f}) and sent the position "
+                    "({:.3f}, {:.3f}, {:.3f}) back",
+                    event.connection, event.x, event.y, event.z, record->x,
+                    record->y, record->z);
                 if (mining) {
                     mining->reset(event.connection);
                 }

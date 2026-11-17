@@ -96,6 +96,13 @@ struct player_state {
     /// Network connection that owns the player, or `synthetic_connection` for
     /// the player driven by the console and replay scripts.
     std::uint64_t connection{synthetic_connection};
+    /// True when a network client owns this record and reports its own
+    /// position. The simulation only applies validated movement requests to
+    /// such a record and never predicts its motion between reports: the client
+    /// is the authority for where the body is, the server is the authority for
+    /// whether that position is reachable. Console and replay players have no
+    /// client and are simulated from their input.
+    bool client_driven{false};
     /// Profile uuid in wire byte order; zero for the synthetic player.
     std::array<std::uint8_t, profile_uuid_size> profile_id{};
     std::string name{};
@@ -196,6 +203,10 @@ class player_table {
     /// Everything needed to create one player record.
     struct registration {
         std::uint64_t connection{synthetic_connection};
+        /// See `player_state::client_driven`: a network registration is driven
+        /// by the client's movement reports, a console or replay registration
+        /// is simulated from its input.
+        bool client_driven{false};
         std::array<std::uint8_t, 16> profile_id{};
         std::string name{};
         std::string world{};
