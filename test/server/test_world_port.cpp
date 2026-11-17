@@ -915,6 +915,31 @@ const refrain_services_storage_vtable recording_storage_vtable{
             expect(port->entities() != nullptr);
             expect(port->ticks() == 0);
 
+            // The entity projection follows the simulation's ascending logical
+            // id order and carries the component values; the console entity
+            // listing reads this map.
+            const auto pig{port->spawn_entity("minecraft:pig", 0.5, 20.5, 0.5)};
+            const auto cow{port->spawn_entity("minecraft:cow", 3.5, 30.0, 3.5)};
+            expect(pig.has_value() && *pig == 1U);
+            expect(cow.has_value() && *cow == 2U);
+            const auto *entities{port->entities()};
+            expect(entities != nullptr);
+            if (entities != nullptr) {
+                expect(entities->size() == 2U);
+                expect(entities->begin()->first == 1U);
+                expect(entities->begin()->second.type == "minecraft:pig");
+                expect(entities->begin()->second.y == 20.5);
+                expect(entities->rbegin()->first == 2U);
+                expect(entities->rbegin()->second.type == "minecraft:cow");
+            }
+            expect(port->remove_entity(1U));
+            const auto *remaining{port->entities()};
+            expect(remaining != nullptr);
+            if (remaining != nullptr) {
+                expect(remaining->size() == 1U);
+                expect(remaining->begin()->first == 2U);
+            }
+
             const auto loaded{port->chunk_load({0, 0})};
             expect(loaded.has_value());
             if (loaded) {

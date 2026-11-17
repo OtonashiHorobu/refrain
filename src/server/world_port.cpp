@@ -13,6 +13,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <optional>
 #include <span>
@@ -225,9 +226,20 @@ class direct_world_port final : public world_port {
         return world_ == nullptr ? nullptr : &world().items();
     }
 
+    // The entity view is the authoritative read path; this accessor projects
+    // it into the flat id-keyed map the interface returns. The projection is
+    // rebuilt on every call instead of being kept in sync, so a pointer from an
+    // earlier call is only valid until the next one.
     auto entities() const noexcept
         -> const std::map<sim::entity_id, sim::entity_state> * override {
-        return world_ == nullptr ? nullptr : &world().entities();
+        if (world_ == nullptr) {
+            return nullptr;
+        }
+        entity_projection_.clear();
+        world_->entities().each([this](const sim::entity_state &state) {
+            entity_projection_.emplace(state.id, state);
+        });
+        return &entity_projection_;
     }
 
     auto sim_world() noexcept -> sim::world * override { return world_; }
@@ -557,6 +569,10 @@ class direct_world_port final : public world_port {
 
     std::optional<sim::world> owned_{};
     sim::world *world_{nullptr};
+    /// Flat projection of the entity view, rebuilt when the legacy accessor is
+    /// called. Mutable because the accessor is `const` and the projection is a
+    /// read cache, not world state.
+    mutable std::map<sim::entity_id, sim::entity_state> entity_projection_{};
 };
 
 } // namespace

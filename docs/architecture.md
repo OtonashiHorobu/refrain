@@ -186,7 +186,7 @@ it with the wrong schema.
 
 ## Simulation
 
-The simulation owns the loaded chunks, tickets, block registry, entity table and
+The simulation owns the loaded chunks, tickets, block registry, entity store and
 inventory state. A tick advances player movement, entities, RNG and timers in a
 fixed order. The tick loop runs at 20 Hz and derives a state hash from the
 world contents and simulation state.
@@ -194,6 +194,28 @@ world contents and simulation state.
 Determinism is a contract: the same world and the same command sequence produce
 the same hash at the same tick. Timers are ordered by due tick and insertion
 id. The event bus is single-threaded and preserves subscription order.
+
+### Entities
+
+Runtime entities are stored in an EnTT registry owned by the simulation. An
+entity is a set of minimal components: identity (logical id and type key),
+transform (position and velocity), body rotation, a pinned tag for the entities
+a column carries, and the origin column of a generated entity. New gameplay
+state becomes its own component instead of a field on a growing entity struct.
+The registry handle is an implementation detail: `entt::entity` never leaves the
+simulation, and the protocol, the save format, the state hash and the mod ABI
+only ever see the logical entity id.
+
+Logical ids are allocated in spawn order, start at one and are never reused.
+Player and non-player entity ids come from one sequence, so a client never sees
+two entities with one id. The ascending logical-id view is the only supported
+way to read the entity set: a spawn appends because a new id is always the
+highest, a despawn removes its entry, and adopting or reloading a column
+rebuilds and sorts it. Component pools iterate in creation order and are never
+walked directly, so the state hash and the clientbound entity stream see the
+same order regardless of which entity was created or destroyed first. A player
+record still lives in its own player table and shares the logical id space with
+the spawned entities.
 
 ### Player physics and survival
 
@@ -337,15 +359,15 @@ content.
 World generation places the entities a structure template carries, and the
 storage bridge persists them with the column that contains them. A column owns
 its generated entities: loading or adopting the column spawns them in the
-entity table with fresh runtime ids exactly once, and unloading the column
-removes them. There is no second entity store to keep in sync, so a save, a
-reload or a chunk reload cannot duplicate or lose an entity.
+entity store with fresh runtime ids exactly once, and unloading the column
+removes them. The column record is the persistent copy and the store is the live
+one, so a save, a reload or a chunk reload cannot duplicate or lose an entity.
 
 A generated entity is pinned: this build has no entity AI or living-entity
 physics, so applying the point-entity gravity would drag a shulker or an item
-frame off its structure. The entity is in the entity table, its pinned
-position is covered by `state_hash()`, and the position the structure wrote is
-what the records keep.
+frame off its structure. The entity is in the entity store, its pinned position
+is covered by `state_hash()`, and the position the structure wrote is what the
+records keep.
 
 The chunk streamer delivers the entities with the column. When it sends a
 column's chunk packet it follows with the `add_entity` packets for the column's

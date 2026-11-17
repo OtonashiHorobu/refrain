@@ -153,7 +153,7 @@ suite player_table_tests = [] {
         expect(world->player(3) != nullptr);
         // Entity 2 is the pig, not a player.
         expect(world->player(2) == nullptr);
-        expect(world->entity(*pig) != nullptr);
+        expect(world->entity(*pig).has_value());
         std::error_code error;
         fs::remove_all(directory, error);
     };
