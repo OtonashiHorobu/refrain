@@ -200,7 +200,7 @@ exception handling across the static runtime, so a throwing worker task can
 terminate the process instead of being contained. Linux keeps LTO. The Windows
 archives are self-contained: the MinGW build is static and the MSVC archive
 carries the app-local Visual C++ runtime DLLs. Archives are written to
-`dist/` by default; `REFRAIN_DIST_OUT` selects another directory. Cross builds
+`dist/` by default; `REFRAIN_DIST_ARCH_LEVEL` selects the code-generation level (default `baseline`); release archives normally stay at the portable baseline, and a package for known hardware may name `x86-64-v3` or another level from the CMake option table. `REFRAIN_DIST_OUT` selects another directory. Cross builds
 need a native `refrain-tools` for the schema compiler; the MinGW target and the
 msvc-wine path build it automatically.
 
