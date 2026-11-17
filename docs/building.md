@@ -204,6 +204,21 @@ carries the app-local Visual C++ runtime DLLs. Archives are written to
 need a native `refrain-tools` for the schema compiler; the MinGW target and the
 msvc-wine path build it automatically.
 
+The MinGW x86-64-v3 build compiles first-party targets with
+`-mprefer-vector-width=128`. The Windows x64 ABI guarantees only 16-byte stack
+alignment, while AVX2 code generation may keep 32-byte vector values in a large
+frame and spill them with an aligned 256-bit store; the store faults with
+`0xC0000005` when the frame is aligned to 16 rather than 32 bytes. The flag
+keeps AVX2 enabled and drops only the 32-byte vector width, so first-party code
+auto-vectorizes to 128-bit vectors and the aligned 256-bit stack spill
+disappears. The cost is narrower auto-vectorization on this target; the
+library SIMD kernels and the other architecture levels are unchanged.
+
+`scripts/dev/mingw-v3-smoke.sh` assembles an offline fixture and runs this
+configuration for 20 ticks under Wine. The MinGW workflow runs it on every
+build, so a regression in the startup code generation fails the job instead of
+a packaged server.
+
 The two Windows archives differ in crash reporting. The MSVC archive enables
 Crashpad, ships `crashpad_handler.exe` beside `refrain-server.exe` and its
 Apache-2.0 licence under `licenses/`, and starts the handler as a child process
