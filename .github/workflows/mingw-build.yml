@@ -161,9 +161,9 @@ jobs:
               ) >"$work/check.log" 2>&1
               test -s "$work/logs/refrain.log"
               test -d "$work/crash"
-              grep -Eq 'fallback crash (handler writes Windows minidumps|marker is enabled)' \
+              grep -Eq "fallback crash (handler writes Windows minidumps|marker is enabled)" \
                 "$work/check.log"
-              grep -q 'writing the log to' "$work/logs/refrain.log"
+              grep -q "writing the log to" "$work/logs/refrain.log"
               echo "server diagnostics under wine: default log and crash directories created"
             '
 
