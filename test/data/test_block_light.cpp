@@ -271,9 +271,10 @@ suite<"data/block-light"> block_light_tests = [] {
         // of every default state whose canonical key carries properties (a
         // stored palette and a datapack write that state as the bare name).
         std::size_t expected_size{tracked.tables->state_count()};
-        for (std::uint16_t block{0}; block < tracked.tables->block_count();
-             ++block) {
-            const auto view{tracked.tables->block_at(block)};
+        const auto block_count{tracked.tables->block_count()};
+        for (std::uint32_t block{0}; block < block_count; ++block) {
+            const auto view{
+                tracked.tables->block_at(static_cast<std::uint16_t>(block))};
             if (view.state_count > 0 &&
                 tracked.tables->state_at(view.default_state).key != view.name) {
                 ++expected_size;
