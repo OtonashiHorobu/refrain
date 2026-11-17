@@ -4,6 +4,7 @@
 
 #include <refrain/data/content_index.hpp>
 
+#include <refrain/core/byte_order.hpp>
 #include <refrain/core/bytes.hpp>
 #include <refrain/data/path.hpp>
 #include <refrain/platform/mmap.hpp>
@@ -156,13 +157,7 @@ constexpr auto write_u64 = core::bytes::write_le<std::uint64_t>;
 [[nodiscard]] auto compute_location_hash(std::string_view location) noexcept
     -> std::uint64_t {
     const auto digest{blake3(text_bytes(location))};
-    std::uint64_t hash{0};
-    for (std::size_t index{0}; index < 8U; ++index) {
-        hash |= static_cast<std::uint64_t>(
-                    std::to_integer<unsigned int>(digest[index]))
-                << (8U * index);
-    }
-    return hash;
+    return core::byte_order::load_le64(digest);
 }
 
 /// Structural validation shared by `build_blob_table` (invalid_argument) and

@@ -170,6 +170,20 @@ auto uuid::parse(std::string_view text) -> result<uuid> {
     return value;
 }
 
+auto uuid::halves() const noexcept -> std::pair<std::int64_t, std::int64_t> {
+    const auto raw{std::as_bytes(std::span{bytes})};
+    return {std::bit_cast<std::int64_t>(core::byte_order::load_be64(raw, 0)),
+            std::bit_cast<std::int64_t>(core::byte_order::load_be64(raw, 8))};
+}
+
+auto uuid::from_halves(std::int64_t high, std::int64_t low) noexcept -> uuid {
+    uuid value{};
+    auto raw{std::as_writable_bytes(std::span{value.bytes})};
+    core::byte_order::store_be64(raw, 0, std::bit_cast<std::uint64_t>(high));
+    core::byte_order::store_be64(raw, 8, std::bit_cast<std::uint64_t>(low));
+    return value;
+}
+
 auto reader::need(std::size_t count) -> status {
     if (count > remaining()) {
         return std::unexpected{parse_failure(

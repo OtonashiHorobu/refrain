@@ -13,6 +13,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace refrain::net {
@@ -63,6 +64,15 @@ struct uuid {
 
     /// Parse the canonical form (hyphens required, lowercase or uppercase).
     [[nodiscard]] static auto parse(std::string_view text) -> result<uuid>;
+
+    /// The two signed 64-bit halves in wire order, which is how the protocol
+    /// carries a profile or a session id.
+    [[nodiscard]] auto halves() const noexcept
+        -> std::pair<std::int64_t, std::int64_t>;
+
+    /// Rebuild a uuid from its two signed 64-bit wire-order halves.
+    [[nodiscard]] static auto from_halves(std::int64_t high,
+                                          std::int64_t low) noexcept -> uuid;
 };
 
 /// Bounds-checked big-endian reader over one packet body. Every call validates

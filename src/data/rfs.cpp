@@ -4,6 +4,7 @@
 
 #include <refrain/data/rfs.hpp>
 
+#include <refrain/core/byte_order.hpp>
 #include <refrain/core/bytes.hpp>
 #include <refrain/core/io.hpp>
 
@@ -102,13 +103,7 @@ constexpr auto write_u64 = core::bytes::write_le<std::uint64_t>;
 /// First 8 bytes of BLAKE3(key), interpreted little-endian (fast-reject field).
 [[nodiscard]] auto key_hash_of(std::string_view key) noexcept -> std::uint64_t {
     const auto digest{blake3(key_bytes(key))};
-    std::uint64_t value{0};
-    for (std::size_t index{0}; index < 8; ++index) {
-        value |= static_cast<std::uint64_t>(
-                     std::to_integer<unsigned int>(digest[index]))
-                 << (8U * index);
-    }
-    return value;
+    return core::byte_order::load_le64(digest);
 }
 
 // ---------------------------------------------------------------------------

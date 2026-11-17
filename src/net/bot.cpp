@@ -58,17 +58,6 @@ namespace common = ::refrain::protocol::v777::common;
     return value;
 }
 
-[[nodiscard]] auto uuid_halves(const uuid &value)
-    -> std::pair<std::int64_t, std::int64_t> {
-    std::uint64_t high{0};
-    std::uint64_t low{0};
-    for (std::size_t index{0}; index < 8; ++index) {
-        high = (high << 8U) | value.bytes[index];
-        low = (low << 8U) | value.bytes[index + 8U];
-    }
-    return {static_cast<std::int64_t>(high), static_cast<std::int64_t>(low)};
-}
-
 enum class bot_state : std::uint8_t { login, configuration, play };
 
 class bot_session {
@@ -169,7 +158,7 @@ class bot_session {
     }
 
     void send_hello() {
-        const auto [high, low]{uuid_halves(profile_)};
+        const auto [high, low]{profile_.halves()};
         login_sb::hello packet{};
         packet.name = options_.username;
         packet.profile_high = high;

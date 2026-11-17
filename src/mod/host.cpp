@@ -35,6 +35,7 @@
 #include <memory>
 #include <new>
 #include <set>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -2462,9 +2463,7 @@ auto host::composition_digest_text() const -> std::string {
 
 auto host::composition_digest() const -> std::string {
     const auto text{composition_digest_text()};
-    const auto bytes{std::span<const std::byte>{
-        reinterpret_cast<const std::byte *>(text.data()), text.size()}};
-    return data::to_hex(data::blake3(bytes));
+    return data::to_hex(data::blake3(std::as_bytes(std::span{text})));
 }
 
 namespace {

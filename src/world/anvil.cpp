@@ -6,6 +6,7 @@
 
 #include <refrain/world/entity_nbt.hpp>
 
+#include <refrain/core/byte_order.hpp>
 #include <refrain/core/io.hpp>
 #include <refrain/core/jobs.hpp>
 #include <refrain/data/nbt.hpp>
@@ -138,22 +139,6 @@ constexpr std::size_t max_anvil_region_document_bytes = 256ULL << 20U;
 
 [[nodiscard]] auto unsupported(std::string message) -> std::unexpected<error> {
     return fail(error_code::unsupported, std::move(message));
-}
-
-[[nodiscard]] auto be32(std::span<const std::byte> data, std::size_t offset)
-    -> std::uint32_t {
-    return (static_cast<std::uint32_t>(data[offset]) << 24U) |
-           (static_cast<std::uint32_t>(data[offset + 1]) << 16U) |
-           (static_cast<std::uint32_t>(data[offset + 2]) << 8U) |
-           static_cast<std::uint32_t>(data[offset + 3]);
-}
-
-void put_be32(std::span<std::byte> data, std::size_t offset,
-              std::uint32_t value) {
-    data[offset] = static_cast<std::byte>((value >> 24U) & 0xFFU);
-    data[offset + 1] = static_cast<std::byte>((value >> 16U) & 0xFFU);
-    data[offset + 2] = static_cast<std::byte>((value >> 8U) & 0xFFU);
-    data[offset + 3] = static_cast<std::byte>(value & 0xFFU);
 }
 
 [[nodiscard]] auto zlib_compress(std::span<const std::byte> input)
@@ -1269,7 +1254,7 @@ void append_light(value &target, const light_section &light) {
     nbt::limits chunk_limits{};
     chunk_limits.max_bytes = max_anvil_decompressed_bytes;
     for (std::size_t slot{0}; slot < anvil_slots; ++slot) {
-        const auto location{be32(*bytes, slot * 4)};
+        const auto location{core::byte_order::load_be32(*bytes, slot * 4)};
         const auto offset{location >> 8U};
         const auto count{location & 0xFFU};
         if (offset == 0 && count == 0) {
@@ -1294,7 +1279,7 @@ void append_light(value &target, const light_section &light) {
                 fmt::format("region '{}' slot {} has a truncated chunk header",
                             path, slot));
         }
-        const auto length{be32(*bytes, base)};
+        const auto length{core::byte_order::load_be32(*bytes, base)};
         if (length < 1 || 5 + (length - 1) > count * anvil_sector_bytes ||
             base + 5 + (length - 1) > bytes->size()) {
             return parse_failure(fmt::format(
@@ -1484,8 +1469,8 @@ template <typename NextDocument>
         std::vector<std::byte> block(static_cast<std::size_t>(stored_sectors) *
                                          anvil_sector_bytes,
                                      std::byte{0});
-        put_be32(block, 0,
-                 external ? 1U : static_cast<std::uint32_t>(payload_size));
+        core::byte_order::store_be32(
+            block, 0, external ? 1U : static_cast<std::uint32_t>(payload_size));
         block[4] = static_cast<std::byte>(
             external ? (2U | anvil_external_stream_flag) : 2U);
         if (!external) {
@@ -1499,7 +1484,8 @@ template <typename NextDocument>
             return written;
         }
         const auto slot{rwf::region_file::slot_for(pos)};
-        put_be32(header, slot * 4, (next_sector << 8U) | stored_sectors);
+        core::byte_order::store_be32(header, slot * 4,
+                                     (next_sector << 8U) | stored_sectors);
         next_sector += stored_sectors;
     }
     if (auto written{file->write_at(0, header)}; !written) {

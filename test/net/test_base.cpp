@@ -7,6 +7,7 @@
 #include <boost/ut.hpp>
 
 #include <array>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -139,6 +140,26 @@ const suite tests = [] {
         if (decoded) {
             expect(*decoded == *parsed);
         }
+    };
+
+    "net/uuid halves keep the wire order and the sign bits"_test = [] {
+        const auto parsed{
+            net::uuid::parse("fedcba98-7654-3210-8fed-cba987654321")};
+        expect(parsed.has_value());
+        if (!parsed) {
+            return;
+        }
+        const auto [high, low]{parsed->halves()};
+        expect(std::bit_cast<std::uint64_t>(high) == 0xFEDCBA9876543210ULL);
+        expect(std::bit_cast<std::uint64_t>(low) == 0x8FEDCBA987654321ULL);
+        expect(net::uuid::from_halves(high, low) == *parsed);
+
+        std::vector<std::byte> out;
+        net::writer writer{out};
+        expect(writer.write_uuid(*parsed).has_value());
+        expect(out ==
+               bytes_of({0xFE, 0xDC, 0xBA, 0x98, 0x76, 0x54, 0x32, 0x10, 0x8F,
+                         0xED, 0xCB, 0xA9, 0x87, 0x65, 0x43, 0x21}));
     };
 
     "net/uuid rejects malformed text"_test = [] {
