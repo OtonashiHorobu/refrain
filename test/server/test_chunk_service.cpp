@@ -601,6 +601,7 @@ suite<"server/chunk-service"> chunk_service_tests = [] {
             // requested column in flight for the session.
             settings.data_root = "/refrain/no-such-datapack";
             settings.worker_count = 1;
+            settings.tile_size = 1;
             settings.max_pending = 64;
             expect(service.start_generation(settings).has_value());
             service.attach(gateway,
@@ -793,7 +794,7 @@ suite<"server/chunk-service"> chunk_service_tests = [] {
 };
 
 suite<"server/chunk-service-progressive"> chunk_service_progressive_tests = [] {
-    "server/chunk service adopts a finished batch within the tick budget"_test =
+    "server/chunk service adopts a finished tile within the tick budget"_test =
         [] {
             test_support::scratch_directory scratch;
             const auto path{(scratch.path() / "world").string()};
@@ -818,7 +819,7 @@ suite<"server/chunk-service-progressive"> chunk_service_progressive_tests = [] {
             auto log{std::make_shared<encode_log>()};
             streamer->set_encoder(make_encoder(runtime, log));
 
-            // One generation batch answering in the same tick: 64 columns.
+            // One generation tile answering in the same tick: 64 columns.
             auto columns{
                 std::vector<std::pair<sim::chunk_pos, sim::storage_chunk>>{}};
             for (std::int32_t x{0}; x < 8; ++x) {
@@ -829,19 +830,19 @@ suite<"server/chunk-service-progressive"> chunk_service_progressive_tests = [] {
             service.queue_generated(std::move(columns));
             session::play_session players{};
             session::chunk_tracker views;
-            // The viewport covers the whole synthetic batch, so every adopted
+            // The viewport covers the whole synthetic tile, so every adopted
             // column is pinned and the load count measures adoption only.
             static_cast<void>(views.update(1, 0, 0, 8));
             const auto tick_start{refrain::core::now_ns()};
             service.tick(*port, players, views, tick_start);
-            // A whole batch never lands in one tick: the first tick adopts the
+            // A whole tile never lands in one tick: the first tick adopts the
             // budget and leaves the rest queued.
             expect(port->loaded_chunks() ==
                    server::chunk_service::max_adopted_columns_per_tick);
             expect(streamed(gateway, 1).size() <=
                    server::chunk_service::max_adopted_columns_per_tick);
-            // ...but the first chunks of the batch already reach the client
-            // in that tick, which is the join latency the budget must keep.
+            // ...but the first chunks of the tile already reach the client in
+            // that tick, which is the join latency the budget must keep.
             expect(!streamed(gateway, 1).empty());
 
             std::size_t previous{port->loaded_chunks()};
@@ -855,14 +856,14 @@ suite<"server/chunk-service-progressive"> chunk_service_progressive_tests = [] {
                 previous = loaded;
             }
             expect(port->loaded_chunks() == 64U);
-            // The whole batch is adopted in ceil(64 / budget) ticks: the
+            // The whole tile is adopted in ceil(64 / budget) ticks: the
             // progress is bounded per tick and still completes promptly.
             const auto expected_ticks{
                 (64U + server::chunk_service::max_adopted_columns_per_tick -
                  1U) /
                 server::chunk_service::max_adopted_columns_per_tick};
             expect(adoption_ticks <= expected_ticks)
-                << "the batch needed " << adoption_ticks
+                << "the tile needed " << adoption_ticks
                 << " ticks, expected at most " << expected_ticks;
         };
 

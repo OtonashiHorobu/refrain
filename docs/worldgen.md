@@ -1,4 +1,4 @@
-#World generation data
+# World generation data
 
 Refrain contains no game assets or datapack. World generation reads two kinds of
 data that come from the Minecraft version the server is built for: the
