@@ -144,30 +144,6 @@ struct player_pose {
     return sim::block_pos{.x = x, .y = as_block_y(y), .z = z};
 }
 
-/// Resolve a player name against the authoritative player table first and the
-/// network's in-play list second. A name that neither knows has no target.
-[[nodiscard]] auto
-resolve_player(const std::shared_ptr<command_environment> &environment,
-               std::string_view name)
-    -> std::expected<resolved_player, std::string> {
-    if (environment->world != nullptr) {
-        if (auto *players = environment->world->players(); players != nullptr) {
-            if (auto *record = players->find_by_name(name); record != nullptr) {
-                return resolved_player{record->name, record->connection,
-                                       record};
-            }
-        }
-    }
-    if (environment->listener != nullptr) {
-        for (const auto &player : environment->listener->player_names()) {
-            if (player.name == name) {
-                return resolved_player{player.name, player.connection, nullptr};
-            }
-        }
-    }
-    return std::unexpected{fmt::format("No player is named '{}'", name)};
-}
-
 /// Resolve the player that ran the command. A command source that is not a
 /// player and has no target argument has no entity to move, which is the
 /// reference's "no entity was found" case.
@@ -229,6 +205,225 @@ source_anchor(const std::shared_ptr<command_environment> &environment,
         return std::unexpected{std::move(pose.error())};
     }
     return anchor{pose->x, pose->y, pose->z, pose->yaw, pose->pitch};
+}
+
+/// How many results a selector argument accepts at execution time.
+enum class selector_cardinality : std::uint8_t { one, any };
+
+/// The candidates one selector resolution sees, plus the executor's view of
+/// each of them. The two vectors are index-aligned: resolving a selector yields
+/// indices into the candidate list, which the executor maps back to the player
+/// names, connections and records.
+struct selector_pool {
+    std::vector<command::selector_candidate> candidates{};
+    std::vector<resolved_player> targets{};
+};
+
+/// Convert a protocol game mode number to the command module's typed value.
+[[nodiscard]] auto typed_gamemode(std::uint32_t value) noexcept
+    -> std::optional<command::game_mode> {
+    switch (value) {
+    case sim::game_mode_survival:
+        return command::game_mode::survival;
+    case sim::game_mode_creative:
+        return command::game_mode::creative;
+    case sim::game_mode_adventure:
+        return command::game_mode::adventure;
+    case sim::game_mode_spectator:
+        return command::game_mode::spectator;
+    default:
+        return std::nullopt;
+    }
+}
+
+/// Build the candidates a selector may match, in ascending entity id order.
+///
+/// The world provider is the authority: its player projection carries position
+/// and game mode for every player, and the in-process table additionally owns
+/// the record `/give` writes to. A provider without a player projection (the
+/// contract path of a composition that keeps no players in this process) falls
+/// back to the network listener, which knows the players in play but not their
+/// positions; a selector that needs a position then fails with a message
+/// instead of guessing one.
+[[nodiscard]] auto
+collect_selector_pool(const std::shared_ptr<command_environment> &environment)
+    -> std::expected<selector_pool, std::string> {
+    selector_pool pool{};
+    if (environment->world != nullptr) {
+        auto count{environment->world->player_count()};
+        if (!count) {
+            if (environment->listener == nullptr) {
+                return std::unexpected{fmt::format(
+                    "The active world provider exposes no player records, so "
+                    "entity selectors cannot resolve: {}",
+                    count.error().message)};
+            }
+        } else {
+            pool.candidates.reserve(*count);
+            pool.targets.reserve(*count);
+            auto *records{environment->world->players()};
+            for (std::uint32_t index{0}; index < *count; ++index) {
+                auto projected{environment->world->player_at(index)};
+                if (!projected) {
+                    return std::unexpected{
+                        fmt::format("Could not read player record {}: {}",
+                                    index, projected.error().message)};
+                }
+                command::selector_candidate candidate{};
+                candidate.name = projected->name;
+                candidate.identity = projected->connection;
+                candidate.player = true;
+                candidate.has_position = true;
+                candidate.x = projected->x;
+                candidate.y = projected->y;
+                candidate.z = projected->z;
+                candidate.mode = typed_gamemode(projected->game_mode);
+                pool.candidates.push_back(std::move(candidate));
+                resolved_player target{projected->name, projected->connection,
+                                       nullptr};
+                if (records != nullptr) {
+                    target.record =
+                        records->find_by_connection(projected->connection);
+                }
+                pool.targets.push_back(std::move(target));
+            }
+            return pool;
+        }
+    }
+    if (environment->listener == nullptr) {
+        return pool;
+    }
+    // The listener knows which players are in play but keeps no position; the
+    // bridge's cached game mode is the only mode available here.
+    auto names{environment->listener->player_names()};
+    std::ranges::sort(names, {}, &net::server::player_name::connection);
+    pool.candidates.reserve(names.size());
+    pool.targets.reserve(names.size());
+    for (const auto &player : names) {
+        command::selector_candidate candidate{};
+        candidate.name = player.name;
+        candidate.identity = player.connection;
+        candidate.player = true;
+        candidate.has_position = false;
+        candidate.mode =
+            typed_gamemode(static_cast<std::uint32_t>(static_cast<std::uint8_t>(
+                environment->mode_of(player.connection))));
+        pool.candidates.push_back(std::move(candidate));
+        pool.targets.push_back(
+            resolved_player{player.name, player.connection, nullptr});
+    }
+    return pool;
+}
+
+/// The position a selector origin resolves from: the source player's feet
+/// position, or nothing for a source that is not a player or whose position the
+/// world cannot report.
+///
+/// A missing position is not an error here: a selector that needs an origin
+/// fails with its own message, while one that does not (an unfiltered `@a`, a
+/// name target, a selector with all three absolute coordinates) still runs.
+[[nodiscard]] auto
+source_position_of(const std::shared_ptr<command_environment> &environment,
+                   command::context &context)
+    -> std::optional<command::selector_position> {
+    if (!context.source().identity().player) {
+        return std::nullopt;
+    }
+    const auto connection{
+        environment->connection_for(context.source().identity().key)};
+    if (!connection.has_value()) {
+        return std::nullopt;
+    }
+    resolved_player self{std::string{context.source().name()}, *connection,
+                         nullptr};
+    if (environment->world != nullptr) {
+        if (auto *players = environment->world->players(); players != nullptr) {
+            self.record = players->find_by_connection(*connection);
+        }
+    }
+    auto pose{pose_of(environment, self)};
+    if (!pose) {
+        return std::nullopt;
+    }
+    return command::selector_position{.x = pose->x, .y = pose->y, .z = pose->z};
+}
+
+/// Seed of the deterministic draw behind `@r` and `sort=random`.
+///
+/// The seed is derived from state instead of a global generator: the command
+/// source identity, the world tick and the command text. A replay that runs the
+/// same command at the same tick therefore makes the same choice, while
+/// repeating the command on a later tick may pick a different player.
+[[nodiscard]] auto
+selector_random_seed(const std::shared_ptr<command_environment> &environment,
+                     const command::context &context) noexcept
+    -> std::uint64_t {
+    std::uint64_t seed{1469598103934665603ULL};
+    const auto mix = [&seed](std::uint64_t value) {
+        for (int shift{0}; shift < 64; shift += 8) {
+            seed ^= (value >> shift) & 0xFFULL;
+            seed *= 1099511628211ULL;
+        }
+    };
+    mix(context.source().identity().key);
+    mix(environment->world != nullptr
+            ? static_cast<std::uint64_t>(environment->world->ticks())
+            : 0U);
+    for (const char character : context.input()) {
+        seed ^=
+            static_cast<std::uint64_t>(static_cast<unsigned char>(character));
+        seed *= 1099511628211ULL;
+    }
+    return seed;
+}
+
+/// Resolve one selector argument against the live world and the command source.
+///
+/// This is the only place a selector reads player state, and it runs inside an
+/// executor, never on the packet path. An empty result and a cardinality
+/// violation become the reference's command errors; a resolution failure (no
+/// source position, an unsupported entity type, a candidate without a position)
+/// is forwarded with its own message.
+[[nodiscard]] auto resolve_selector_targets(
+    const std::shared_ptr<command_environment> &environment,
+    command::context &context, const command::entity_selector &selector,
+    selector_cardinality cardinality)
+    -> std::expected<std::vector<resolved_player>, std::string> {
+    auto pool{collect_selector_pool(environment)};
+    if (!pool) {
+        return std::unexpected{std::move(pool.error())};
+    }
+    command::selector_request request{};
+    request.candidates = pool->candidates;
+    request.source_position = source_position_of(environment, context);
+    if (context.source().identity().player) {
+        request.self_identity =
+            environment->connection_for(context.source().identity().key);
+    }
+    request.random_seed = selector_random_seed(environment, context);
+    auto matches{command::resolve_selector(selector, request)};
+    if (!matches) {
+        return std::unexpected{std::move(matches.error().message)};
+    }
+    std::vector<resolved_player> selected{};
+    selected.reserve(matches->size());
+    for (const auto index : *matches) {
+        selected.push_back(pool->targets[index]);
+    }
+    if (selected.empty()) {
+        return std::unexpected{std::string{selector.players_only
+                                               ? "No player was found"
+                                               : "No entity was found"}};
+    }
+    if (cardinality == selector_cardinality::one && selected.size() > 1) {
+        return std::unexpected{std::string{
+            selector.players_only
+                ? "Only one player is allowed, but the provided selector "
+                  "allows more than one"
+                : "Only one entity is allowed, but the provided selector "
+                  "allows more than one"}};
+    }
+    return selected;
 }
 
 [[nodiscard]] auto needs_anchor(const command::block_position &position)
@@ -572,25 +767,34 @@ void register_teleport(
     });
     teleport.then(location);
 
-    // `/teleport <targets> <location>`, `/teleport <targets> <destination>`
-    // and the single-player form. The first token after the root is either a
-    // position or a player name; the target argument carries both the
-    // one-player form (`/tp Alice` moves the source to Alice, which is the
-    // reference's destination node) and the target-first pair.
-    auto targets{dispatcher.argument("targets", command::player_name_arg())};
+    // `/teleport <targets> [<location>|<destination>]` and `/teleport
+    // <destination>`. The tree carries the selector argument once: the parser
+    // cannot backtrack, so the reference's separate single-entity
+    // `destination` sibling of `targets` would shadow the two-token forms. The
+    // executable `targets` node therefore also accepts the one-token form and
+    // requires exactly one result there.
+    auto targets{
+        dispatcher.argument("targets", command::entity_selector_arg())};
     targets.executes(
         [environment](command::context &context) -> refrain::result<int> {
+            const auto *argument{context.selector("targets")};
+            if (argument == nullptr) {
+                return fail(context, error_code::invalid_argument,
+                            "The teleport target is missing");
+            }
             auto self{resolve_source_player(environment, context)};
             if (!self) {
                 return fail(context, error_code::not_found,
                             std::move(self.error()));
             }
-            auto player{resolve_player(environment, context.string("targets"))};
-            if (!player) {
+            auto selected{resolve_selector_targets(
+                environment, context, *argument, selector_cardinality::one)};
+            if (!selected) {
                 return fail(context, error_code::not_found,
-                            std::move(player.error()));
+                            std::move(selected.error()));
             }
-            auto pose{pose_of(environment, *player)};
+            const auto &destination{selected->front()};
+            auto pose{pose_of(environment, destination)};
             if (!pose) {
                 return fail(context, error_code::not_found,
                             std::move(pose.error()));
@@ -603,50 +807,62 @@ void register_teleport(
     auto targets_location{dispatcher.argument("location", command::vec3_arg())};
     targets_location.executes(
         [environment](command::context &context) -> refrain::result<int> {
-            auto player{resolve_player(environment, context.string("targets"))};
-            if (!player) {
-                return fail(context, error_code::not_found,
-                            std::move(player.error()));
-            }
-            const auto *argument{context.vec3("location")};
+            const auto *argument{context.selector("targets")};
             if (argument == nullptr) {
+                return fail(context, error_code::invalid_argument,
+                            "The teleport target is missing");
+            }
+            auto selected{resolve_selector_targets(
+                environment, context, *argument, selector_cardinality::any)};
+            if (!selected) {
+                return fail(context, error_code::not_found,
+                            std::move(selected.error()));
+            }
+            const auto *location_argument{context.vec3("location")};
+            if (location_argument == nullptr) {
                 return fail(context, error_code::invalid_argument,
                             "The teleport position is missing");
             }
-            auto position{
-                resolve_vec3_argument(environment, context, *argument)};
+            auto position{resolve_vec3_argument(environment, context,
+                                                *location_argument)};
             if (!position) {
                 return fail(context, error_code::invalid_argument,
                             std::move(position.error()));
             }
-            const std::array<resolved_player, 1> moved{*player};
-            return teleport_to(environment, context, moved, *position,
+            return teleport_to(environment, context, *selected, *position,
                                std::nullopt);
         });
     targets.then(targets_location);
     auto targets_destination{
-        dispatcher.argument("destination", command::player_name_arg())};
+        dispatcher.argument("destination", command::entity_selector_arg(true))};
     targets_destination.executes(
         [environment](command::context &context) -> refrain::result<int> {
-            auto player{resolve_player(environment, context.string("targets"))};
-            if (!player) {
-                return fail(context, error_code::not_found,
-                            std::move(player.error()));
+            const auto *argument{context.selector("targets")};
+            const auto *destination_argument{context.selector("destination")};
+            if (argument == nullptr || destination_argument == nullptr) {
+                return fail(context, error_code::invalid_argument,
+                            "The teleport target is missing");
             }
-            auto destination_player{
-                resolve_player(environment, context.string("destination"))};
-            if (!destination_player) {
+            auto selected{resolve_selector_targets(
+                environment, context, *argument, selector_cardinality::any)};
+            if (!selected) {
                 return fail(context, error_code::not_found,
-                            std::move(destination_player.error()));
+                            std::move(selected.error()));
             }
-            auto pose{pose_of(environment, *destination_player)};
+            auto destination{resolve_selector_targets(
+                environment, context, *destination_argument,
+                selector_cardinality::one)};
+            if (!destination) {
+                return fail(context, error_code::not_found,
+                            std::move(destination.error()));
+            }
+            auto pose{pose_of(environment, destination->front())};
             if (!pose) {
                 return fail(context, error_code::not_found,
                             std::move(pose.error()));
             }
             const world_point landing{pose->x, pose->y, pose->z};
-            const std::array<resolved_player, 1> moved{*player};
-            return teleport_to(environment, context, moved, landing,
+            return teleport_to(environment, context, *selected, landing,
                                std::optional{*pose});
         });
     targets.then(targets_destination);
@@ -1001,16 +1217,16 @@ void register_give(command::dispatcher &dispatcher,
         if (level == nullptr) {
             return fail(context, error_code::not_found, "No world is open");
         }
-        auto player{resolve_player(environment, context.string("player"))};
-        if (!player) {
-            return fail(context, error_code::not_found,
-                        std::move(player.error()));
+        const auto *argument{context.selector("targets")};
+        if (argument == nullptr) {
+            return fail(context, error_code::invalid_argument,
+                        "The give target is missing");
         }
-        if (player->record == nullptr) {
-            return fail(context, error_code::unsupported,
-                        fmt::format("The active world provider keeps no "
-                                    "inventory for '{}'",
-                                    player->name));
+        auto selected{resolve_selector_targets(environment, context, *argument,
+                                               selector_cardinality::any)};
+        if (!selected) {
+            return fail(context, error_code::not_found,
+                        std::move(selected.error()));
         }
         const auto *item{context.location("item")};
         if (item == nullptr) {
@@ -1036,23 +1252,37 @@ void register_give(command::dispatcher &dispatcher,
             return fail(context, error_code::invalid_argument,
                         fmt::format("Cannot give more than {} items", maximum));
         }
-        auto added{level->add_item(*player->record, item_name,
-                                   static_cast<std::uint32_t>(count))};
-        if (!added) {
-            return fail(context, added.error().code,
-                        fmt::format("Could not add {} to the inventory of "
-                                    "'{}': {}",
-                                    item_name, player->name,
-                                    added.error().message));
+        for (const auto &player : *selected) {
+            if (player.record == nullptr) {
+                return fail(context, error_code::unsupported,
+                            fmt::format("The active world provider keeps no "
+                                        "inventory for '{}'",
+                                        player.name));
+            }
+            auto added{level->add_item(*player.record, item_name,
+                                       static_cast<std::uint32_t>(count))};
+            if (!added) {
+                return fail(context, added.error().code,
+                            fmt::format("Could not add {} to the inventory of "
+                                        "'{}': {}",
+                                        item_name, player.name,
+                                        added.error().message));
+            }
         }
-        context.reply(
-            fmt::format("Gave {} {} to {}", count, item_name, player->name));
+        if (selected->size() == 1U) {
+            context.reply(fmt::format("Gave {} {} to {}", count, item_name,
+                                      selected->front().name));
+        } else {
+            context.reply(fmt::format("Gave {} {} to {} players", count,
+                                      item_name, selected->size()));
+        }
         return static_cast<int>(count);
     };
 
     auto node{dispatcher.literal("give").require_node(
         "refrain.command.give", command::level::gamemode)};
-    auto player{dispatcher.argument("player", command::player_name_arg())};
+    auto targets{dispatcher.argument(
+        "targets", command::entity_selector_arg(false, true))};
     auto item{dispatcher.argument("item", command::resource_location_arg())};
     item.executes([give](command::context &context) -> refrain::result<int> {
         return give(context);
@@ -1062,8 +1292,8 @@ void register_give(command::dispatcher &dispatcher,
         return give(context);
     });
     item.then(count);
-    player.then(item);
-    node.then(player);
+    targets.then(item);
+    node.then(targets);
 }
 
 // --- /me and /msg ----------------------------------------------------------
@@ -1087,28 +1317,38 @@ void register_chat_commands(
     me.then(action);
 
     auto msg{dispatcher.literal("msg").require_node("refrain.command.msg")};
-    auto target{dispatcher.argument("target", command::player_name_arg())};
+    auto targets{dispatcher.argument(
+        "targets", command::entity_selector_arg(false, true))};
     auto message{dispatcher.argument("message", command::greedy_arg())};
-    message.executes([environment](
-                         command::context &context) -> refrain::result<int> {
-        auto player{resolve_player(environment, context.string("target"))};
-        if (!player) {
-            return fail(context, error_code::not_found,
-                        std::move(player.error()));
-        }
-        const auto text{context.string("message")};
-        const auto sender{context.source().name()};
-        if (environment->listener != nullptr &&
-            player->connection != sim::synthetic_connection) {
-            environment->listener->send_system_chat(
-                player->connection,
-                fmt::format("{} whispers to you: {}", sender, text));
-        }
-        context.reply(fmt::format("You whisper to {}: {}", player->name, text));
-        return 1;
-    });
-    target.then(message);
-    msg.then(target);
+    message.executes(
+        [environment](command::context &context) -> refrain::result<int> {
+            const auto *argument{context.selector("targets")};
+            if (argument == nullptr) {
+                return fail(context, error_code::invalid_argument,
+                            "The message target is missing");
+            }
+            auto selected{resolve_selector_targets(
+                environment, context, *argument, selector_cardinality::any)};
+            if (!selected) {
+                return fail(context, error_code::not_found,
+                            std::move(selected.error()));
+            }
+            const auto text{context.string("message")};
+            const auto sender{context.source().name()};
+            for (const auto &player : *selected) {
+                if (environment->listener != nullptr &&
+                    player.connection != sim::synthetic_connection) {
+                    environment->listener->send_system_chat(
+                        player.connection,
+                        fmt::format("{} whispers to you: {}", sender, text));
+                }
+                context.reply(
+                    fmt::format("You whisper to {}: {}", player.name, text));
+            }
+            return static_cast<int>(selected->size());
+        });
+    targets.then(message);
+    msg.then(targets);
     // The reference registers both aliases as redirects of `/msg`.
     dispatcher.literal("tell")
         .require_node("refrain.command.msg")

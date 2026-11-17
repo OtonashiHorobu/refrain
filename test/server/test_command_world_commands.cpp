@@ -287,6 +287,49 @@ template <typename TTree>
     return false;
 }
 
+/// True when the wire tree carries an `entity` argument node (`parser id 6`)
+/// with the given name and argument-form flags.
+[[nodiscard]] auto has_entity_argument(const net::command_tree &tree,
+                                       std::string_view name,
+                                       std::uint8_t entity_flags) -> bool {
+    for (const auto &node : tree.nodes) {
+        if (node.parser_id == 6U && node.name == name &&
+            node.entity_flags == entity_flags) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// Positions of the fixture players, so a selector test can arrange distances.
+void place_players(sim::world &level, double alice_x, double bob_x) {
+    if (auto *alice{level.players().find_by_name("Alice")}; alice != nullptr) {
+        alice->x = alice_x;
+        alice->y = 64.0;
+        alice->z = 0.0;
+    }
+    if (auto *bob{level.players().find_by_name("Bob")}; bob != nullptr) {
+        bob->x = bob_x;
+        bob->y = 64.0;
+        bob->z = 0.0;
+    }
+}
+
+/// The player name a `/tp` reply reports, or an empty view.
+[[nodiscard]] auto teleported_name(const std::vector<std::string> &replies)
+    -> std::string_view {
+    constexpr std::string_view prefix{"Teleported "};
+    for (const auto &reply : replies) {
+        if (!reply.starts_with(prefix)) {
+            continue;
+        }
+        const auto rest{std::string_view{reply}.substr(prefix.size())};
+        const auto end{rest.find(' ')};
+        return rest.substr(0, end);
+    }
+    return {};
+}
+
 constexpr std::string_view granted_policy_text{R"(
 [defaults]
 default = "deny"
@@ -655,8 +698,8 @@ const suite command_world_player_tests = [] {
             const auto nobody{world.execute("give Carol minecraft:apple")};
             expect(!nobody);
             if (!nobody) {
-                expect(nobody.error().message.find(
-                           "No player is named 'Carol'") != std::string::npos)
+                expect(nobody.error().message.find("No player was found") !=
+                       std::string::npos)
                     << nobody.error().message;
             }
         };
@@ -769,8 +812,8 @@ const suite command_world_player_tests = [] {
             const auto nobody{world.execute("tp Carol")};
             expect(!nobody);
             if (!nobody) {
-                expect(nobody.error().message.find(
-                           "No player is named 'Carol'") != std::string::npos)
+                expect(nobody.error().message.find("No entity was found") !=
+                       std::string::npos)
                     << nobody.error().message;
             }
 
@@ -790,14 +833,14 @@ const suite command_world_player_tests = [] {
                     << tall.error().message;
             }
 
-            // Two tokens parse as the target-first form with a second player
-            // name, exactly like the reference's argument tree; the failure is
-            // the missing player rather than a syntax error.
+            // Two tokens parse as the target-first form with a second target,
+            // exactly like the reference's argument tree; the failure is the
+            // empty selection rather than a syntax error.
             const auto two_words{world.execute("tp 1 2")};
             expect(!two_words);
             if (!two_words) {
-                expect(two_words.error().message.find(
-                           "No player is named '1'") != std::string::npos)
+                expect(two_words.error().message.find("No entity was found") !=
+                       std::string::npos)
                     << two_words.error().message;
             }
         };
@@ -851,8 +894,8 @@ const suite command_world_player_tests = [] {
             const auto nobody{world.execute("msg Carol hi")};
             expect(!nobody);
             if (!nobody) {
-                expect(nobody.error().message.find(
-                           "No player is named 'Carol'") != std::string::npos)
+                expect(nobody.error().message.find("No player was found") !=
+                       std::string::npos)
                     << nobody.error().message;
             }
 
@@ -890,6 +933,330 @@ const suite command_world_player_tests = [] {
                     << denied.error().message;
             }
         };
+};
+
+const suite command_selector_tests = [] {
+    "commands/@p picks the nearest player from the source position"_test = [] {
+        fixture world{"selector-p"};
+        expect(world.ok());
+        if (!world.ok()) {
+            return;
+        }
+        place_players(*world.level, 0.0, 10.0);
+
+        const auto moved{world.execute("tp @p 1 64 1")};
+        expect(static_cast<bool>(moved))
+            << (moved ? "" : moved.error().message);
+        const auto *alice{world.player("Alice")};
+        const auto *bob{world.player("Bob")};
+        expect(alice != nullptr && bob != nullptr);
+        if (alice == nullptr || bob == nullptr) {
+            return;
+        }
+        // The source is Alice, so @p names Alice; Y is the given absolute.
+        expect(alice->x == 1.5 && alice->y == 64.0 && alice->z == 1.5)
+            << alice->x << "," << alice->z;
+        expect(bob->x == 10.0 && bob->z == 0.0);
+
+        // The x/y/z override moves the origin, so @p names Bob instead.
+        const auto overridden{world.execute("tp @p[x=10,y=64,z=0] 2 64 2")};
+        expect(static_cast<bool>(overridden))
+            << (overridden ? "" : overridden.error().message);
+        expect(bob->x == 2.5 && bob->z == 2.5) << bob->x << "," << bob->z;
+        expect(alice->x == 1.5 && alice->z == 1.5);
+    };
+
+    "commands/@a, @s and @e select the matching players"_test = [] {
+        fixture world{"selector-groups"};
+        expect(world.ok());
+        if (!world.ok()) {
+            return;
+        }
+        place_players(*world.level, 0.0, 10.0);
+        const auto *alice{world.player("Alice")};
+        const auto *bob{world.player("Bob")};
+        expect(alice != nullptr && bob != nullptr);
+        if (alice == nullptr || bob == nullptr) {
+            return;
+        }
+
+        const auto everyone{world.execute("tp @a 5 64 5")};
+        expect(static_cast<bool>(everyone))
+            << (everyone ? "" : everyone.error().message);
+        expect(alice->x == 5.5 && bob->x == 5.5);
+        expect(world.replies_contain("Teleported 2 players to 5.5, 64, 5.5"))
+            << world.replies.front();
+
+        // `@s` names the source only.
+        const auto self{world.execute("tp @s 1 64 1", command::level::admin,
+                                      bob_key, bob_connection, "Bob")};
+        expect(static_cast<bool>(self)) << (self ? "" : self.error().message);
+        expect(bob->x == 1.5 && alice->x == 5.5);
+
+        // The box filter is anchored at the source and widened by one block.
+        place_players(*world.level, 0.0, 10.0);
+        const auto boxed{world.execute("tp @a[dx=2,dz=2] 9 64 9")};
+        expect(static_cast<bool>(boxed))
+            << (boxed ? "" : boxed.error().message);
+        expect(alice->x == 9.5 && bob->x == 10.0);
+
+        // `@e` addresses every entity; in this build that is the player set.
+        place_players(*world.level, 0.0, 10.0);
+        const auto entities{world.execute("tp @e 3 64 3")};
+        expect(static_cast<bool>(entities))
+            << (entities ? "" : entities.error().message);
+        expect(alice->x == 3.5 && bob->x == 3.5);
+
+        const auto narrowed{
+            world.execute("tp @e[type=minecraft:player] 4 64 4")};
+        expect(static_cast<bool>(narrowed))
+            << (narrowed ? "" : narrowed.error().message);
+        expect(alice->x == 4.5 && bob->x == 4.5);
+
+        // A non-player entity type is refused instead of silently matching
+        // nothing, because no entity type but the player is modelled.
+        const auto unsupported{
+            world.execute("tp @e[type=minecraft:zombie] 4 64 4")};
+        expect(!unsupported);
+        if (!unsupported) {
+            expect(unsupported.error().message.find("minecraft:zombie") !=
+                   std::string::npos)
+                << unsupported.error().message;
+            expect(unsupported.error().message.find("only players") !=
+                   std::string::npos)
+                << unsupported.error().message;
+        }
+    };
+
+    "commands/selector distance, name, gamemode, sort and limit filters"_test =
+        [] {
+            fixture world{"selector-filters"};
+            expect(world.ok());
+            if (!world.ok()) {
+                return;
+            }
+            place_players(*world.level, 0.0, 10.0);
+            auto *alice{world.player("Alice")};
+            auto *bob{world.player("Bob")};
+            expect(alice != nullptr && bob != nullptr);
+            if (alice == nullptr || bob == nullptr) {
+                return;
+            }
+
+            const auto named{world.execute("tp @a[name=Bob] 7 64 7")};
+            expect(static_cast<bool>(named))
+                << (named ? "" : named.error().message);
+            expect(bob->x == 7.5 && alice->x == 0.0);
+
+            place_players(*world.level, 0.0, 10.0);
+            const auto survival{
+                world.execute("tp @a[gamemode=survival] 8 64 8")};
+            expect(static_cast<bool>(survival))
+                << (survival ? "" : survival.error().message);
+            expect(bob->x == 8.5 && alice->x == 0.0);
+
+            place_players(*world.level, 0.0, 10.0);
+            const auto creative{
+                world.execute("tp @a[gamemode=creative] 9 64 9")};
+            expect(static_cast<bool>(creative))
+                << (creative ? "" : creative.error().message);
+            expect(alice->x == 9.5 && bob->x == 10.0);
+
+            // Alice is at the origin: distance 0 and distance 10 are both in
+            // the inclusive range.
+            place_players(*world.level, 0.0, 10.0);
+            const auto within{world.execute("tp @a[distance=..10] 1 64 1")};
+            expect(static_cast<bool>(within))
+                << (within ? "" : within.error().message);
+            expect(alice->x == 1.5 && bob->x == 1.5);
+
+            place_players(*world.level, 0.0, 10.0);
+            const auto furthest{
+                world.execute("tp @a[sort=furthest,limit=1] 2 64 2")};
+            expect(static_cast<bool>(furthest))
+                << (furthest ? "" : furthest.error().message);
+            expect(bob->x == 2.5 && alice->x == 0.0);
+
+            place_players(*world.level, 0.0, 10.0);
+            const auto nearest{
+                world.execute("tp @a[sort=nearest,limit=1] 2 64 2")};
+            expect(static_cast<bool>(nearest))
+                << (nearest ? "" : nearest.error().message);
+            expect(alice->x == 2.5 && bob->x == 10.0);
+        };
+
+    "commands/@r draws deterministically from the command state"_test = [] {
+        fixture world{"selector-random"};
+        expect(world.ok());
+        if (!world.ok()) {
+            return;
+        }
+        place_players(*world.level, 0.0, 10.0);
+        const auto *alice{world.player("Alice")};
+        const auto *bob{world.player("Bob")};
+        expect(alice != nullptr && bob != nullptr);
+        if (alice == nullptr || bob == nullptr) {
+            return;
+        }
+
+        const auto first{world.execute("tp @r 3 64 3")};
+        expect(static_cast<bool>(first))
+            << (first ? "" : first.error().message);
+        const auto first_name{teleported_name(world.replies)};
+        expect(!first_name.empty()) << world.replies.front();
+        // Restore both positions and repeat: the seed is derived from the
+        // source, the tick and the command text, so the draw is the same.
+        place_players(*world.level, 0.0, 10.0);
+        const auto second{world.execute("tp @r 3 64 3")};
+        expect(static_cast<bool>(second))
+            << (second ? "" : second.error().message);
+        const auto second_name{teleported_name(world.replies)};
+        expect(second_name == first_name) << first_name << " " << second_name;
+        const auto moved_one{(alice->x == 3.5) != (bob->x == 3.5)};
+        expect(moved_one) << alice->x << " " << bob->x;
+
+        world.replies.clear();
+        const auto limited{world.execute("tp @r[limit=2] 6 64 6")};
+        expect(static_cast<bool>(limited))
+            << (limited ? "" : limited.error().message);
+        expect(alice->x == 6.5 && bob->x == 6.5);
+    };
+
+    "commands/give and msg use selector targets"_test = [] {
+        fixture world{"selector-actions"};
+        expect(world.ok());
+        if (!world.ok()) {
+            return;
+        }
+        place_players(*world.level, 0.0, 10.0);
+        auto *alice{world.player("Alice")};
+        auto *bob{world.player("Bob")};
+        expect(alice != nullptr && bob != nullptr);
+        if (alice == nullptr || bob == nullptr) {
+            return;
+        }
+
+        const auto given{world.execute("give @a minecraft:apple 3")};
+        expect(static_cast<bool>(given))
+            << (given ? "" : given.error().message);
+        expect(given && given->value == 3);
+        expect(world.replies_contain("Gave 3 minecraft:apple to 2 players"))
+            << world.replies.front();
+        expect(world.level->item_count(*alice, "minecraft:apple") == 3U);
+        expect(world.level->item_count(*bob, "minecraft:apple") == 3U);
+
+        const auto single{world.execute("give @s minecraft:stone")};
+        expect(static_cast<bool>(single))
+            << (single ? "" : single.error().message);
+        expect(world.level->item_count(*alice, "minecraft:stone") == 1U);
+        expect(world.level->item_count(*bob, "minecraft:stone") == 0U);
+
+        const auto whisper{
+            world.execute("msg @a[gamemode=survival] selector text")};
+        expect(static_cast<bool>(whisper))
+            << (whisper ? "" : whisper.error().message);
+        expect(world.replies_contain("You whisper to Bob: selector text"))
+            << world.replies.front();
+        expect(!world.replies_contain("You whisper to Alice: selector text"));
+    };
+
+    "commands/a selector that cannot resolve fails closed"_test = [] {
+        fixture world{"selector-errors"};
+        expect(world.ok());
+        if (!world.ok()) {
+            return;
+        }
+        place_players(*world.level, 0.0, 10.0);
+
+        // A console source has no position, so a distance-ordered selector
+        // must say so instead of picking an arbitrary player.
+        auto console_replies{std::vector<std::string>{}};
+        command::console_source console{
+            command::level::owner,
+            [&console_replies](std::string_view message) {
+                console_replies.emplace_back(message);
+            }};
+        const auto no_position{
+            world.environment->dispatcher.execute("tp @p 1 64 1", console)};
+        expect(!no_position);
+        if (!no_position) {
+            expect(no_position.error().message.find("no position") !=
+                   std::string::npos)
+                << no_position.error().message;
+        }
+
+        // A selector that needs no origin still works from the console.
+        const auto everyone{
+            world.environment->dispatcher.execute("tp @a 2 64 2", console)};
+        expect(static_cast<bool>(everyone))
+            << (everyone ? "" : everyone.error().message);
+        expect(world.player("Alice")->x == 2.5);
+        expect(world.player("Bob")->x == 2.5);
+
+        // The reference's argument-form checks reject an entity selector where
+        // the command accepts players only.
+        const auto entities_for_give{world.execute("give @e minecraft:apple")};
+        expect(!entities_for_give);
+        if (!entities_for_give) {
+            expect(entities_for_give.error().message.find(
+                       "Only players may be affected") != std::string::npos)
+                << entities_for_give.error().message;
+        }
+        // A single-target argument rejects a selector that may match several.
+        // The parser-level cardinality rule is covered by the command suite;
+        // here the command must not run.
+        const auto many_destinations{world.execute("tp @a @a")};
+        expect(!many_destinations);
+
+        // An empty player table is a command error, not a crash.
+        expect(static_cast<bool>(world.port->remove_player(alice_connection)));
+        expect(static_cast<bool>(world.port->remove_player(bob_connection)));
+        const auto nothing{world.execute("tp @a 1 64 1")};
+        expect(!nothing);
+        if (!nothing) {
+            expect(nothing.error().message.find("No entity was found") !=
+                   std::string::npos)
+                << nothing.error().message;
+        }
+        const auto nobody{world.execute("give @a minecraft:apple")};
+        expect(!nobody);
+        if (!nobody) {
+            expect(nobody.error().message.find("No player was found") !=
+                   std::string::npos)
+                << nobody.error().message;
+        }
+    };
+
+    "commands/the tree and completion carry the entity argument"_test = [] {
+        fixture world{"selector-tree"};
+        expect(world.ok());
+        if (!world.ok()) {
+            return;
+        }
+        world.environment->permission = command::level::owner;
+        const auto alice{world.identity(alice_connection, "Alice", alice_uuid)};
+        const auto tree{world.bridge.tree(alice)};
+        expect(tree != nullptr);
+        if (tree == nullptr) {
+            return;
+        }
+        // `EntityArgument.entities()` has no flags, `entity()` sets single and
+        // `players()` sets players-only.
+        expect(has_entity_argument(*tree, "targets", 0U));
+        expect(has_entity_argument(*tree, "destination", 1U));
+        expect(has_entity_argument(*tree, "targets", 2U));
+
+        const auto families{world.bridge.suggest(alice, "tp @", 4)};
+        const auto offered{suggestion_texts(families)};
+        expect(contains(offered, "@p")) << offered.size();
+        expect(contains(offered, "@a")) << offered.size();
+        expect(contains(offered, "@e")) << offered.size();
+
+        const auto filters{world.bridge.suggest(alice, "give @e[", 8)};
+        const auto filter_texts{suggestion_texts(filters)};
+        expect(contains(filter_texts, "@e[limit=")) << filter_texts.size();
+        expect(contains(filter_texts, "@e[distance=")) << filter_texts.size();
+    };
 };
 
 const suite command_world_permission_tests = [] {

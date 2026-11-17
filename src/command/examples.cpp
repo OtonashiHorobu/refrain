@@ -52,6 +52,10 @@ void report_example_values(context &ctx) {
         identifier != nullptr) {
         ctx.reply(fmt::format("identifier {}", identifier->to_string()));
     }
+    if (const auto *selector = ctx.selector("target"); selector != nullptr) {
+        ctx.reply(fmt::format("target {} {}", to_string(selector->kind),
+                              selector->max_results));
+    }
 }
 
 } // namespace
@@ -76,6 +80,7 @@ void register_parser_examples(dispatcher &into) {
     auto time{into.argument("time", time_arg(0, world_time_markers()))};
     auto dimension{into.argument("dimension", dimension_arg())};
     auto identifier{into.argument("identifier", uuid_arg())};
+    auto target{into.argument("target", entity_selector_arg())};
 
     count.then(big);
     big.then(ratio);
@@ -91,9 +96,10 @@ void register_parser_examples(dispatcher &into) {
     mode.then(time);
     time.then(dimension);
     dimension.then(identifier);
+    identifier.then(target);
     example.then(flag);
     flag.then(count);
-    identifier.executes([](context &ctx) -> int {
+    target.executes([](context &ctx) -> int {
         report_example_values(ctx);
         return static_cast<int>(ctx.arguments().size());
     });

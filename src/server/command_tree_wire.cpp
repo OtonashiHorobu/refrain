@@ -39,6 +39,8 @@ auto wire_parser_id(command::parser_kind kind) -> std::optional<std::uint32_t> {
         return 4U; // brigadier:long
     case command::parser_kind::string:
         return 5U; // brigadier:string
+    case command::parser_kind::entity_selector:
+        return 6U; // entity
     case command::parser_kind::player_name:
         return 7U; // game_profile
     case command::parser_kind::block_position:
@@ -89,6 +91,8 @@ auto wire_parser_name(command::parser_kind kind) -> std::string_view {
         return "block_pos";
     case command::parser_kind::rotation:
         return "rotation";
+    case command::parser_kind::entity_selector:
+        return "entity";
     case command::parser_kind::player_name:
         return "game_profile";
     case command::parser_kind::gamemode:
@@ -185,6 +189,11 @@ auto to_wire_tree(const command::tree &snapshot) -> net::command_tree {
             node.number_max = parser.number_max;
             break;
         }
+        case command::parser_kind::entity_selector:
+            node.entity_flags = static_cast<std::uint8_t>(
+                (parser.entity_single ? 1U : 0U) |
+                (parser.entity_players_only ? 2U : 0U));
+            break;
         case command::parser_kind::string:
             node.string_type = static_cast<std::uint32_t>(parser.string);
             break;

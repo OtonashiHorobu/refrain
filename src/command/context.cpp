@@ -113,6 +113,11 @@ auto context::gamemode(std::string_view name) const noexcept
     return value == nullptr ? std::nullopt : std::optional<game_mode>{*value};
 }
 
+auto context::selector(std::string_view name) const noexcept
+    -> const entity_selector * {
+    return get<entity_selector>(name);
+}
+
 void context::reply(std::string_view message) {
     if (feedback_.size() < max_feedback_messages &&
         message.size() <= max_feedback_bytes - feedback_bytes_) {

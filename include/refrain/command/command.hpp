@@ -13,6 +13,7 @@
 #include <refrain/command/examples.hpp>
 #include <refrain/command/parsers.hpp>
 #include <refrain/command/reader.hpp>
+#include <refrain/command/selector.hpp>
 #include <refrain/command/source.hpp>
 #include <refrain/command/suggestions.hpp>
 #include <refrain/command/tree.hpp>

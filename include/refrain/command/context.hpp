@@ -90,6 +90,12 @@ class context {
     [[nodiscard]] auto gamemode(std::string_view name) const noexcept
         -> std::optional<game_mode>;
 
+    /// Typed entity selector accessor. The value is the context-free parse
+    /// result; an executor resolves it against its own candidate list when the
+    /// command runs. Null when the argument is absent or is not a selector.
+    [[nodiscard]] auto selector(std::string_view name) const noexcept
+        -> const entity_selector *;
+
     /// Send one feedback line through the source sink and record it in the
     /// execution result (within the feedback bounds).
     void reply(std::string_view message);
