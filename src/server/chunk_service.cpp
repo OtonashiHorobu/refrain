@@ -113,9 +113,9 @@ void chunk_service::tick(world_port &world,
                          refrain::session::chunk_tracker &views,
                          std::uint64_t tick_start_ns) {
     if (generation_) {
-        // Take only what this tick's adoption budget can absorb so the
-        // columns already finished stay queued, ordered by position, instead
-        // of arriving as one spike.
+        // One finished tile is up to 64 columns. Take only what this tick's
+        // adoption budget can absorb so the columns already finished stay
+        // queued, ordered by position, instead of arriving as one spike.
         const auto room{max_adopted_columns_per_tick > pending_adoption_.size()
                             ? max_adopted_columns_per_tick -
                                   pending_adoption_.size()
@@ -266,26 +266,31 @@ void chunk_service::apply_generation_failures() {
     if (!generation_) {
         return;
     }
+    const auto edge{generation_->tile_size()};
     for (const auto &failure : generation_->take_failures()) {
-        // The first distinct message is operator-visible; a chunk pipeline
-        // that keeps failing the same way is only debug detail after that.
+        // The first distinct message is operator-visible; a generator that
+        // keeps failing the same way is only debug detail after that.
         if (failure.message == logged_failure_message_) {
             log_chunk_gen.debug("failed to generate chunk ({}, {}): {}",
-                                failure.position.x, failure.position.z,
+                                failure.tile.x, failure.tile.z,
                                 failure.message);
         } else {
             logged_failure_message_ = failure.message;
             log_chunk_gen.warn("failed to generate chunk ({}, {}): {}",
-                               failure.position.x, failure.position.z,
-                               failure.message);
+                               failure.tile.x, failure.tile.z, failure.message);
         }
         if (!streamer_) {
             continue;
         }
-        // The column is the unit that failed; the streamer keeps a chunk a
-        // connection is waiting for out of the request set until the attempt
-        // bound is hit.
-        streamer_->chunk_failed(failure.position.x, failure.position.z);
+        // The tile is the unit that failed, so every column of it is free to
+        // be requested again; the streamer keeps the ones a connection is
+        // waiting for out of the request set until the attempt bound is hit.
+        for (std::int32_t dz{0}; dz < edge; ++dz) {
+            for (std::int32_t dx{0}; dx < edge; ++dx) {
+                streamer_->chunk_failed(failure.tile.x + dx,
+                                        failure.tile.z + dz);
+            }
+        }
     }
 }
 
@@ -406,16 +411,6 @@ void chunk_service::enforce_residency(world_port &world) {
 void chunk_service::observe_tick(std::uint64_t work_ns) {
     if (!generation_) {
         return;
-    }
-    if (!cache_eviction_reported_) {
-        if (const auto evictions{generation_->cache_evictions()};
-            evictions != 0) {
-            cache_eviction_reported_ = true;
-            log_chunk_gen.warn(
-                "a chunk proto cache evicted {} chunk{}, so a later request "
-                "may regenerate it without the neighbour writes it had",
-                evictions, evictions == 1 ? "" : "s");
-        }
     }
     tick_samples_[tick_sample_next_] = work_ns;
     tick_sample_next_ = (tick_sample_next_ + 1) % tick_samples_.size();

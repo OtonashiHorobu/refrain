@@ -404,21 +404,20 @@ built from the accepted centre changes alone, never from a client-reported
 velocity: two consecutive changes in the same direction activate a whole-chunk
 look-ahead of at most two chunks, and a change against the heading, a viewport
 that stopped changing or a direction that never repeated keeps it inactive. The
-look-ahead centre is a generation hint. It ranks wanted columns behind every
-column the accepted viewport needs, so a prediction cannot starve the viewport a
-client is standing in, and it lets the streamer ask the generator for the
-columns of the band ahead of the player. Those columns are pre-generated and pinned by the
+look-ahead centre is a generation hint. It ranks tiles behind every tile the
+accepted viewport needs, so a prediction cannot starve the viewport a client is
+standing in, and it lets the streamer ask the generator for the columns of the
+band ahead of the player. Those columns are pre-generated and pinned by the
 residency policy while the estimate lasts; they are never queued for the
 client, and the band is recomputed every tick so a turn or a stop releases it
 instead of pinning chunks the player will not reach.
 
-The background generator serves a column as soon as its own status
-dependencies are decorated, but the service adopts at most a small number of
-columns per tick. Each adoption runs the column decode, its entity spawn and its
-initial light, so inserting a burst of finished columns in one tick is a spike;
-the remainder waits in position order for the next ticks. The world still
-applies columns in ascending position order, so the adoption budget changes how
-a burst is spread across ticks, not what the world ends up holding.
+A generation tile arrives as a whole, but the service adopts at most a small
+number of its columns per tick. Each adoption runs the column decode, its
+entity spawn and its initial light, so inserting a finished tile in one tick is
+a spike; the remainder waits in position order for the next ticks. The world
+still applies columns in ascending position order, so the adoption budget
+changes how a tile is spread across ticks, not what the world ends up holding.
 
 ### Time and weather
 
@@ -466,9 +465,9 @@ completion would make the hash depend on thread timing.
 
 ### Generation failures
 
-A generation task that fails reports the column it could not produce. The
-pipeline forgets it so the streamer requests it again, and a column gets a
-fixed number of attempts before it is left unserved for that viewport visit. That
+A generation task that fails reports the columns of its tile. The pipeline
+forgets them so the streamer requests them again, and a column gets a fixed
+number of attempts before it is left unserved for that viewport visit. That
 keeps a permanently failing position from being requested once per tick, and it
 means a client is never left waiting on an answer that will not arrive. A worker
 whose generator cannot be created fails its tasks the same way instead of

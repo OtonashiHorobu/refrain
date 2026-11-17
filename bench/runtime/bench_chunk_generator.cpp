@@ -76,8 +76,9 @@ struct options {
     /// Generate through the per-chunk status pipeline, which keeps a proto
     /// chunk cache between requests, instead of the single-chunk path.
     bool pipeline{false};
-    /// Drive the per-chunk status scheduler the runtime uses: per-chunk
-    /// terrain, decorated and served jobs on a worker pool.
+    /// Drive the experimental per-chunk status scheduler: per-chunk terrain,
+    /// decorated and served jobs on a worker pool. The production runtime's
+    /// default is the tile path.
     bool scheduler{false};
     /// Edge in chunks of one generated tile.
     jint tile_size{8};
@@ -1074,8 +1075,8 @@ auto parse_options(int argc, char **argv) -> std::optional<options> {
                 "one chunk at a time (reference path)\n"
                 "  --tile-size <n>          tile edge in chunks (default 8; "
                 "implies --tiles)\n"
-                "  --scheduler              drive the per-chunk status "
-                "scheduler the runtime uses\n"
+                "  --scheduler              drive the experimental per-chunk "
+                "status scheduler (not the production path)\n"
                 "  --stages                 print the wall-clock time of each "
                 "generation stage per batch\n"
                 "  --climate-ties           count equidistant climate-search "

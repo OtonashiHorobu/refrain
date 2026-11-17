@@ -68,6 +68,16 @@ rank_columns_by_distance(std::span<const refrain::world::chunk_pos> wanted,
                          std::span<const refrain::world::chunk_pos> centres)
     -> std::vector<refrain::world::chunk_pos>;
 
+/// Same, with the look-ahead centres as the secondary priority: the accepted
+/// viewport ranks lexicographically before the prediction, so a look-ahead
+/// column can never starve a column the client is standing in. Used by the
+/// experimental per-chunk queue, which ranks columns rather than tiles.
+[[nodiscard]] auto
+rank_columns_by_distance(std::span<const refrain::world::chunk_pos> wanted,
+                         std::span<const refrain::world::chunk_pos> accepted,
+                         std::span<const refrain::world::chunk_pos> lookahead)
+    -> std::vector<refrain::world::chunk_pos>;
+
 /// The column a full queue evicts: the farthest from the centres, greatest
 /// position on a tie. `wanted` must not be empty. Keeping the nearest columns
 /// is what lets a walking player join a queue that stale work already filled.
@@ -76,17 +86,20 @@ farthest_column(std::span<const refrain::world::chunk_pos> wanted,
                 std::span<const refrain::world::chunk_pos> centres)
     -> refrain::world::chunk_pos;
 
-/// Orders `wanted` columns by Chebyshev distance to the nearest accepted
-/// centre, then to the nearest look-ahead centre, then by position. An empty
-/// accepted-centre list ranks every column equally, so the look-ahead list and
-/// the position tie-break decide. The two lists are ranked lexicographically,
-/// not merged: a column the accepted viewport already needs beats every column
-/// only the look-ahead needs, so movement prediction can never starve the
-/// viewport the client is standing in.
+/// Orders `wanted` tiles by how soon a player at one of `accepted` centres
+/// needs them, then by how soon a player heading for one of `lookahead`
+/// centres needs them, then by the tile corner.
+///
+/// The two centre lists are ranked lexicographically, not merged: a tile the
+/// accepted viewport already needs beats every tile only the look-ahead needs,
+/// so a prediction can never starve the viewport the client is standing in.
+/// The look-ahead list is a secondary key only, which is what makes movement
+/// prediction a priority hint instead of a second viewport.
 [[nodiscard]] auto
-rank_columns_by_distance(std::span<const refrain::world::chunk_pos> wanted,
-                         std::span<const refrain::world::chunk_pos> accepted,
-                         std::span<const refrain::world::chunk_pos> lookahead)
+rank_tiles_by_distance(std::span<const refrain::world::chunk_pos> wanted,
+                       std::span<const refrain::world::chunk_pos> accepted,
+                       std::span<const refrain::world::chunk_pos> lookahead,
+                       std::int32_t tile_size)
     -> std::vector<refrain::world::chunk_pos>;
 
 /// Tuning for the credit controller.
@@ -137,34 +150,36 @@ class admission_controller {
     std::uint32_t good_samples_{0};
 };
 
-/// One requested column whose per-chunk pipeline failed.
+/// One generation task that did not produce its columns.
 ///
-/// The column is the admission and accounting unit, so a failure covers
-/// exactly one chunk: no column was produced for it. The message says why the
-/// chunk failed and is meant for the operator log.
+/// The task is the admission and accounting unit: a tile on the production
+/// path and one column on the experimental per-chunk path. `tile_size()`
+/// returns the edge the failed task covers, which is one on the per-chunk
+/// path. The message says why the task failed and is meant for the operator
+/// log.
 struct generation_failure {
-    refrain::world::chunk_pos position{};
+    refrain::world::chunk_pos tile{};
     std::string message{};
 };
 
 /// Generates world columns off the simulation thread.
 ///
-/// A fixed pool of workers runs at startup; each worker drives its own
-/// generator through the per-chunk status scheduler, so the number of threads
-/// never changes with the load. What adapts is admission: the simulation
-/// thread requests columns, the once-per-second controller sets a credit
-/// level, and `dispatch()` hands the nearest wanted columns to the scheduler
-/// only while credits, tick headroom and the client backlog allow.
+/// A fixed pool of workers runs at startup; each worker owns its own generator
+/// (a generator instance is not thread-safe), so the number of threads never
+/// changes with the load. What adapts is admission: the simulation thread
+/// requests positions, the once-per-second controller sets a credit level, and
+/// `dispatch()` hands the nearest wanted columns to the workers only while
+/// credits, tick headroom and the client backlog allow. The workers never
+/// touch the world, so the only shared state is the wanted set, the work
+/// queue, the counters and the result queue under one mutex.
 ///
-/// A requested column becomes three status jobs on one worker: terrain fills
-/// its dependency ring, decorated places the structures and runs the feature
-/// step of its three-by-three, and served copies the chunk out. The worker's
-/// cache keeps the chunks around the served one, so neighbours share their
-/// terrain and decoration across requests, and a column is served as soon as
-/// its own status dependencies are decorated instead of after a whole square
-/// of columns. The workers never touch the world, so the only shared state is
-/// the wanted set, the scheduler queues, the counters and the result queue
-/// under one mutex.
+/// The production path generates aligned tiles: a worker produces a whole
+/// `tile_size` square and the columns of one tile are adopted together. The
+/// experimental `experimental_chunk_pipeline` flag replaces the tile jobs with
+/// the per-chunk status scheduler, which serves a column as soon as its own
+/// three-by-three is decorated, at the cost of content that depends on how
+/// many workers share the sequence. The flag is off by default and the server
+/// composition never sets it.
 class chunk_generation {
   public:
     struct config {
@@ -177,15 +192,45 @@ class chunk_generation {
         /// `worker_count`, so generation does not oversubscribe the machine.
         std::uint32_t sim_threads{1};
         std::uint32_t io_threads{2};
-        /// Upper bound on wanted columns; further requests are refused so a
+        /// Upper bound on wanted tiles; further requests are refused so a
         /// burst of viewport changes cannot grow the queue without bound.
         std::size_t max_pending{512};
-        /// Proto chunks each worker's generator keeps in its pipeline cache.
-        /// The cache holds the terrain and feature writes of the chunks around
-        /// the served one; an entry is about one terrain chunk (roughly 200 KiB
-        /// at full height), so the default is a few tens of megabytes per
-        /// worker. Entries over the bound are evicted in insertion order and an
-        /// evicted chunk is regenerated from the seed on a later request.
+        /// Edge in chunks of the square one generation task produces. A tile
+        /// is filled and decorated with one ring around it before any of its
+        /// chunks is served, so cross-border feature writes land in the
+        /// chunks a client receives. The tile is also the unit the priority
+        /// queue and the admission credits count.
+        ///
+        /// A smaller tile shortens the wait for the first chunks of a join
+        /// but costs fill and decoration work per served chunk: the fill and
+        /// decoration ring is `(edge + 2) ^ 2 / edge ^ 2` times the served
+        /// area, and the structure-start scan reaches eight chunks past it.
+        /// Measured per served chunk on the development host, edge eight costs
+        /// about 0.53 of the edge-four cost and 0.24 of the edge-two cost.
+        ///
+        /// The production default stays eight for a second reason: with the
+        /// dimension's own biomes the served content is not edge neutral,
+        /// because a ring chunk's feature placement reads the terrain outside
+        /// the tile and a smaller edge brings a smaller decorated ring. Only a
+        /// fixed biome makes both edges produce the same chunk. Changing the
+        /// default therefore needs a generator change that decorates the ring
+        /// of the served square rather than of the tile, not only a latency
+        /// measurement.
+        std::int32_t tile_size{8};
+        /// EXPERIMENTAL: serve columns through the per-chunk status scheduler
+        /// instead of the production tile path. Off by default and not wired
+        /// to any server option, so a production server never enables it.
+        ///
+        /// The scheduler keeps one proto chunk cache per worker. The chunks a
+        /// worker already served decide how much of a neighbourhood is
+        /// decorated when it serves the next one, so served content can depend
+        /// on the worker count: this path is not worker-count independent yet
+        /// and is not a production replacement. It exists so the status-job
+        /// pipeline, the first-chunk latency and the remaining determinism gap
+        /// can be measured before a shared proto cache lands.
+        bool experimental_chunk_pipeline{false};
+        /// Proto chunks each worker's generator keeps when
+        /// `experimental_chunk_pipeline` is on. Ignored by the tile path.
         std::size_t proto_cache_capacity{256};
         /// Logical CPUs the generation workers pin to; empty leaves the OS
         /// default. Pinning away from the simulation and IO cores is a hint,
@@ -208,16 +253,17 @@ class chunk_generation {
                                                    std::uint32_t io_threads)
         -> std::size_t;
 
-    /// Queue one column. Returns false when the column is already wanted or in
-    /// flight, the queue is full, or generation is stopping; a column that is
-    /// already wanted is still served when it completes.
+    /// Queue one column: through its tile on the production path, or as its
+    /// own scheduler chain on the experimental path. Returns false when the
+    /// unit is already wanted or in flight, the queue is full, or generation
+    /// is stopping; the column is still served when its unit completes.
     auto request(refrain::world::chunk_pos pos) -> bool;
 
-    /// Drop one wanted column (the caller no longer needs it). A column that
-    /// was already admitted still completes.
+    /// Drop the wanted unit that contains one column (the caller no longer
+    /// needs it).
     void forget(refrain::world::chunk_pos pos);
 
-    /// Centres the dispatch ranks wanted columns by, nearest first. The
+    /// Centres the dispatch ranks wanted tiles by, nearest first. The
     /// simulation thread refreshes them from the player positions each tick.
     ///
     /// The second list is the look-ahead centre of every moving player: it is
@@ -236,22 +282,24 @@ class chunk_generation {
     /// per change and nothing otherwise.
     void update_admission(const admission_sample &sample);
 
-    /// Admit wanted columns to the scheduler while credits and tick-budget
+    /// Admit wanted work to the workers while credits and tick-budget
     /// headroom allow, nearest first. `tick_elapsed_ns` is the work the
     /// current tick already did: once it passes the headroom the tick stops
-    /// admitting. Returns the number of columns admitted.
+    /// admitting. Returns the number of tiles or columns admitted.
     auto dispatch(std::uint64_t tick_elapsed_ns) -> std::size_t;
 
-    /// Take every finished column, ordered by position so the order the world
-    /// applies them never depends on which worker finished first.
+    /// Take every column of every finished tile, ordered by position so the
+    /// order the world applies them never depends on which worker finished
+    /// first.
     [[nodiscard]] auto take_results() -> std::vector<
         std::pair<refrain::world::chunk_pos, refrain::world::chunk>>;
 
     /// Same, but at most `max_columns` columns; the rest stay queued, ordered
     /// by position, for the next call. A limit of zero takes nothing.
     ///
-    /// The caller uses this to spread finished columns over several ticks:
-    /// every adoption runs the column decode, the entity spawn and the initial
+    /// The caller uses this to spread one finished tile over several ticks: a
+    /// tile delivers up to `tile_size * tile_size` columns at once and every
+    /// adoption runs the column decode, the entity spawn and the initial
     /// light, which is the tick spike a joining client pays for. The queue is
     /// bounded by the task credits plus the columns already finished, so a
     /// slow adopter applies backpressure to admission instead of growing
@@ -259,24 +307,38 @@ class chunk_generation {
     [[nodiscard]] auto take_results(std::size_t max_columns) -> std::vector<
         std::pair<refrain::world::chunk_pos, refrain::world::chunk>>;
 
-    /// Take every column whose pipeline failed since the last call, ordered
-    /// by position. A failure produces no column; the caller tells the
-    /// streamer so it can request the position again instead of waiting for an
-    /// answer that will never arrive.
+    /// Take every task that failed since the last call, ordered by its minimum
+    /// corner. A failure produces no columns; the caller forgets the columns
+    /// the task covers so the streamer can request the position again instead
+    /// of waiting for an answer that will never arrive.
     [[nodiscard]] auto take_failures() -> std::vector<generation_failure>;
 
-    /// Columns of finished chunks the service may have queued for adoption
+    /// Columns of finished tiles the service may have queued for adoption
     /// before admission stops flattening more. The service adopts a few per
     /// tick, so without this bound a fast generator and a slow adopter could
     /// hold every column a whole credit window produced in memory. At the
-    /// bound the finished chunks stay in flight: their admission credit is not
+    /// bound the finished tiles stay in flight: their admission credit is not
     /// released, so generation pauses instead of growing the queue.
     static constexpr std::size_t max_ready_columns{8 * 64};
 
-    /// Cached proto chunks across every worker. Bounded by the configured
-    /// per-worker proto cache capacity.
+    /// Edge in chunks of the square one task covers. Failures name the
+    /// minimum corner of such a square, so a caller expands it by this edge.
+    /// The experimental per-chunk path reports an edge of one because every
+    /// task serves one column.
+    [[nodiscard]] auto tile_size() const noexcept -> std::int32_t {
+        return settings_.experimental_chunk_pipeline ? 1 : settings_.tile_size;
+    }
+
+    /// Whether the experimental per-chunk scheduler is driving generation.
+    [[nodiscard]] auto uses_chunk_pipeline() const noexcept -> bool {
+        return settings_.experimental_chunk_pipeline;
+    }
+
+    /// Cached proto chunks across the scheduler workers; zero on the tile
+    /// path because that path has no proto chunk cache.
     [[nodiscard]] auto cache_entries() const -> std::size_t;
-    /// Proto chunks evicted over the per-worker cache bounds since the start.
+
+    /// Scheduler proto cache evictions; zero on the tile path.
     [[nodiscard]] auto cache_evictions() const -> std::uint64_t;
 
     [[nodiscard]] auto credits() const -> std::size_t;
@@ -290,36 +352,46 @@ class chunk_generation {
   private:
     explicit chunk_generation(config settings);
 
-    /// One worker's run loop: wait for a scheduler job of this worker, run
-    /// it, convert a served chunk to a column and report the outcome.
+    /// One worker's run loop. The index selects the scheduler worker queue on
+    /// the experimental path and is unused by the tile path.
     void run(std::size_t worker);
 
-    /// Clear the in-flight markers of `pos` and report the failure so the
-    /// caller can ask for the column again. Runs on a worker thread.
-    void fail_task(refrain::world::chunk_pos pos, std::string message);
+    /// The experimental per-chunk scheduler loop: wait for a status job of
+    /// this worker, run it, convert a served column and report the outcome.
+    void run_pipeline(std::size_t worker);
+
+    /// Clear the in-flight markers of `origin` and report the failure so the
+    /// caller can ask for the unit again. Runs on a worker thread.
+    void fail_task(refrain::world::chunk_pos origin, std::string message);
 
     config settings_{};
     mutable std::mutex mutex_{};
     std::condition_variable wake_{};
-    /// Wanted column positions for deduplication.
+    /// The columns one finished tile produced. The tile is the admission and
+    /// accounting unit; the columns are what the world applies.
+    struct tile_result {
+        refrain::world::chunk_pos origin{};
+        std::vector<std::pair<refrain::world::chunk_pos, refrain::world::chunk>>
+            columns{};
+    };
+
+    /// Wanted tile origins, keyed by the minimum corner for deduplication.
     std::set<std::pair<std::int32_t, std::int32_t>> wanted_{};
-    /// Admitted columns the simulation has not applied yet; a column is never
-    /// admitted twice.
+    /// Admitted tiles the simulation has not applied yet, keyed by the
+    /// minimum corner; a tile is never admitted twice.
     std::set<std::pair<std::int32_t, std::int32_t>> active_{};
     std::vector<refrain::world::chunk_pos> centres_{};
     std::vector<refrain::world::chunk_pos> lookahead_centres_{};
-    /// Per-chunk status scheduler and the workers that drive it.
-    std::unique_ptr<worldgen::chunk_scheduler> scheduler_{};
-    /// Columns that finished since the last `take_results`, ordered by
-    /// position when they are flattened.
-    std::vector<std::pair<refrain::world::chunk_pos, refrain::world::chunk>>
-        finished_{};
-    /// Columns of finished chunks, ordered by position, that `take_results`
+    std::deque<refrain::world::chunk_pos> work_{};
+    std::vector<tile_result> finished_{};
+    /// Columns of finished tiles, ordered by position, that `take_results`
     /// has not handed out yet.
     std::map<std::pair<std::int32_t, std::int32_t>, refrain::world::chunk>
         ready_{};
-    /// Columns whose pipeline failed since the last `take_failures()`.
+    /// Tiles whose task failed since the last `take_failures()`.
     std::vector<generation_failure> failed_{};
+    /// Experimental per-chunk status scheduler; null on the production path.
+    std::unique_ptr<worldgen::chunk_scheduler> scheduler_{};
     std::size_t in_flight_{0};
     admission_controller admission_{};
     bool stopping_{false};
