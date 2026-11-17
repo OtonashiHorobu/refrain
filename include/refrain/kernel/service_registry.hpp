@@ -42,9 +42,12 @@ struct provider_info {
 
 /// One active provider plus the identity a caller caches for the duration of
 /// a tick. `generation` advances monotonically per `(service, instance)` slot
-/// on every committed composition epoch, so a handle from an older epoch can
-/// be told apart from the current provider without holding a pointer into the
-/// registry.
+/// whenever a new payload becomes visible there: immediately when
+/// `select_active()` replaces an active provider, or at `commit_epoch()` when a
+/// staged change is published. A handle taken before the switch is stale
+/// without the caller holding a pointer into the registry. `epoch` is the
+/// committed composition epoch the handle was read at; a commit that leaves the
+/// slot unchanged does not invalidate the handle.
 struct provider_handle {
     provider_info provider{};
     std::string instance{}; ///< resolved slot name (`default` for the reserved
@@ -134,17 +137,17 @@ class provider_lease {
 ///    `add_staged_provider()` (candidates may coexist with the running
 ///    generation, including the same service/id/version text);
 ///  - `stage_active()` / `stage_retire()` record the change without publishing
-///    it: queries still see the committed generation, so a tick that is already
+///    it: queries still see the current composition, so a tick that is already
 ///    running keeps calling a consistent implementation;
 ///  - `commit_epoch()` publishes every staged change atomically and advances
-///    the epoch once. Each slot whose payload changed gets a new generation;
-///    a slot that is retired keeps its generation counter, so a later
-///    reactivation can never reuse an older generation number.
+///    the epoch once. Each slot whose staged payload is published gets a new
+///    generation; a slot that is retired keeps its generation counter, so a
+///    later reactivation can never reuse an older generation number.
 ///
 /// Callers cache a `provider_handle` for the duration of one tick and check it
 /// with `validate()` (or take a `provider_lease` with `acquire()`) before
 /// crossing into provider code. `validate()` reports `error_code::stale` for a
-/// handle whose generation is no longer the committed one; the caller must
+/// handle whose generation is no longer the current one; the caller must
 /// re-`query()` instead of calling the retired implementation. The registry is
 /// lock-protected, so a handle never points into registry storage itself.
 ///
@@ -260,11 +263,13 @@ class service_registry {
 
     /// Publish every staged change atomically and advance the epoch once.
     ///
-    /// Returns the committed epoch. Individual slots whose payload changed get
-    /// the next generation of that slot; an immediate `select_active()` between
-    /// two commits is picked up as well, so the boot composition gets
-    /// generation 1 in the first commit. A commit with nothing to publish keeps
-    /// the epoch unchanged (`has_staged() == false`).
+    /// Returns the committed epoch. A staged slot whose payload is published
+    /// gets the next generation of that slot. For a slot published directly by
+    /// `select_active()`, the commit only assigns the first generation it has
+    /// not handed out yet, so the boot composition gets generation 1 in the
+    /// first commit. Selection changes made since the previous commit are
+    /// accounted for in the same epoch advance. A commit with nothing staged
+    /// and no such pending change keeps the epoch unchanged.
     [[nodiscard]] auto commit_epoch() -> result<std::uint64_t>;
 
     /// Committed composition epoch; zero before the first commit.
@@ -280,7 +285,7 @@ class service_registry {
     /// has no active provider. An unknown instance is simply absent: use
     /// `active_instances()` to distinguish "not active" from "typo".
     ///
-    /// The copy carries the committed generation of the slot. It is the
+    /// The copy carries the current generation of the slot. It is the
     /// weakly-checked form kept for boot/tooling callers; callers that cross a
     /// tick boundary use `query()`/`validate()` instead.
     [[nodiscard]] auto active_provider(std::string_view service,
@@ -293,9 +298,9 @@ class service_registry {
                              std::string_view instance = {}) const
         -> result<provider_handle>;
 
-    /// Check a cached handle against the committed composition: success when it
+    /// Check a cached handle against the current composition: success when it
     /// is the current generation, `error_code::stale` when the slot was
-    /// replaced/retired (or is quiescing), `not_found` when it is absent.
+    /// replaced or retired, is quiescing, or no longer exists.
     [[nodiscard]] auto validate(const provider_handle &handle) const -> status;
 
     /// Staged decision for one slot: `true` when an activation is staged,
@@ -314,8 +319,9 @@ class service_registry {
                            std::string_view instance = {}) const
         -> std::optional<provider_info>;
 
-    /// Committed generation of `(service, instance)`, or nullopt when the slot
-    /// has never been committed.
+    /// Current generation of the active provider for `(service, instance)`, or
+    /// nullopt when the slot has no active provider. A slot whose initial
+    /// composition has not been committed yet reports generation zero.
     [[nodiscard]] auto generation(std::string_view service,
                                   std::string_view instance = {}) const
         -> std::optional<std::uint64_t>;
@@ -360,12 +366,13 @@ class service_registry {
     [[nodiscard]] auto resume(std::string_view service,
                               std::string_view instance = {}) -> status;
 
-    /// Take an in-flight lease for the current committed generation of the
-    /// slot. Fails with `stale` when the slot is quiescing.
+    /// Take an in-flight lease for the current generation of the slot. Fails
+    /// with `stale` when the slot is quiescing.
     [[nodiscard]] auto acquire(std::string_view service,
                                std::string_view instance = {}) const
         -> result<provider_lease>;
-    /// Lease for a validated handle; `stale`/`not_found` as `validate()`.
+    /// Lease for a validated handle; fails with `stale` exactly when
+    /// `validate()` does.
     [[nodiscard]] auto acquire(const provider_handle &handle) const
         -> result<provider_lease>;
 
@@ -380,7 +387,7 @@ class service_registry {
     [[nodiscard]] auto drain(std::string_view service,
                              std::chrono::milliseconds timeout) const -> status;
 
-    /// Outstanding leases of the committed generation of a slot.
+    /// Outstanding leases of the current generation of a slot.
     [[nodiscard]] auto in_flight(std::string_view service,
                                  std::string_view instance = {}) const
         -> std::uint64_t;
@@ -449,7 +456,9 @@ class service_registry {
     /// slot cannot reuse an older generation number.
     std::map<active_key, std::uint64_t> slot_generations_{};
     staged_map staged_{};
-    /// Immediate `select_active()` updates waiting for their generation bump.
+    /// Slots published by an immediate `select_active()` that the next commit
+    /// has to account for: it stamps a slot's first generation and advances the
+    /// epoch.
     std::set<active_key> dirty_{};
     std::set<active_key> quiescing_{};
     std::set<std::string, std::less<>> sealed_services_{};

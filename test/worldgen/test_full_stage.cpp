@@ -603,16 +603,6 @@ void run_full_stage_case(std::string_view prefix,
                 }
             }
         }
-        if (std::getenv("REFRAIN_MANSION_DEBUG") != nullptr) {
-            for (const auto &neighbour : neighbours) {
-                if (neighbour->chunk_x() == 47 && neighbour->chunk_z() == 5) {
-                    std::fprintf(
-                        stderr, "mansion east %s\n",
-                        std::string{states.name(neighbour->state_at(0, 85, 2))}
-                            .c_str());
-                }
-            }
-        }
         structure::refresh_chunk_shapes(chunk, region_view, states);
     }
     const auto comparison = compare_chunks(chunk, *reference, *document,

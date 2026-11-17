@@ -130,9 +130,9 @@ def check_g3_g4_g5():
 
 def conanfile_requirements():
     """Package names required by the top-level conanfile.py with *default*
-    options (e.g. `spdlog`). Requirements behind an option that defaults to
-    False (the deferred `steam-audio` client stack) are not part of the locked
-    graph, so they are skipped."""
+    options (e.g. `spdlog`). A requirement behind an option (e.g. `crashpad`
+    under `with_crashpad`) counts only when the default options enable that
+    option, so the result is the requirement closure the lockfile pins."""
     path = os.path.join(ROOT, "conanfile.py")
     tree = ast.parse(open(path, encoding="utf-8").read())
 
