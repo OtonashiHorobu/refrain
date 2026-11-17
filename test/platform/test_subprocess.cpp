@@ -9,7 +9,10 @@
 //
 // The test picks its command interpreter at runtime instead of branching on a
 // platform macro, so it stays inside the platform abstraction guard: the two
-// backends are told apart by the executable suffix.
+// backends are told apart by the executable suffix. The one exception is the
+// Windows-only quoting round-trip at the end, which reads the private quoting
+// header and calls `CommandLineToArgvW` directly; the platform guard allow-list
+// names this file for that arm.
 
 #include <refrain/platform/process.hpp>
 #include <refrain/platform/subprocess.hpp>
@@ -18,6 +21,7 @@
 
 #include <boost/ut.hpp>
 
+#include <array>
 #include <atomic>
 #include <cstddef>
 #include <filesystem>
@@ -26,6 +30,20 @@
 #include <string_view>
 #include <thread>
 #include <vector>
+
+#if defined(_WIN32)
+// White-box test of the Win32 command-line quoting (see the allow-list entry in
+// tools/platform_check.py): prove that the command line `run_process` builds
+// means the caller's arguments to the child, so the test reads the private
+// quoting header and runs its output back through `CommandLineToArgvW`, the
+// parser the child's runtime uses.
+#include <windows.h>
+
+#include <shellapi.h>
+
+#include "../../src/platform/windows/argument_quoting.hpp"
+
+#endif
 
 namespace {
 
@@ -69,6 +87,72 @@ struct invocation {
     return on_windows() ? "if exist marker.txt (exit 0) else (exit 1)"
                         : "test -f marker.txt";
 }
+
+#if defined(_WIN32)
+/// UTF-8 -> UTF-16 for the command-line parser.
+[[nodiscard]] auto to_wide(std::string_view text) -> std::wstring {
+    if (text.empty()) {
+        return {};
+    }
+    const auto size{::MultiByteToWideChar(
+        CP_UTF8, 0, text.data(), static_cast<int>(text.size()), nullptr, 0)};
+    if (size <= 0) {
+        return {};
+    }
+    std::wstring wide(static_cast<std::size_t>(size), L'\0');
+    if (::MultiByteToWideChar(CP_UTF8, 0, text.data(),
+                              static_cast<int>(text.size()), wide.data(),
+                              size) != size) {
+        return {};
+    }
+    return wide;
+}
+
+/// UTF-16 -> UTF-8 for comparison with the input argument.
+[[nodiscard]] auto to_utf8(std::wstring_view text) -> std::string {
+    if (text.empty()) {
+        return {};
+    }
+    const auto size{::WideCharToMultiByte(CP_UTF8, 0, text.data(),
+                                          static_cast<int>(text.size()),
+                                          nullptr, 0, nullptr, nullptr)};
+    if (size <= 0) {
+        return {};
+    }
+    std::string utf8(static_cast<std::size_t>(size), '\0');
+    if (::WideCharToMultiByte(CP_UTF8, 0, text.data(),
+                              static_cast<int>(text.size()), utf8.data(), size,
+                              nullptr, nullptr) != size) {
+        return {};
+    }
+    return utf8;
+}
+
+/// Split `command_line` the way the child's C runtime does.
+[[nodiscard]] auto split_command_line(std::string_view command_line)
+    -> std::vector<std::string> {
+    const auto wide{to_wide(command_line)};
+    int count{0};
+    wchar_t **arguments{::CommandLineToArgvW(wide.c_str(), &count)};
+    if (arguments == nullptr) {
+        return {};
+    }
+    std::vector<std::string> split{};
+    split.reserve(static_cast<std::size_t>(count));
+    for (auto index{0}; index < count; ++index) {
+        split.push_back(to_utf8(arguments[index]));
+    }
+    ::LocalFree(arguments);
+    return split;
+}
+
+/// Command line with a dummy program name, so the argument under test is
+/// parsed with the ordinary argument rules rather than the argv[0] special
+/// case.
+[[nodiscard]] auto probe_line(std::string_view argument) -> std::string {
+    return "probe " + platform::windows_detail::quote_argument(argument);
+}
+#endif
 
 [[nodiscard]] auto run(const invocation &command)
     -> refrain::result<platform::subprocess_result> {
@@ -223,4 +307,61 @@ suite<"platform/subprocess"> subprocess_tests = [] {
             thread.join();
         }
     };
+
+#if defined(_WIN32)
+    "platform/subprocess: a quoted argument round-trips through "
+    "CommandLineToArgvW"_test = [] {
+        // The cases the escape-only quoting got wrong: a trailing backslash
+        // swallows the closing quote, a quote after backslashes needs the
+        // odd/even rule, and empty or whitespace arguments need delimiters.
+        const std::array<std::string, 18> arguments{{
+            "",
+            "plain",
+            "with space",
+            "with\ttab",
+            "trailing\\",
+            "C:\\out dir\\",
+            "C:\\out dir\\\\",
+            "\\",
+            "\\\\",
+            "\"",
+            "embedded\"quote",
+            "a\\\"b",
+            "two \"quoted\" words",
+            "back\\slash\\",
+            "\\\\server\\share\\dir\\",
+            "trailing space ",
+            " leading space",
+            "quote\\\"at end",
+        }};
+        for (const auto &argument : arguments) {
+            const auto line{probe_line(argument)};
+            const auto split{split_command_line(line)};
+            expect(split.size() == 2U)
+                << ("not one argument after the program: " + line);
+            if (split.size() == 2U) {
+                expect(split[1] == argument) << line;
+            }
+        }
+        // Argument boundaries survive: the child receives three arguments
+        // rather than a merged tail.
+        std::string line{"probe"};
+        const std::array<std::string, 3> many{{
+            "C:\\out dir\\",
+            "a\"b",
+            "",
+        }};
+        for (const auto &argument : many) {
+            line += ' ';
+            line += platform::windows_detail::quote_argument(argument);
+        }
+        const auto split{split_command_line(line)};
+        expect(split.size() == many.size() + 1);
+        if (split.size() == many.size() + 1) {
+            for (std::size_t index{0}; index < many.size(); ++index) {
+                expect(split[index + 1] == many[index]);
+            }
+        }
+    };
+#endif
 };

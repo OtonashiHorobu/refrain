@@ -9,9 +9,11 @@
 
 #include <boost/ut.hpp>
 
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <vector>
 
 #if !defined(_WIN32)
 // White-box POSIX test of the platform layer itself (see the allow-list entry
@@ -20,6 +22,14 @@
 #include <sys/resource.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#else
+// White-box Windows test of the liveness probe: the access-denied arm needs a
+// real process object with a restricted DACL. The same allow-list entry covers
+// this arm.
+#include <windows.h>
+
+#include <aclapi.h>
+#include <sddl.h>
 #endif
 
 namespace {
@@ -33,10 +43,116 @@ auto read_text(const fs::path &path) -> std::string {
                        std::istreambuf_iterator<char>{}};
 }
 
+#if defined(_WIN32)
+/// Deny `PROCESS_QUERY_LIMITED_INFORMATION` on `process` to the current user.
+///
+/// A normal token then gets `ERROR_ACCESS_DENIED` from `OpenProcess`, the same
+/// answer a process of another account gives; a token that holds
+/// SeDebugPrivilege bypasses the DACL, which the caller detects by opening the
+/// child again.
+[[nodiscard]] auto deny_query_access(HANDLE process) -> bool {
+    static_assert(PROCESS_QUERY_LIMITED_INFORMATION == 0x1000,
+                  "the SDDL access mask below is PROCESS_QUERY_LIMITED_"
+                  "INFORMATION");
+    HANDLE token{nullptr};
+    if (::OpenProcessToken(::GetCurrentProcess(), TOKEN_QUERY, &token) == 0) {
+        return false;
+    }
+    DWORD size{0};
+    static_cast<void>(
+        ::GetTokenInformation(token, TokenUser, nullptr, 0, &size));
+    // The TOKEN_USER record starts with a pointer, so the buffer needs pointer
+    // alignment (a byte vector would not guarantee it).
+    std::vector<std::uint64_t> buffer((size + sizeof(std::uint64_t) - 1U) /
+                                      sizeof(std::uint64_t));
+    const bool read_user{size > 0 &&
+                         ::GetTokenInformation(token, TokenUser, buffer.data(),
+                                               size, &size) != 0};
+    ::CloseHandle(token);
+    if (!read_user) {
+        return false;
+    }
+    const auto *user{reinterpret_cast<const TOKEN_USER *>(buffer.data())};
+    LPWSTR sid_text{nullptr};
+    if (::ConvertSidToStringSidW(user->User.Sid, &sid_text) == 0) {
+        return false;
+    }
+    const std::wstring sddl{std::wstring{L"D:(D;;0x1000;;;"} + sid_text + L")"};
+    ::LocalFree(sid_text);
+    PSECURITY_DESCRIPTOR descriptor{nullptr};
+    if (::ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            sddl.c_str(), SDDL_REVISION_1, &descriptor, nullptr) == 0) {
+        return false;
+    }
+    BOOL present{FALSE};
+    PACL dacl{nullptr};
+    BOOL defaulted{FALSE};
+    const bool has_dacl{::GetSecurityDescriptorDacl(descriptor, &present, &dacl,
+                                                    &defaulted) != 0 &&
+                        present == TRUE};
+    const DWORD set_error{::SetSecurityInfo(process, SE_KERNEL_OBJECT,
+                                            DACL_SECURITY_INFORMATION, nullptr,
+                                            nullptr, dacl, nullptr)};
+    const bool applied{has_dacl &&
+                       set_error == static_cast<DWORD>(ERROR_SUCCESS)};
+    ::LocalFree(descriptor);
+    return applied;
+}
+#endif
+
 suite<"platform/process"> process_tests = [] {
     "platform/process: process_id is non-zero"_test = [] {
         expect(refrain::platform::process_id() > 0U);
     };
+
+    "platform/process: the running process is alive and an unused id is dead"_test =
+        [] {
+            expect(refrain::platform::process_alive(
+                refrain::platform::process_id()));
+            // A valid pid value far outside either platform's allocator: no
+            // process owns it, and the early range checks do not apply.
+            expect(
+                !refrain::platform::process_alive(std::uint64_t{0x7FFFFFF0U}));
+        };
+
+#if defined(_WIN32)
+    "platform/process: an inaccessible live process counts as alive"_test = [] {
+        // Spawn a child long enough to be probed, then deny this user
+        // PROCESS_QUERY_LIMITED_INFORMATION on its process object. A normal
+        // token then gets ERROR_ACCESS_DENIED from OpenProcess, and the probe
+        // must report the child alive, like POSIX EPERM.
+        std::wstring command{L"cmd.exe /c ping -n 30 127.0.0.1 > nul"};
+        STARTUPINFOW startup{};
+        startup.cb = sizeof(startup);
+        PROCESS_INFORMATION child{};
+        if (::CreateProcessW(nullptr, command.data(), nullptr, nullptr, FALSE,
+                             CREATE_NO_WINDOW, nullptr, nullptr, &startup,
+                             &child) == 0) {
+            expect(true) << "SKIPPED: cannot spawn the liveness probe child";
+            return;
+        }
+        const bool denied{deny_query_access(child.hProcess)};
+        const HANDLE reopened{::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,
+                                            FALSE, child.dwProcessId)};
+        const DWORD open_error{reopened == nullptr ? ::GetLastError() : 0U};
+        if (reopened != nullptr) {
+            // The token holds SeDebugPrivilege (or the DACL change did not take
+            // effect), so the access-denied arm does not apply.
+            ::CloseHandle(reopened);
+        } else {
+            expect(denied) << "the process DACL could not be restricted";
+            if (denied) {
+                expect(open_error == ERROR_ACCESS_DENIED);
+                expect(refrain::platform::process_alive(child.dwProcessId))
+                    << "an access-denied live process must count as alive";
+            }
+        }
+        static_cast<void>(::TerminateProcess(child.hProcess, 0));
+        static_cast<void>(::WaitForSingleObject(child.hProcess, INFINITE));
+        ::CloseHandle(child.hThread);
+        ::CloseHandle(child.hProcess);
+    };
+#endif
 
     "platform/process: executable_path names the binary being run"_test = [] {
         const auto path = refrain::platform::executable_path();

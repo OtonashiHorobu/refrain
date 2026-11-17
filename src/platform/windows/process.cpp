@@ -341,8 +341,11 @@ auto executable_path() -> result<std::string> {
 
 auto process_alive(std::uint64_t pid) noexcept -> bool {
     // PROCESS_QUERY_LIMITED_INFORMATION works for processes of other users on
-    // Vista+; a null handle means "no such process" (or no access, in which
-    // case the caller's mtime fallback still applies).
+    // Vista+. A pid that names no process is reported as an invalid parameter;
+    // any other failure means a process exists that this caller may not open
+    // (another account, the System process, a protected process), and the
+    // liveness probe must then count it as alive, matching the POSIX EPERM
+    // policy. Never read liveness off a handle that was not opened.
     if (pid == 0U ||
         pid > static_cast<std::uint64_t>(std::numeric_limits<DWORD>::max())) {
         return false;
@@ -350,7 +353,7 @@ auto process_alive(std::uint64_t pid) noexcept -> bool {
     HANDLE handle = ::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE,
                                   static_cast<DWORD>(pid));
     if (handle == nullptr) {
-        return false;
+        return ::GetLastError() != ERROR_INVALID_PARAMETER;
     }
     DWORD exit_code{0};
     const bool alive{::GetExitCodeProcess(handle, &exit_code) != 0 &&
