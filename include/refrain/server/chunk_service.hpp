@@ -18,11 +18,11 @@
 // resident columns in ascending position order, so a replay unloads the same
 // set at the same ticks.
 //
-// A finished generation tile is adopted over several ticks. Each adoption runs
-// the column decode, the entity spawn and the column's initial light, so
-// inserting a whole tile at once is a tick spike, and a joining client already
-// waits for a whole tile to generate. The adoption budget spreads the
-// remaining cost without changing the order the world applies the columns.
+// Finished generation columns are adopted over several ticks. Each adoption
+// runs the column decode, the entity spawn and the column's initial light, so
+// a burst of columns from several workers would be a tick spike. The adoption
+// budget spreads the cost without changing the order the world applies the
+// columns.
 
 #pragma once
 
@@ -74,18 +74,19 @@ class chunk_service {
         attach(gateway, source, chunk_streamer::backlog_limits{});
     }
 
-    /// Columns one tick may adopt from the generator. A finished tile of the
-    /// production edge delivers 64 columns at once, and one adoption spends
-    /// the column decode, its entity spawn and its initial light; the budget
-    /// is the measured share of a 50 ms tick that keeps a tile burst from
-    /// turning into a long tick while a joining client still sees its first
-    /// ring within a few ticks. The remainder stays queued, in position order,
-    /// for the next tick.
+    /// Columns one tick may adopt from the generator. Each worker serves its
+    /// own chunks as soon as their status dependencies complete, so a join can
+    /// deliver several columns in the same tick; one adoption spends the
+    /// column decode, its entity spawn and its initial light, and the budget
+    /// is the measured share of a 50 ms tick that keeps a burst from turning
+    /// into a long tick while a joining client still sees its first ring within
+    /// a few ticks. The remainder stays queued, in position order, for the
+    /// next tick.
     static constexpr std::size_t max_adopted_columns_per_tick{8};
 
     /// Queue generated columns for adoption. The tick drains the queue through
     /// the adoption budget; the generator result path calls this, and a test
-    /// can feed a synthetic tile result through the same seam.
+    /// can feed a synthetic result through the same seam.
     void queue_generated(
         std::vector<
             std::pair<refrain::sim::chunk_pos, refrain::sim::storage_chunk>>
@@ -160,8 +161,8 @@ class chunk_service {
     /// adopted.
     auto adopt_generated(world_port &world) -> std::size_t;
 
-    /// Tell the streamer about every tile whose task failed, so the columns are
-    /// requested again instead of staying in flight forever.
+    /// Tell the streamer about every column whose pipeline failed, so the
+    /// column is requested again instead of staying in flight forever.
     void apply_generation_failures();
 
     /// Pin the columns of every current viewport, release the pins of columns
@@ -207,14 +208,17 @@ class chunk_service {
     /// Columns pinned on behalf of the current viewports, one ticket each.
     std::set<sim::chunk_pos, chunk_order> view_tickets_{};
     /// Dirty columns one residency pass may flush. A batch larger than this
-    /// stays resident for the next pass, which keeps a tile arriving from
-    /// turning into a long tick; the generation rate is below the bound, so the
-    /// backlog drains instead of growing.
+    /// stays resident for the next pass, which keeps a generation burst from
+    /// turning into a long tick; the generation rate is below the bound, so
+    /// the backlog drains instead of growing.
     static constexpr std::size_t max_dirty_unloads_per_tick{4};
     residency_stats residency_{};
     /// The last failure message that reached the operator log; repeated
     /// messages stay at debug so a broken generator cannot flood the log.
     std::string logged_failure_message_{};
+    /// Set once a worker proto cache evicted an entry, so the operator learns
+    /// that a chunk lost the neighbour feature writes it had accumulated.
+    bool cache_eviction_reported_{false};
     std::function<void()> unload_barrier_{};
     /// Entity source bound before `attach()`; applied to the streamer when it
     /// is created.

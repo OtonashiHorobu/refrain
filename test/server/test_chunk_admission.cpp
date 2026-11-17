@@ -22,7 +22,6 @@ using refrain::server::admission_reason;
 using refrain::server::admission_sample;
 using refrain::server::farthest_column;
 using refrain::server::rank_columns_by_distance;
-using refrain::server::rank_tiles_by_distance;
 using refrain::server::to_string;
 using refrain::world::chunk_pos;
 
@@ -192,7 +191,7 @@ suite<"server/chunk-admission"> admission_priority_tests = [] {
     "server/admission ranks columns by distance then position"_test = [] {
         const std::vector<chunk_pos> wanted{{5, 0}, {1, 0}, {3, 0}, {-2, 0}};
         const std::vector<chunk_pos> centres{{0, 0}};
-        const auto ordered{rank_columns_by_distance(wanted, centres)};
+        const auto ordered{rank_columns_by_distance(wanted, centres, {})};
         expect(ordered.size() == wanted.size());
         expect(ordered[0] == chunk_pos{1, 0});
         expect(ordered[1] == chunk_pos{-2, 0});
@@ -203,7 +202,7 @@ suite<"server/chunk-admission"> admission_priority_tests = [] {
     "server/admission measures to the nearest centre"_test = [] {
         const std::vector<chunk_pos> wanted{{200, 200}, {1, 0}};
         const std::vector<chunk_pos> centres{{100, 100}, {0, 0}};
-        const auto ordered{rank_columns_by_distance(wanted, centres)};
+        const auto ordered{rank_columns_by_distance(wanted, centres, {})};
         expect(ordered.size() == 2U);
         expect(ordered[0] == chunk_pos{1, 0});
         expect(ordered[1] == chunk_pos{200, 200});
@@ -211,7 +210,7 @@ suite<"server/chunk-admission"> admission_priority_tests = [] {
 
     "server/admission keeps the position order with no centre"_test = [] {
         const std::vector<chunk_pos> wanted{{2, 1}, {-1, 4}, {-1, -3}};
-        const auto ordered{rank_columns_by_distance(wanted, {})};
+        const auto ordered{rank_columns_by_distance(wanted, {}, {})};
         expect(ordered.size() == 3U);
         expect(ordered[0] == chunk_pos{-1, -3});
         expect(ordered[1] == chunk_pos{-1, 4});
@@ -234,14 +233,14 @@ suite<"server/chunk-admission"> admission_priority_tests = [] {
 
     "server/admission handles an empty wanted set"_test = [] {
         const std::vector<chunk_pos> centres{{0, 0}};
-        expect(rank_columns_by_distance({}, centres).empty());
-        expect(rank_columns_by_distance({}, {}).empty());
+        expect(rank_columns_by_distance({}, centres, {}).empty());
+        expect(rank_columns_by_distance({}, {}, {}).empty());
     };
 
     "server/admission keeps every wanted column"_test = [] {
         const std::vector<chunk_pos> wanted{{-3, 2}, {7, -7}, {0, 0}, {1, 1}};
         const std::vector<chunk_pos> centres{{1, 1}, {-2, -2}};
-        const auto ordered{rank_columns_by_distance(wanted, centres)};
+        const auto ordered{rank_columns_by_distance(wanted, centres, {})};
         expect(ordered.size() == wanted.size());
         expect(ordered[0] == chunk_pos{1, 1});
         expect(ordered[1] == chunk_pos{0, 0});
@@ -250,67 +249,58 @@ suite<"server/chunk-admission"> admission_priority_tests = [] {
     };
 };
 
-suite<"server/chunk-admission"> admission_tile_priority_tests = [] {
-    "server/admission ranks accepted tiles before look-ahead tiles"_test = [] {
-        // The player stands at chunk 0; the look-ahead is ten chunks east.
-        // Tile (8, 0) is near the look-ahead but far from the player, and
-        // tile (16, 0) is farther still. The accepted centre decides first:
-        // pre-generation is a hint, never a second viewport, so a tile the
-        // player can already ask for must not wait behind a predicted one.
-        const std::vector<chunk_pos> wanted{{16, 0}, {8, 0}};
-        const std::vector<chunk_pos> accepted{{0, 0}};
-        const std::vector<chunk_pos> lookahead{{10, 0}};
-        const auto ordered{
-            rank_tiles_by_distance(wanted, accepted, lookahead, 8)};
-        expect(ordered.size() == 2U);
-        expect(ordered[0] == chunk_pos{8, 0});
-        expect(ordered[1] == chunk_pos{16, 0});
-    };
+suite<"server/chunk-admission"> admission_lookahead_priority_tests = [] {
+    "server/admission ranks the accepted viewport before the look-ahead"_test =
+        [] {
+            // The player stands at chunk 0 and is heading twenty chunks east.
+            // Chunk (20, 0) is near the look-ahead but far from the player,
+            // and chunk (2, 0) is the opposite way. The accepted centre
+            // decides first: pre-generation is a hint, never a second
+            // viewport, so a chunk the player can already ask for must not
+            // wait behind a predicted one.
+            const std::vector<chunk_pos> wanted{{20, 0}, {2, 0}};
+            const std::vector<chunk_pos> accepted{{0, 0}};
+            const std::vector<chunk_pos> lookahead{{20, 0}};
+            const auto ordered{
+                rank_columns_by_distance(wanted, accepted, lookahead)};
+            expect(ordered.size() == 2U);
+            expect(ordered[0] == chunk_pos{2, 0});
+            expect(ordered[1] == chunk_pos{20, 0});
+        };
 
     "server/admission breaks an accepted tie with the look-ahead centre"_test =
         [] {
-            // The accepted centre sits on the border of two tiles, so both
-            // have distance zero. The look-ahead centre is inside the eastern
-            // one, which must be dispatched first.
+            // Two chunks are equally far from the accepted centre. The one
+            // the moving player is heading for must be dispatched first.
             const std::vector<chunk_pos> wanted{{8, 0}, {16, 0}};
-            const std::vector<chunk_pos> accepted{{16, 0}};
-            const std::vector<chunk_pos> lookahead{{20, 0}};
+            const std::vector<chunk_pos> accepted{{12, 0}};
+            const std::vector<chunk_pos> lookahead{{16, 0}};
             const auto ordered{
-                rank_tiles_by_distance(wanted, accepted, lookahead, 8)};
+                rank_columns_by_distance(wanted, accepted, lookahead)};
             expect(ordered.size() == 2U);
             expect(ordered[0] == chunk_pos{16, 0});
             expect(ordered[1] == chunk_pos{8, 0});
         };
 
-    "server/admission keeps the corner order without a look-ahead centre"_test =
+    "server/admission keeps the position order without a look-ahead centre"_test =
         [] {
             const std::vector<chunk_pos> wanted{{8, 0}, {0, 0}, {-8, 0}};
             const std::vector<chunk_pos> accepted{{0, 0}};
-            const auto ordered{rank_tiles_by_distance(wanted, accepted, {}, 8)};
+            const auto ordered{rank_columns_by_distance(wanted, accepted, {})};
             expect(ordered.size() == 3U);
-            // All three tiles are distance zero or one from the centre; the
-            // tie-break is the tile corner, as it was before prediction.
+            // Distances 8, 0 and 8; the position breaks the tie.
             expect(ordered[0] == chunk_pos{0, 0});
             expect(ordered[1] == chunk_pos{-8, 0});
             expect(ordered[2] == chunk_pos{8, 0});
         };
 
-    "server/admission names a look-ahead tile by its whole tile square"_test =
-        [] {
-            // A centre inside the tile makes the distance zero no matter where
-            // in the tile it stands, which is why the look-ahead is a whole
-            // tile hint rather than a column hint.
-            const std::vector<chunk_pos> wanted{{32, 32}};
-            const std::vector<chunk_pos> accepted{{0, 0}};
-            const std::vector<chunk_pos> lookahead{{36, 36}};
-            const auto ordered{
-                rank_tiles_by_distance(wanted, accepted, lookahead, 8)};
-            expect(ordered.size() == 1U);
-            expect(ordered[0] == chunk_pos{32, 32});
-            const auto far_ordered{
-                rank_tiles_by_distance(wanted, accepted, {}, 8)};
-            expect(far_ordered == ordered);
-        };
+    "server/admission ignores an empty look-ahead list"_test = [] {
+        const std::vector<chunk_pos> wanted{{32, 32}};
+        const std::vector<chunk_pos> accepted{{0, 0}};
+        const auto ordered{rank_columns_by_distance(wanted, accepted, {})};
+        expect(ordered.size() == 1U);
+        expect(ordered[0] == chunk_pos{32, 32});
+    };
 };
 
 } // namespace

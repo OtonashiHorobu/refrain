@@ -285,8 +285,9 @@ cmake --build build/bench --target refrain-bench-runtime refrain-bench-light
 `refrain-bench-light` measures the light engine through its own counters
 (`sim::light_engine::stats()`) instead of timing a benchmark body from the
 outside. It generates a deterministic square of overworld columns with the
-production chunk generator, adopts the columns into a fresh in-memory world in
-ascending position order, and then runs a deterministic block-edit storm. The
+chunk generator through the tile reference path, adopts the columns into a
+fresh in-memory world in ascending position order, and then runs a
+deterministic block-edit storm. The
 data comes from the same extracted datapack the runtime generator benchmark
 uses; without it the binary prints a skip line and exits successfully.
 
@@ -295,10 +296,10 @@ REFRAIN_VANILLA_WORLDGEN=content/vanilla/26.3/data \
     build/Release/bin/refrain-bench-light --chunks 64 --edits 8 --repeat 3
 ```
 
-`--chunks` is rounded up to the nearest square because the production
-generator works on square tiles: `--chunks 64` is one 8×8 tile. The tile edge
-is 8 chunks, the production unit; a smaller `--tile-size` makes a smoke run
-cheaper but makes the chunk-ready numbers less representative.
+`--chunks` is rounded up to the nearest square because the tile reference path
+works on square tiles: `--chunks 64` is one 8×8 tile. The tile edge is 8
+chunks; a smaller `--tile-size` makes a smoke run cheaper but makes the
+chunk-ready numbers less representative of a cold viewport.
 
 | Option | Effect |
 |---|---|
@@ -307,7 +308,7 @@ cheaper but makes the chunk-ready numbers less representative.
 | `--templates-root` | structure templates; defaults to `REFRAIN_VANILLA_STRUCTURES` |
 | `--biome` | fixed biome; empty (default) runs the dimension's biome source like a production world |
 | `--chunks` | columns to generate and adopt, rounded up to a square (default 64) |
-| `--tile-size` | generator tile edge in chunks (default 8, the production unit) |
+| `--tile-size` | reference tile edge in chunks (default 8) |
 | `--edits` | torch place/break edits per column (default 8) |
 | `--repeat` | workload repeats, each on a fresh world (default 1) |
 | `--target` | `full` (default, the served chunk path) or `terrain` |

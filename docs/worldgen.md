@@ -315,73 +315,50 @@ attaches one more terrain ring for the chunks every decoration reads.
 column reads and writes the chunks those dependency rings generated, so the
 chunk that a saved reference world contains depends on this order.
 
-### Tile generation
+### Tile reference path
 
-The production path generates a tile at a time instead of a chunk at a time.
 `chunk_generator::generate_tile` produces the `tile_size` by `tile_size`
 square whose minimum corner is the given origin and returns only that square;
-`generate_area_tiled` covers an arbitrary chunk rectangle with whole
-aligned tiles and returns the requested chunks. The tile and one ring around it
-are decorated in force-load order, each chunk with its own position and its own
-candidate-biome plan, and the writes land in the ring. The terrain fill adds one
-further ring, because a features step reads its own three-by-three. A served
-chunk therefore contains exactly the feature writes its eight neighbours make
-across its border, which is what a saved reference world contains and what a
-vanilla client expects to see.
+`generate_area_tiled` covers an arbitrary chunk rectangle with whole aligned
+tiles. The tile and one ring around it are decorated in force-load order, each
+chunk with its own position and its own candidate-biome plan, and the writes
+land in the ring. The terrain fill adds one further ring, because a features
+step reads its own three-by-three. A served chunk therefore contains exactly
+the feature writes its eight neighbours make across its border.
 
-The extra work per served chunk is `(N+2)^2 / N^2` for decoration and
-`(N+4)^2 / N^2` for terrain, rather than the nine-times decoration cost of
-staging every neighbour through a separate single-chunk generation; a larger
-tile amortises the rings better but delays the first chunk of the tile, so the
-edge is a trade-off between throughput and latency. The tile is also the unit
-the runtime's distance-priority queue and admission credits count: a worker
-generates one tile, the nearest chunks of a requested column are served as
-part of their tile, and a chunk is never generated without its neighbours'
-decoration.
+This path is a reference and benchmark tool, not the production generation
+path: it reproduces a saved reference world whose area was force-loaded tile by
+tile. The production server generates chunks through the per-chunk status
+scheduler described below, which has no tile envelope, so a tile edge can never
+select the content a client receives.
 
-One object owns the block state registry and its tags, the dimension profile,
-the biome source, the surface rule state, the loaded carvers' runtime objects,
-the feature registry, the structure data and template manager, and the terrain
-engine. The immutable half of the datapack load — noise settings and their
-density documents, material rule documents, climates, noise functions, block
-tags, carvers, the feature data set and per-step plan, and the structure data —
-is loaded once by `create` and shared by reference with every worker of a
-batch. A worker keeps only its mutable state: the block state registry, the
-multi-noise search, the template cache and the start-probe caches.
+### Per-chunk status scheduler
 
-The stages run in the order the full-stage oracle uses. Structure starts are
-resolved before fill because their terrain adaptation reaches the fill through
-the beardifier; the start and reference records are written to the chunk after
-the terrain stages. Targets that include structures or features fill the
-target chunk and its eight neighbours; pieces of the target chunk's starts are
-clipped into the owner and the neighbours so the fence, wall and stair repair
-sees the complete building, and feature decoration runs last through the same
-region. The final heightmaps are primed in one top-down pass per column when
-the terrain status is reached and updated by every piece and feature write, so
-they cover the finished chunk.
+The production generation path serves one chunk at a time from a per-worker
+proto chunk cache. `worldgen::chunk_scheduler` owns one `chunk_generator` per
+worker and a queue of per-chunk status jobs. A requested chunk becomes three
+jobs, always on the same worker and always in this order:
 
-### Per-chunk status pipeline
+- `terrain` fills the five-by-five terrain ring and the structure starts of the
+  radius-eight reference window;
+- `decorated` places the structure pieces of the three-by-three, repairs the
+  shape of the chunk and runs the feature step of the three-by-three in
+  ascending x then z order;
+- `served` copies the chunk out at the configured target status and seals it.
 
-A second generation path serves one chunk at a time from a per-generator proto
-chunk cache. `chunk_generator::generate_chunk` materialises the requested chunk,
-the eight neighbours whose feature writes cross into it, and one further terrain
-ring, then returns a copy of the requested chunk at the configured target
-status. `generate_chunk_area` serves a rectangle in ascending x then z order.
-Both entry points are additive: `generate`, `generate_tile` and
-`generate_area_tiled` keep their own path, and the runtime does not use the
-pipeline.
+A chunk is therefore served as soon as its own dependencies are decorated; it
+does not wait for the other chunks of a rectangle or of a tile. The worker keeps
+the cache between jobs, so the terrain and neighbour writes around the served
+chunk are shared by later requests instead of being regenerated.
 
 The cache holds the chunks one worker touched, keyed by chunk position, and
-records two stages. A chunk at `terrain` has its biomes, fill, surface, carvers
-and final heightmaps. A chunk at `decorated` has additionally placed its
+records the stage of each: a chunk at `terrain` has its biomes, fill, surface,
+carvers and final heightmaps; a chunk at `decorated` has additionally placed its
 structure pieces and run its feature step. A served chunk is sealed: later
 decorations read it and their writes into it are dropped, the way a generation
 region reads a completed chunk without modifying it. A repeat request therefore
 returns the same blocks and the same digest without running terrain or
-decoration again. The cache is bounded by `proto_cache_capacity`; entries over
-the bound are evicted in insertion order, and an evicted chunk loses the feature
-writes its neighbours already made into it, so a caller keeps the capacity above
-its working set.
+decoration again.
 
 The dependency radii follow the reference status chain. The features step reads
 and writes over a radius of one chunk, and its terrain dependency is one chunk,
@@ -392,39 +369,37 @@ the served copy contains the cross-border feature writes a saved world has; its
 structure records are the starts it owns plus one reference for every start in
 the radius-eight window whose box overlaps it.
 
-The pipeline never serves a chunk whose three-by-three is incomplete, and it
-decorates an undecorated chunk only after the earlier chunks of its decorated
-neighbourhood were processed, so the write order is ascending x then z. Terrain is a pure function of the seed,
-the data and the position: every fill resets the multi-noise search, and the
-structure starts of a chunk are generated from a fresh biome search too, so a
-cached start never depends on which chunk the worker scanned before it. Feature
-decoration of a cached chunk reads the palettes of the chunks around it from the
-cache, which are the same palettes the reference possible-biome set uses. A
-terrain fill reads the structure starts of the requesting chunk's window, which
-is the reference dependency radius, and a chunk keeps the fill of the request
-that first cached it.
+Scheduling is deterministic. A chunk's worker is fixed when the chunk is
+demanded (round-robin in demand order), its three jobs stay in that worker's
+queue, and the worker runs its queue in order; no scheduling decision reads
+which worker finished a job first. The runtime orders completed chunks by
+position, so the world applies them in the same order whatever the thread
+schedule. Two runs with the same demand sequence and the same worker count
+produce the same chunks.
 
-A chunk served through the pipeline carries the configured `generation_target`
-status. The `features` and `full` targets both settle the three-by-three ring
-and differ only in the status field, because the pipeline always produces the
-complete chunk; a `terrain` target uses the single-chunk path, which has no
-neighbour writes to settle.
+The cache is bounded by `proto_cache_capacity` per worker. Entries over the
+bound are evicted in insertion order; a served chunk is persisted in the world
+before it can be evicted, and a chunk evicted before it was served is rebuilt
+from the seed on a later request, losing the neighbour writes it had already
+received. The default bound is sized above the working set of a viewport so
+eviction is an emergency limit rather than a normal path. `chunk_scheduler::clear`
+drops every worker cache, which is the unload path when generation stops.
 
-The batch entry point proves content equality, not scheduling. Every worker
-replays the same per-chunk requests up to its own slice on its own cache, so the
-served chunks equal the serial sequence for any worker count. The tile batch
-keeps serving production; the replay exists because no scheduler orders the
-status work by priority.
+The scheduler keeps one generator, block-state table and proto cache per
+worker, because a generator is not thread-safe and a chunk's block-state ids
+belong to its generator's table. This is what lets workers serve chunks in
+parallel without a lock around a generator. It also means the served content is
+only guaranteed to be identical for the same worker count and demand sequence:
+the chunks a worker served earlier decide how much of a neighbourhood is
+already decorated, so different worker counts can decorate the same chunk at
+different points in the sequence and the order of two crossing feature writes
+can change. A shared proto cache over a block-state table shared by every
+worker would remove that limit.
 
-The path has two observable limits. A cache that is reused across requests
-accumulates the decorations of every chunk processed before the request, so a
-chunk served as part of a large sequential area can differ from the same chunk
-served alone, where only its fixed three-by-three ring decorates. The content is
-therefore a function of the request sequence, and the scheduler that fixes that
-sequence comes with the per-chunk ticket rings. The configured tile edge no
-longer selects content on this path: `generate_chunk` and
-`generate_chunk_area` ignore `tile_size`, and the same request produces the same
-digest for tile edges two, four and eight.
+Structure starts are cached per chunk position and generated from a fresh biome
+search, so a cached start does not depend on which chunk the worker scanned
+before it. Terrain is a pure function of the seed, the data and the position:
+every fill resets the multi-noise search.
 
 ## Density sampling
 
@@ -534,7 +509,12 @@ The reference-backed suites currently cover:
   plains village, a woodland mansion, a stronghold, a pillager outpost, a
   taiga village, an ancient city and trial chambers, plus batch equality and
   the terrain/features/full status ladder;
-- the production tile path against the single-chunk reference mode: the probe
+- the per-chunk status scheduler: the three status steps against the one-call
+  pipeline, the scheduler's step order and worker assignment, eight-worker
+  run-to-run determinism, the cache bound and unload, the tile-edge neutrality
+  of the pipeline content, and the natural-biome pipeline against the reference
+  single-chunk mode;
+- the tile reference path against the single-chunk reference mode: the probe
   chunk of the border-decoration regression, every chunk of a three-by-three
   tile with a fixed biome, the same tile with the dimension's biome source and
   a per-chunk plan, and the chunk rectangle `generate_area_tiled` serves;
