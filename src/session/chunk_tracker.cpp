@@ -82,7 +82,7 @@ void chunk_tracker::record_change(view &entry, std::int32_t chunk_x,
         entry.heading_z = 0;
         return;
     }
-    const auto &previous{entry.samples.back()};
+    const auto previous{entry.samples.back()};
     entry.samples.push_back(
         {.chunk_x = chunk_x, .chunk_z = chunk_z, .at_ns = now_ns});
     if (entry.samples.size() > history_size) {
