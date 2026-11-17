@@ -1249,24 +1249,39 @@ void light_engine::column_unloaded(const chunk_pos &pos) {
 
 void light_engine::block_changed(const block_pos &pos) {
     ++impl_->block_edits_;
-    // A block edit can add a section above the current top (a sparse imported
-    // column). The light layer range follows the section range, so the column
-    // is rebuilt instead of extending the index in place.
+    // A block edit can add a section the column did not have: above the current
+    // top, or inside a vertical gap of a sparse imported column. The light
+    // layer set follows the block section set, and a layer that does not exist
+    // would silently drop every `set_level` for the new section, so the column
+    // is rebuilt instead of extending the index in place. Comparing the section
+    // count catches an insertion anywhere; the top comparison is the same
+    // answer for an appended section and documents the common case.
     auto *column{
         impl_->find_column(section_coord(pos.x), section_coord(pos.z))};
-    if (column != nullptr && !column->record->sections.empty() &&
-        static_cast<std::int32_t>(column->record->sections.back().y) + 1 !=
-            column->top_layer_y) {
-        const auto changed_pos{column->record->pos};
-        const auto changed_top{
-            static_cast<std::int32_t>(column->record->sections.back().y) + 1};
-        column_loaded(*column->record);
-        // The whole column was relit: clients holding it need every section.
-        for (auto y{column->record->y_pos - 1}; y <= changed_top; ++y) {
-            impl_->changes_.insert(light_section_change{
-                .pos = changed_pos, .section_y = static_cast<std::int8_t>(y)});
+    if (column != nullptr) {
+        const auto &sections{column->record->sections};
+        const auto top_changed{!sections.empty() &&
+                               static_cast<std::int32_t>(sections.back().y) +
+                                       1 !=
+                                   column->top_layer_y};
+        const auto section_set_changed{
+            static_cast<std::size_t>(column->section_count) != sections.size()};
+        if (top_changed || section_set_changed) {
+            const auto changed_pos{column->record->pos};
+            const auto changed_top{
+                sections.empty()
+                    ? column->record->y_pos
+                    : static_cast<std::int32_t>(sections.back().y) + 1};
+            column_loaded(*column->record);
+            // The whole column was relit: clients holding it need every
+            // section.
+            for (auto y{column->record->y_pos - 1}; y <= changed_top; ++y) {
+                impl_->changes_.insert(light_section_change{
+                    .pos = changed_pos,
+                    .section_y = static_cast<std::int8_t>(y)});
+            }
+            return;
         }
-        return;
     }
     impl_->check_queue_.push_back(node_pos{.x = pos.x, .y = pos.y, .z = pos.z});
 }

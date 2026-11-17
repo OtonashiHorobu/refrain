@@ -297,6 +297,42 @@ constexpr block_override torch_at(std::int32_t x, std::int32_t y,
     return bytes;
 }
 
+/// One sparse column with block sections only at `bottom_section` (stone) and
+/// `top_section` (air): the sections between them are a vertical gap, which
+/// RWF and Anvil both allow. No light layers and no heightmaps are stored;
+/// the engine derives them on load.
+[[nodiscard]] auto make_sparse_column(std::int32_t bottom_section,
+                                      std::int32_t top_section)
+    -> storage::chunk {
+    constexpr auto section_blocks{world::section_volume};
+    storage::chunk chunk{};
+    chunk.format_version = world::chunk_format_version;
+    chunk.status = storage::chunk_status::full;
+    chunk.y_pos = fixture_y_pos;
+    for (const auto [section_y, key] :
+         std::array<std::pair<std::int32_t, std::string_view>, 2>{
+             {std::pair{bottom_section, "minecraft:stone"},
+              std::pair{top_section, "minecraft:air"}}}) {
+        storage::section_record section{};
+        section.y = static_cast<std::int8_t>(section_y);
+        section.kind = storage::section_kind::single_value;
+        section.bits_per_entry = 0;
+        section.block_count = key == "minecraft:air"
+                                  ? static_cast<std::uint16_t>(0)
+                                  : static_cast<std::uint16_t>(section_blocks);
+        section.biome_kind = storage::section_kind::single_value;
+        section.biome_bits_per_entry = 0;
+        section.biome_palette.emplace_back("minecraft:plains");
+        section.palette.push_back(storage::palette_entry{
+            .key = std::string{key},
+            .count = section.block_count,
+            .state = 0,
+        });
+        chunk.sections.push_back(std::move(section));
+    }
+    return chunk;
+}
+
 } // namespace
 
 suite<"sim/light"> light_tests = [] {
@@ -768,5 +804,78 @@ suite<"sim/light"> light_tests = [] {
         expect(eq(cleared.block_edits, std::uint64_t{0}));
         expect(eq(cleared.pending_peak, std::uint64_t{0}));
         expect(eq(cleared.pending, std::uint64_t{0}));
+    };
+
+    "a section inserted into a vertical gap relights in place"_test = [] {
+        world_fixture fixture{};
+        std::vector<std::pair<world::chunk_pos, storage::chunk>> columns{};
+        columns.emplace_back(world::chunk_pos{0, 0},
+                             make_sparse_column(-4, 10));
+        write_columns(fixture, columns);
+        auto world{open_world(fixture)};
+        expect(world.has_value());
+        if (!world) {
+            return;
+        }
+        expect(world->ensure_chunk(world::chunk_pos{0, 0}).has_value());
+        // The load batch is not what this test observes.
+        static_cast<void>(world->take_light_changes());
+        auto *column{world->find_chunk(world::chunk_pos{0, 0})};
+        expect(column != nullptr);
+        if (column == nullptr) {
+            return;
+        }
+        const auto has_layer = [](const storage::chunk &chunk, std::int32_t y) {
+            return std::any_of(
+                chunk.light_sections.begin(), chunk.light_sections.end(),
+                [y](const storage::light_section &layer) {
+                    return static_cast<std::int32_t>(layer.y) == y;
+                });
+        };
+        // A gap section carries no stored light layer: it is air between two
+        // block sections.
+        expect(!has_layer(column->storage, 5));
+
+        // A block edit that inserts a section into the gap must rebuild the
+        // layer set; otherwise the new section has no layer and every light
+        // write for it is dropped.
+        const auto glass{world->registry().intern("minecraft:glass")};
+        const auto applied{world->set_block(sim::block_pos{8, 80, 8}, glass)};
+        expect(applied.has_value()) << (applied ? "" : applied.error().message);
+        column = world->find_chunk(world::chunk_pos{0, 0});
+        expect(column != nullptr);
+        if (column == nullptr) {
+            return;
+        }
+        expect(has_layer(column->storage, 5));
+        // The section above the gap is open air, so the inserted layer is a
+        // full sky source; a missing layer would read back as darkness. The
+        // neighbouring gap sections keep no layer by contract, so only cells
+        // of section 5 are asserted.
+        expect(eq(static_cast<int>(sky(*world, 8, 80, 8)), 15));
+        expect(eq(static_cast<int>(sky(*world, 8, 81, 8)), 15));
+        // Clients holding the column learn about the new section.
+        const auto changes{world->take_light_changes()};
+        const auto reported{
+            std::any_of(changes.begin(), changes.end(),
+                        [](const sim::light_section_change &change) {
+                            return change.pos == world::chunk_pos{0, 0} &&
+                                   change.section_y == 5;
+                        })};
+        expect(reported);
+
+        // Save and reload: the layer is written and a reload recomputes the
+        // same light instead of leaving the section dark.
+        expect(world->flush().has_value());
+        expect(world->unload_chunk(world::chunk_pos{0, 0}).has_value());
+        expect(world->ensure_chunk(world::chunk_pos{0, 0}).has_value());
+        column = world->find_chunk(world::chunk_pos{0, 0});
+        expect(column != nullptr);
+        if (column == nullptr) {
+            return;
+        }
+        expect(has_layer(column->storage, 5));
+        expect(eq(static_cast<int>(sky(*world, 8, 80, 8)), 15));
+        expect(eq(static_cast<int>(sky(*world, 8, 81, 8)), 15));
     };
 };

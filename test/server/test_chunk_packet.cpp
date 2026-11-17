@@ -19,7 +19,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <limits>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <utility>
 #include <vector>
@@ -32,6 +35,7 @@ using namespace boost::ut::literals;
 
 namespace data = refrain::data;
 namespace net = refrain::net;
+namespace server = refrain::server;
 namespace sim = refrain::sim;
 namespace storage = refrain::storage;
 namespace world = refrain::world;
@@ -129,6 +133,38 @@ void add_section(storage::chunk &chunk, std::int8_t y) {
         add_section(chunk, -4);
     }
     return chunk;
+}
+
+/// One stone section at the world bottom plus the four stored heightmaps the
+/// generator writes. Every map starts at raw 16: the first cell above the
+/// bottom stone section, 16 blocks above the chunk minimum Y of -64.
+[[nodiscard]] auto heightmap_column() -> storage::chunk {
+    storage::chunk chunk{};
+    chunk.format_version = world::chunk_format_version;
+    chunk.status = storage::chunk_status::full;
+    chunk.y_pos = -4;
+    add_section(chunk, -4);
+    for (const auto *name : {"WORLD_SURFACE", "OCEAN_FLOOR", "MOTION_BLOCKING",
+                             "MOTION_BLOCKING_NO_LEAVES"}) {
+        storage::heightmap_record record{};
+        record.name = name;
+        record.bits_per_entry = 9;
+        record.data = heightmap_words(16);
+        chunk.heightmaps.push_back(std::move(record));
+    }
+    return chunk;
+}
+
+/// Raw value of one stored heightmap entry, or nullopt when the map is absent.
+[[nodiscard]] auto stored_heightmap(const storage::chunk &chunk,
+                                    std::string_view name, std::size_t index)
+    -> std::optional<std::uint32_t> {
+    for (const auto &record : chunk.heightmaps) {
+        if (record.name == name && record.bits_per_entry == 9) {
+            return packed_value(record.data, index, 9);
+        }
+    }
+    return std::nullopt;
 }
 
 [[nodiscard]] auto make_tables() -> std::vector<std::byte> {
@@ -431,6 +467,127 @@ suite chunk_packet_tests = [] {
             expect(static_cast<std::uint8_t>(empty_block[0]) == 0x07U);
             expect(sky_updates == 0U);
             expect(block_updates == 0U);
+        };
+
+    "server/chunk packet sends updated heightmaps after a block edit"_test =
+        [] {
+            const auto directory{scratch_directory()};
+            {
+                auto store{world::world_store::create(directory.string())};
+                expect(store.has_value());
+                if (!store) {
+                    return;
+                }
+                auto chunk{heightmap_column()};
+                expect(static_cast<bool>(
+                    store->write_chunk(world::chunk_pos{0, 0}, chunk)));
+                expect(static_cast<bool>(store->commit()));
+            }
+
+            auto table_bytes{make_tables()};
+            auto tables{data::vanilla_tables::open(table_bytes, false)};
+            expect(tables.has_value());
+            auto runtime{sim::world::open(directory.string())};
+            expect(runtime.has_value());
+            if (!tables || !runtime) {
+                return;
+            }
+            auto port{server::make_borrowed_world_port(*runtime)};
+            server::chunk_packet_source source{
+                .world = port.get(),
+                .tables = &*tables,
+                .registries = nullptr,
+            };
+            const auto encode = [&source] {
+                auto packet{server::encode_full_chunk(source, {0, 0})};
+                expect(packet.has_value())
+                    << (packet ? "" : packet.error().message);
+                std::vector<
+                    std::pair<std::uint32_t, std::vector<std::uint64_t>>>
+                    heightmaps{};
+                std::string sky_mask{};
+                std::string block_mask{};
+                std::string empty_sky{};
+                std::string empty_block{};
+                std::size_t sky_updates{0};
+                std::size_t block_updates{0};
+                expect(packet.has_value() &&
+                       parse_packet(*packet, heightmaps, sky_mask, block_mask,
+                                    empty_sky, empty_block, sky_updates,
+                                    block_updates));
+                return heightmaps;
+            };
+            const auto value_of =
+                [](const std::vector<
+                       std::pair<std::uint32_t, std::vector<std::uint64_t>>>
+                       &maps,
+                   std::uint32_t type) -> std::uint32_t {
+                for (const auto &[map_type, words] : maps) {
+                    if (map_type == type) {
+                        return packed_value(words, 0, 9);
+                    }
+                }
+                return std::numeric_limits<std::uint32_t>::max();
+            };
+
+            // The stored maps are authoritative and start at the stone surface.
+            const auto before{encode()};
+            expect(value_of(before, 1U) == 16U); // WORLD_SURFACE
+            expect(value_of(before, 4U) == 16U); // MOTION_BLOCKING
+            expect(value_of(before, 5U) == 16U); // MOTION_BLOCKING_NO_LEAVES
+
+            const auto stone{runtime->registry().find("minecraft:stone")};
+            expect(stone.has_value());
+            if (!stone) {
+                return;
+            }
+            // Placing a block above the surface moves the stored maps; a full
+            // chunk send after the edit has to carry the new surface, not the
+            // pre-edit one.
+            expect(runtime->set_block({0, 200, 0}, *stone).has_value());
+            const auto *column{runtime->find_chunk({0, 0})};
+            expect(column != nullptr);
+            if (column == nullptr) {
+                return;
+            }
+            // OCEAN_FLOOR is stored but not sent; the edit has to move it too.
+            expect(stored_heightmap(column->storage, "OCEAN_FLOOR", 0) ==
+                   std::optional<std::uint32_t>{265U});
+            const auto raised{encode()};
+            expect(value_of(raised, 1U) == 265U);
+            expect(value_of(raised, 4U) == 265U);
+            expect(value_of(raised, 5U) == 265U);
+
+            // Removing the top block rescan the column downwards.
+            expect(runtime->set_block({0, 200, 0}, sim::air_block).has_value());
+            const auto restored{encode()};
+            expect(value_of(restored, 1U) == 16U);
+            expect(value_of(restored, 4U) == 16U);
+            expect(value_of(restored, 5U) == 16U);
+
+            // A fluid blocks motion but is not an ocean floor: MOTION_BLOCKING
+            // rises, OCEAN_FLOOR stays at the stone surface.
+            const auto water{runtime->registry().intern("minecraft:water")};
+            expect(runtime->set_block({0, 200, 0}, water).has_value());
+            const auto wet{encode()};
+            expect(value_of(wet, 1U) == 265U);
+            expect(value_of(wet, 4U) == 265U);
+            expect(value_of(wet, 5U) == 265U);
+            expect(stored_heightmap(column->storage, "OCEAN_FLOOR", 0) ==
+                   std::optional<std::uint32_t>{16U});
+        };
+
+    "server/chunk packet section range matches the runtime build range"_test =
+        [] {
+            const server::chunk_packet_source source{};
+            expect(source.min_section_y == sim::world::runtime_min_section_y);
+            expect(source.max_section_y == sim::world::runtime_max_section_y);
+            expect(sim::world::build_min_y() ==
+                   sim::world::runtime_min_section_y * world::section_edge);
+            expect(sim::world::build_max_y() ==
+                   (sim::world::runtime_max_section_y + 1) *
+                           world::section_edge -
+                       1);
         };
 };
 

@@ -151,7 +151,8 @@ world::world(world &&other) noexcept
       hardcore_{other.hardcore_}, events_{std::move(other.events_)},
       timers_{std::move(other.timers_)}, next_timer_id_{other.next_timer_id_},
       rng_{other.rng_}, tick_{other.tick_},
-      pending_edits_{std::move(other.pending_edits_)}, light_{*this},
+      pending_edits_{std::move(other.pending_edits_)},
+      pending_edits_head_{other.pending_edits_head_}, light_{*this},
       clock_{other.clock_} {
     other.borrowed_ = nullptr;
     light_.attach(*this);
@@ -182,6 +183,7 @@ auto world::operator=(world &&other) noexcept -> world & {
         rng_ = other.rng_;
         tick_ = other.tick_;
         pending_edits_ = std::move(other.pending_edits_);
+        pending_edits_head_ = other.pending_edits_head_;
         clock_ = other.clock_;
         light_ = std::move(other.light_);
         light_.attach(*this);
@@ -486,12 +488,15 @@ auto world::block_at(const block_pos &pos) const noexcept -> block_state_id {
 }
 
 auto world::set_block(const block_pos &pos, block_state_id value) -> status {
-    if (pos.y < world_ns::min_section_y * world_ns::section_edge ||
-        pos.y > (world_ns::max_section_y + 1) * world_ns::section_edge - 1) {
+    // The runtime world serves exactly the section range the chunk packet
+    // carries. The storage model accepts a wider, dimension-agnostic range, so
+    // an edit above `build_max_y()` would be persisted and never sent; reject
+    // it at the mutation instead.
+    if (pos.y < build_min_y() || pos.y > build_max_y()) {
         return std::unexpected{make_error(
             error_code::invalid_argument,
-            fmt::format("block y={} is outside the runtime section range",
-                        pos.y))};
+            fmt::format("block y={} is outside the runtime build range {}..{}",
+                        pos.y, build_min_y(), build_max_y()))};
     }
     auto column{
         ensure_chunk(chunk_pos{chunk_coord(pos.x), chunk_coord(pos.z)})};
@@ -554,6 +559,7 @@ auto world::set_block(const block_pos &pos, block_state_id value) -> status {
         return status_ok();
     }
     found->blocks[index] = value;
+    update_heightmaps(**column, pos, value);
     found->dirty = true;
     (*column)->dirty = true;
     ++(*column)->revision;
@@ -1139,21 +1145,40 @@ auto world::take_light_changes() -> std::vector<light_section_change> {
 }
 
 auto world::take_block_edits() -> std::vector<block_change> {
-    auto edits{std::move(pending_edits_)};
+    std::vector<block_change> edits{};
+    edits.resize(pending_edits_.size());
+    if (pending_edits_.size() < max_pending_edits) {
+        std::copy(pending_edits_.begin(), pending_edits_.end(), edits.begin());
+    } else {
+        // Full buffer: the oldest entry lives at the head and the newest just
+        // before it. Copy in application order so the caller sees the same
+        // sequence an unbounded list would produce.
+        for (std::size_t index{0}; index < edits.size(); ++index) {
+            edits[index] = pending_edits_[(pending_edits_head_ + index) %
+                                          max_pending_edits];
+        }
+    }
+    // Keep the allocated storage: the next batch of edits reuses it instead of
+    // growing a fresh vector every tick.
     pending_edits_.clear();
+    pending_edits_head_ = 0;
     return edits;
 }
 
 auto world::record_block_edit(const block_pos &pos, block_state_id old_state,
                               block_state_id new_state) -> void {
-    if (pending_edits_.size() >= max_pending_edits) {
-        // A scripted fill can produce more edits than one tick should send.
-        // The newest entries win: a client that missed a batch receives the
-        // column again the next time it is streamed.
-        pending_edits_.erase(pending_edits_.begin());
+    const block_change change{
+        .pos = pos, .old_state = old_state, .new_state = new_state};
+    if (pending_edits_.size() < max_pending_edits) {
+        pending_edits_.push_back(change);
+        return;
     }
-    pending_edits_.push_back(block_change{
-        .pos = pos, .old_state = old_state, .new_state = new_state});
+    // A scripted fill can produce more edits than one tick should send. The
+    // newest entries win: a client that missed a batch receives the column
+    // again the next time it is streamed. Overwriting the oldest entry is
+    // O(1); erasing the front would move the whole buffer per edit.
+    pending_edits_[pending_edits_head_] = change;
+    pending_edits_head_ = (pending_edits_head_ + 1) % max_pending_edits;
 }
 
 auto world::load_clock_state() -> status {
@@ -1273,9 +1298,11 @@ void world::tick() noexcept {
         // The listener failed; the tick itself completed.
     }
     // Timers due at or before this tick run in (due, id) order. A timer that
-    // schedules another zero-delay timer is picked up by the same loop, so the
-    // ordering stays deterministic and bounded by the tasks themselves.
-    while (true) {
+    // schedules another zero-delay timer is picked up by the same loop; the
+    // iteration bound keeps such a chain from holding the tick open forever.
+    // Callbacks still due after the bound stay queued for the next tick, where
+    // the same (due, id) order runs them first.
+    for (std::size_t ran{0}; ran < max_timers_per_tick; ++ran) {
         auto next{timers_.end()};
         for (auto it{timers_.begin()}; it != timers_.end(); ++it) {
             if (it->due > tick_) {
@@ -1324,8 +1351,37 @@ auto world::add_item(player_state &player, std::string_view item,
         return std::unexpected{make_error(error_code::invalid_argument,
                                           "inventory item count overflows")};
     }
-    const auto limit{items_.stack_limit(item)};
+    // The item table is content data: a malformed record could name a stack
+    // larger than the protocol ceiling, so the limit is clamped to it. A zero
+    // limit would make the append loop below never consume the count.
+    const auto limit{
+        std::clamp(items_.stack_limit(item), 1U, absolute_stack_size)};
+    // Refuse a count the modeled inventory cannot hold before touching it, so a
+    // failed add leaves the record exactly as the caller found it.
+    std::uint64_t capacity{0};
+    for (const auto &stack : player.inventory) {
+        if (stack.item == item && stack.components.empty()) {
+            capacity += limit - std::min(limit, stack.count);
+        } else if (sim::stack_empty(stack)) {
+            capacity += limit;
+        }
+    }
+    if (player.inventory.size() < modeled_inventory_slots) {
+        capacity += static_cast<std::uint64_t>(modeled_inventory_slots -
+                                               player.inventory.size()) *
+                    limit;
+    }
+    if (count > capacity) {
+        return std::unexpected{make_error(
+            error_code::invalid_argument,
+            fmt::format("inventory cannot hold {} x{}: the modeled {} slots "
+                        "have room for {} more",
+                        count, item, modeled_inventory_slots, capacity))};
+    }
     auto remaining{count};
+    // Fill the matching partial stacks that carry no components: a stack with a
+    // damage or enchantment component is a different slot identity and is never
+    // merged into.
     for (auto &stack : player.inventory) {
         if (remaining == 0) {
             break;
@@ -1339,7 +1395,21 @@ auto world::add_item(player_state &player, std::string_view item,
         stack.count += added;
         remaining -= added;
     }
-    while (remaining != 0) {
+    // An emptied slot keeps its index (see `remove_item`), so reuse it before
+    // appending: the record never keeps an empty slot and a used one at once.
+    for (auto &stack : player.inventory) {
+        if (remaining == 0) {
+            break;
+        }
+        if (!sim::stack_empty(stack)) {
+            continue;
+        }
+        const auto added{std::min(limit, remaining)};
+        stack = item_stack{.item = std::string{item}, .count = added};
+        remaining -= added;
+    }
+    while (remaining != 0 &&
+           player.inventory.size() < modeled_inventory_slots) {
         const auto added{std::min(limit, remaining)};
         player.inventory.push_back(
             item_stack{.item = std::string{item}, .count = added});
@@ -1376,26 +1446,35 @@ auto world::remove_item(player_state &player, std::string_view item,
     if (count == 0) {
         return true;
     }
-    if (item_count(player, item) < count) {
+    // Only a plain stack is the identity the item name denotes: a damaged,
+    // enchanted or named stack carries its own component state and is a
+    // different slot, so it is neither counted nor consumed here.
+    std::uint64_t removable{0};
+    for (const auto &stack : player.inventory) {
+        if (stack.item == item && stack.components.empty()) {
+            removable += stack.count;
+        }
+    }
+    if (removable < count) {
         return false;
     }
     auto remaining{count};
-    for (auto iterator{player.inventory.begin()};
-         iterator != player.inventory.end();) {
-        if (iterator->item != item) {
-            ++iterator;
-            continue;
-        }
-        const auto removed{std::min(iterator->count, remaining)};
-        iterator->count -= removed;
-        remaining -= removed;
-        if (iterator->count == 0) {
-            iterator = player.inventory.erase(iterator);
-        } else {
-            ++iterator;
-        }
+    for (auto &stack : player.inventory) {
         if (remaining == 0) {
             break;
+        }
+        if (stack.item != item || !stack.components.empty()) {
+            continue;
+        }
+        const auto removed{std::min(stack.count, remaining)};
+        stack.count -= removed;
+        remaining -= removed;
+        if (stack.count == 0) {
+            // Clear the slot in place rather than erasing it: the menu and the
+            // container packets address stacks by index, so an erase would
+            // shift every later slot under an open menu.
+            stack.item.clear();
+            stack.components.clear();
         }
     }
     return true;
@@ -1549,6 +1628,62 @@ constexpr double collision_epsilon = 1.0e-7;
                                           : key.substr(open);
 }
 
+/// Vanilla heightmap packing: nine bits per column entry, seven entries per
+/// word, 256 entries per chunk. The raw value is the first cell above the
+/// column's surface relative to the chunk's minimum Y.
+constexpr std::uint8_t heightmap_bits = 9;
+constexpr std::size_t heightmap_entries = 256;
+constexpr std::size_t heightmap_per_word = 64U / heightmap_bits;
+constexpr std::size_t heightmap_words =
+    (heightmap_entries + heightmap_per_word - 1) / heightmap_per_word;
+
+[[nodiscard]] auto heightmap_value(std::span<const std::uint64_t> words,
+                                   std::size_t index) noexcept
+    -> std::uint32_t {
+    const auto shift{(index % heightmap_per_word) * heightmap_bits};
+    return static_cast<std::uint32_t>(
+        (words[index / heightmap_per_word] >> shift) &
+        ((std::uint64_t{1} << heightmap_bits) - 1U));
+}
+
+void heightmap_set(std::vector<std::uint64_t> &words, std::size_t index,
+                   std::uint32_t value) noexcept {
+    const auto shift{(index % heightmap_per_word) * heightmap_bits};
+    const auto mask{((std::uint64_t{1} << heightmap_bits) - 1U) << shift};
+    auto &word{words[index / heightmap_per_word]};
+    word =
+        (word & ~mask) | ((static_cast<std::uint64_t>(value) << shift) & mask);
+}
+
+/// Which vanilla heightmap a stored record holds. The storage model carries no
+/// block tags, so the four predicates are derived from the collision
+/// classification: a solid block blocks motion and counts as ground, a fluid
+/// blocks motion but is not ground, and a leaf block is a motion-blocking block
+/// that the leaf-less map excludes.
+enum class heightmap_kind : std::uint8_t {
+    world_surface,
+    ocean_floor,
+    motion_blocking,
+    motion_blocking_no_leaves,
+};
+
+[[nodiscard]] auto heightmap_kind_for(std::string_view name) noexcept
+    -> std::optional<heightmap_kind> {
+    if (name == "WORLD_SURFACE") {
+        return heightmap_kind::world_surface;
+    }
+    if (name == "OCEAN_FLOOR") {
+        return heightmap_kind::ocean_floor;
+    }
+    if (name == "MOTION_BLOCKING") {
+        return heightmap_kind::motion_blocking;
+    }
+    if (name == "MOTION_BLOCKING_NO_LEAVES") {
+        return heightmap_kind::motion_blocking_no_leaves;
+    }
+    return std::nullopt;
+}
+
 /// Wrap a rotation into (-180, 180], the range the movement packet reports.
 [[nodiscard]] auto wrap_degrees(float value) noexcept -> float {
     auto wrapped{std::fmod(value, 360.0F)};
@@ -1672,6 +1807,92 @@ template <typename Collides>
     return true;
 }
 } // namespace
+
+void world::update_heightmaps(chunk &column, const block_pos &pos,
+                              block_state_id value) noexcept {
+    if (column.storage.heightmaps.empty()) {
+        // A column that never carried heightmaps is sent with the encoder's
+        // computed fallback; there is no stored map to move.
+        return;
+    }
+    const auto blocks = [this](heightmap_kind kind, block_state_id state) {
+        const auto name{state_name(registry_.key(state))};
+        const auto air{name == "minecraft:air" ||
+                       name == "minecraft:cave_air" ||
+                       name == "minecraft:void_air"};
+        if (kind == heightmap_kind::world_surface) {
+            return !air;
+        }
+        const auto &collision{collision_of(state)};
+        const auto fluid{collision.fluid != fluid_kind::none};
+        const auto solid{!collision.passable};
+        const auto leaf{name.size() >= 7 && name.ends_with("_leaves")};
+        switch (kind) {
+        case heightmap_kind::ocean_floor:
+            // The material predicate counts blocks that block motion; a fluid
+            // is not in the tag and the world surface ignores it here.
+            return solid;
+        case heightmap_kind::motion_blocking:
+            return solid || fluid;
+        case heightmap_kind::motion_blocking_no_leaves:
+            return !leaf && (solid || fluid);
+        case heightmap_kind::world_surface:
+            break;
+        }
+        return false;
+    };
+    const auto edge{world_ns::section_edge};
+    const auto local_x{static_cast<std::size_t>(pos.x - column.pos.x * edge)};
+    const auto local_z{static_cast<std::size_t>(pos.z - column.pos.z * edge)};
+    if (local_x >= static_cast<std::size_t>(edge) ||
+        local_z >= static_cast<std::size_t>(edge)) {
+        return;
+    }
+    const auto index{local_z * static_cast<std::size_t>(edge) + local_x};
+    const auto min_y{column.y_pos * edge};
+    const auto y{static_cast<std::int32_t>(pos.y)};
+    for (auto &map : column.storage.heightmaps) {
+        const auto kind{heightmap_kind_for(map.name)};
+        if (!kind.has_value() || map.bits_per_entry != heightmap_bits ||
+            map.data.size() != heightmap_words) {
+            continue;
+        }
+        // Raw values are relative to the chunk's minimum Y, exactly like the
+        // reference heightmap storage.
+        const auto first_available{
+            static_cast<std::int32_t>(heightmap_value(map.data, index)) +
+            min_y};
+        const auto becomes_blocking{blocks(*kind, value)};
+        if (y <= first_available - 2) {
+            // Too far below the surface to move it in either direction.
+            continue;
+        }
+        if (becomes_blocking) {
+            if (y >= first_available) {
+                heightmap_set(map.data, index,
+                              static_cast<std::uint32_t>(y + 1 - min_y));
+            }
+            continue;
+        }
+        if (first_available - 1 != y) {
+            // The edited cell was not the surface block.
+            continue;
+        }
+        // The top block became transparent: rescan the column downwards for
+        // the next blocking cell, exactly like the reference update.
+        auto new_first{min_y};
+        for (auto below{y - 1}; below >= min_y; --below) {
+            const auto below_state{block_at(
+                block_pos{pos.x, static_cast<std::int16_t>(below), pos.z})};
+            if (blocks(*kind, below_state)) {
+                new_first = below + 1;
+                break;
+            }
+        }
+        heightmap_set(map.data, index,
+                      static_cast<std::uint32_t>(new_first - min_y));
+    }
+}
 
 auto world::collision_of(block_state_id id) const noexcept
     -> const block_collision & {

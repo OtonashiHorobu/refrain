@@ -24,8 +24,11 @@ struct chunk_packet_source {
     world_port *world{nullptr};
     const data::vanilla_tables *tables{nullptr};
     const net::registry_catalog *registries{nullptr};
-    std::int32_t min_section_y{-4};
-    std::int32_t max_section_y{19};
+    /// Section range the packet carries. It defaults to the runtime world's
+    /// served section range: a block outside it would never be sent, so the
+    /// world refuses edits there instead of saving one no client can receive.
+    std::int32_t min_section_y{sim::world::runtime_min_section_y};
+    std::int32_t max_section_y{sim::world::runtime_max_section_y};
 };
 
 /// Encode one `level_chunk_with_light` packet body (packet id included).
