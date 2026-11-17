@@ -22,6 +22,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstdint>
 #include <cstdio>
 #include <deque>
@@ -30,7 +31,6 @@
 #include <memory>
 #include <mutex>
 #include <optional>
-#include <random>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -78,12 +78,15 @@ namespace play_sb = ::refrain::protocol::current::play::serverbound;
     return location;
 }
 
-[[nodiscard]] auto random_uuid() -> uuid {
-    std::random_device device{};
+[[nodiscard]] auto random_uuid() -> result<uuid> {
     uuid value{};
-    for (auto &byte : value.bytes) {
-        byte = static_cast<std::uint8_t>(device() & 0xFFU);
+    if (auto filled{
+            random_bytes(std::as_writable_bytes(std::span{value.bytes}))};
+        !filled) {
+        return std::unexpected{std::move(filled.error())};
     }
+    // Version 4 (random) and RFC 4122 variant, so the value is a valid UUID
+    // that client libraries accept as a session identifier.
     value.bytes[6] =
         static_cast<std::uint8_t>((value.bytes[6] & 0x0FU) | 0x40U);
     value.bytes[8] =
@@ -154,8 +157,34 @@ struct server_settings {
         place_block{};
     std::string session_server{"https://sessionserver.mojang.com"};
     std::int32_t auth_timeout_ms{5000};
-    std::int32_t rate_limit{0};
+    /// Play packets per second one connection may submit. The default is
+    /// deliberately non-zero: a single connection that floods the shared I/O
+    /// thread is bounded even before the queue budgets come into play.
+    std::int32_t rate_limit{500};
     std::int32_t idle_timeout_seconds{0};
+    /// Open connection ceiling. Zero means unlimited (only a test embedding
+    /// configures that); the host default is `status.max_players` plus
+    /// `connection_margin`.
+    std::size_t max_connections{0};
+    /// Deadline for a connection to leave the pre-play states (handshake,
+    /// status, login, configuration). A peer that never finishes login is
+    /// closed when it passes.
+    std::int64_t login_timeout_ns{30'000'000'000LL};
+    /// Bytes one connection may have buffered in a pre-play frame decoder.
+    /// Handshake, status and login packets are a few hundred bytes, so the
+    /// bound is far below the frame ceiling and keeps a trickling peer cheap.
+    std::size_t pre_play_buffer_bytes{64U * 1024U};
+    /// Play packets one connection may have queued for the simulation thread.
+    std::size_t max_inbound_packets{256};
+    /// Bytes one connection may have queued for the simulation thread.
+    std::size_t max_inbound_bytes{1024U * 1024U};
+    /// Play packets all connections may have queued together.
+    std::size_t max_inbound_packets_total{8192};
+    /// Bytes all connections may have queued together.
+    std::size_t max_inbound_bytes_total{8U * 1024U * 1024U};
+    /// Extra connection slots above `status.max_players` for the status list,
+    /// reconnects and the login burst.
+    static constexpr std::size_t connection_margin{8};
 };
 
 struct server::impl {
@@ -191,10 +220,26 @@ struct server::impl {
         bool knows_core_pack{false};
         bool registries_sent{false};
         std::uint32_t held_slot{0};
-        std::vector<std::byte> verify_token{};
+        /// Challenge sent in `login_hello`; zeroized when it is taken for the
+        /// comparison and when the connection dies.
+        secret_buffer verify_token{};
         bool online_pending{false};
         token_bucket limiter{};
         std::int64_t last_packet_ns{0};
+        /// Monotonic time the transport accepted this connection, used by the
+        /// pre-play deadline.
+        std::int64_t opened_ns{0};
+        /// Estimated bytes the frame decoder still buffers in a pre-play
+        /// state. Fed bytes are added and decoded bodies are subtracted, so
+        /// the value is an upper bound (framing overhead is never subtracted).
+        std::size_t pre_play_buffered{0};
+        /// Play packets this connection queued for the simulation thread but
+        /// that the tick loop has not drained yet.
+        std::size_t inbound_pending_packets{0};
+        std::size_t inbound_pending_bytes{0};
+        /// Transport-level peer address, empty when the transport does not
+        /// expose one. Used for diagnostics and login attempt throttling.
+        std::string peer_address{};
     };
 
     /// One live client connection and its write lock.
@@ -362,6 +407,46 @@ struct server::impl {
     std::atomic<std::uint64_t> bytes_in{0};
     std::atomic<std::uint64_t> bytes_out{0};
     std::thread keepalive_thread{};
+    /// Play packets queued for the tick loop but not drained yet. Guarded by
+    /// `inbound_mutex` together with `inbound`; the per-connection share lives
+    /// in `connection_state_data`.
+    std::size_t inbound_queued_packets{0};
+    std::size_t inbound_queued_bytes{0};
+    /// Open connections. The accept path checks this counter instead of the
+    /// table, which would be a linear walk under the shard locks.
+    std::atomic<std::size_t> live_connections{0};
+    /// Online-mode session verification. The I/O thread only decrypts and
+    /// enqueues; a bounded pool performs the blocking session-server request
+    /// and posts the outcome back to the connection, so one slow login cannot
+    /// stall every other connection.
+    static constexpr std::size_t auth_queue_limit{64};
+    static constexpr std::size_t auth_worker_count{2};
+    struct auth_job {
+        std::uint64_t connection{0};
+        std::string name{};
+        std::string server_hash{};
+        std::string remote_ip{};
+    };
+    std::mutex auth_mutex{};
+    std::condition_variable auth_cv{};
+    std::deque<auth_job> auth_jobs{};
+    std::vector<std::thread> auth_threads{};
+    bool auth_stopping{false};
+    /// Per-address login attempt window. A peer that triggers more than
+    /// `login_attempt_limit` encrypted login attempts inside
+    /// `login_attempt_window_ns` is refused before its request reaches the
+    /// session verifier, which bounds the amplification one address can cause.
+    static constexpr std::uint32_t login_attempt_limit{8};
+    static constexpr std::int64_t login_attempt_window_ns{60'000'000'000LL};
+    /// Upper bound on tracked source addresses; expired windows are pruned
+    /// before a new address is inserted.
+    static constexpr std::size_t login_attempt_tracker_limit{4096};
+    struct login_attempt_window {
+        std::int64_t window_start_ns{0};
+        std::uint32_t attempts{0};
+    };
+    std::mutex login_attempt_mutex{};
+    std::map<std::string, login_attempt_window> login_attempts{};
 
     [[nodiscard]] auto start() -> status;
     void stop();
@@ -369,6 +454,16 @@ struct server::impl {
     void on_data(std::uint64_t id, std::span<const std::byte> bytes);
     void on_close(std::uint64_t id, std::string_view reason);
     void tick();
+    void sweep_timeouts();
+    void start_auth_workers();
+    void stop_auth_workers();
+    void auth_worker_loop();
+    [[nodiscard]] auto enqueue_auth(std::uint64_t id, std::string name,
+                                    std::string server_hash,
+                                    std::string remote_ip) -> bool;
+    void finish_auth(std::uint64_t id, result<session_profile> verified);
+    /// False once `address` used its login attempt budget for the window.
+    [[nodiscard]] auto register_login_attempt(std::string_view address) -> bool;
     void enqueue_lifecycle(lifecycle_kind kind, std::uint64_t connection_id,
                            uuid id, std::string_view name,
                            std::string_view world);
@@ -382,6 +477,12 @@ struct server::impl {
               std::span<const std::byte> payload);
     /// Send a body that still carries its VarInt packet id.
     void send(std::uint64_t id, std::span<const std::byte> packet);
+    /// Send one already encoded body (packet id included) with the connection
+    /// mutex already held. Callers use it when several codec operations on the
+    /// same connection must not interleave with an I/O thread delivery, e.g.
+    /// switching compression on before sending the first compressed packet.
+    void send_locked(connection &live, std::uint64_t id,
+                     std::span<const std::byte> body);
     /// Send a body that still carries its VarInt packet id to many
     /// connections, encoding the frame once.
     void send_many(std::span<const std::uint64_t> ids,
@@ -392,7 +493,6 @@ struct server::impl {
     void send_login_hello(std::uint64_t id);
     void complete_login(std::uint64_t id);
     void handle_login_key(std::uint64_t id, reader &in);
-    void send_login_finished(std::uint64_t id);
     void send_configuration(std::uint64_t id);
     void send_configuration_registries(std::uint64_t id);
     void send_play_login(std::uint64_t id);
@@ -480,6 +580,7 @@ auto server::impl::erase_connection(std::uint64_t id) -> bool {
         live = found->second;
         shard.entries.erase(found);
     }
+    live_connections.fetch_sub(1, std::memory_order_relaxed);
     // The entry was in the table, so this call owns the removal and is the only
     // one that releases the session. Closing twice, or a transport callback
     // that arrives after a local close, finds no entry and is a no-op.
@@ -536,12 +637,10 @@ auto server::impl::playing_count() const -> std::int32_t {
 }
 
 auto server::impl::start() -> status {
-    if (config.online_mode) {
-        auto key{rsa_keypair::generate()};
-        if (!key) {
-            return std::unexpected{std::move(key.error())};
-        }
-        server_key = std::move(*key);
+    if (config.online_mode && !server_key.has_value()) {
+        return std::unexpected{
+            make_error(error_code::not_initialized,
+                       "online mode needs a session keypair")};
     }
     if (config.online_mode && !verify_session) {
         auto transport{make_curl_transport()};
@@ -580,8 +679,15 @@ auto server::impl::start() -> status {
         return std::unexpected{std::move(opened.error())};
     }
     socket = std::move(*opened);
+    // Both layers enforce the ceiling: the transport refuses the accept before
+    // a session exists, and `on_open` refuses a connection that a custom
+    // transport admitted anyway.
+    socket->set_connection_limit(config.max_connections);
     if (auto listening{socket->listen(config.bind)}; !listening) {
         return listening;
+    }
+    if (config.online_mode) {
+        start_auth_workers();
     }
     keepalive_thread = std::thread{[this] {
         log::set_thread_name("net-keepalive");
@@ -592,6 +698,11 @@ auto server::impl::start() -> status {
 
 void server::impl::stop() {
     if (!stopped.exchange(true)) {
+        // Verification workers run the blocking session request. Stop them
+        // before the transport and the connection table go away, so a result
+        // that arrives during shutdown either sees `stopped` and drops or
+        // completes against the still-live socket.
+        stop_auth_workers();
         if (keepalive_thread.joinable()) {
             keepalive_thread.join();
         }
@@ -615,6 +726,24 @@ void server::impl::stop() {
 
 void server::impl::on_open(std::uint64_t id) {
     if (stopped.load(std::memory_order_relaxed)) {
+        if (socket) {
+            socket->close(id);
+        }
+        return;
+    }
+    // Reserve a slot before touching any per-connection state. The counter is
+    // an atomic exchange so a transport that reports opens from several
+    // threads cannot race past the cap; the connection that loses the race is
+    // closed before it holds a session.
+    const auto previous{
+        live_connections.fetch_add(1, std::memory_order_acq_rel)};
+    if (config.max_connections != 0 && previous >= config.max_connections) {
+        live_connections.fetch_sub(1, std::memory_order_relaxed);
+        log_net.warn("refused connection {}: connection limit of {} reached",
+                     id, config.max_connections);
+        if (socket) {
+            socket->close(id);
+        }
         return;
     }
     log_net.debug("connection {} opened", id);
@@ -623,6 +752,10 @@ void server::impl::on_open(std::uint64_t id) {
     auto live{std::make_shared<connection>()};
     live->data.limiter.configure(config.rate_limit);
     live->data.last_packet_ns = now_ns();
+    live->data.opened_ns = live->data.last_packet_ns;
+    if (socket) {
+        live->data.peer_address = socket->peer_address(id);
+    }
     insert_connection(id, std::move(live));
 }
 
@@ -667,36 +800,79 @@ void server::impl::on_data(std::uint64_t id, std::span<const std::byte> bytes) {
     std::vector<std::vector<std::byte>> bodies;
     bool failed{false};
     bool rate_limited{false};
+    bool pre_play_over_budget{false};
+    bool pre_play_expired{false};
     {
         const std::lock_guard lock{live->mutex};
         auto &connection_data{live->data};
-        if (auto fed{protocol->feed(id, bytes)}; !fed) {
-            failed = true;
-        } else {
-            for (;;) {
-                std::uint32_t packet_id{0};
-                std::span<const std::byte> payload{};
-                auto next{protocol->next_packet(id, packet_id, payload)};
-                if (!next) {
-                    failed = true;
-                    break;
+        const auto now{now_ns()};
+        if (connection_data.state != connection_state::play) {
+            // A peer that never leaves the pre-play states is closed on its
+            // next read once the deadline passed. The sweeper enforces the
+            // same deadline for a peer that stays silent, so trickling bytes
+            // does not keep the slot forever.
+            if (now - connection_data.opened_ns > config.login_timeout_ns) {
+                pre_play_expired = true;
+            } else {
+                // Bound what one unauthenticated connection may leave in the
+                // frame decoder. Decoded bodies are subtracted again below, so
+                // this tracks buffered bytes rather than total traffic; the
+                // small framing overhead is never subtracted and keeps the
+                // estimate on the safe side.
+                connection_data.pre_play_buffered += bytes.size();
+                if (connection_data.pre_play_buffered >
+                    config.pre_play_buffer_bytes) {
+                    pre_play_over_budget = true;
                 }
-                if (!*next) {
-                    break;
-                }
-                if (connection_data.state == connection_state::play &&
-                    !connection_data.limiter.allow(now_ns())) {
-                    rate_limited = true;
-                    break;
-                }
-                connection_data.last_packet_ns = now_ns();
-                std::vector<std::byte> body;
-                writer out{body};
-                out.write_varint(packet_id);
-                out.write_bytes(payload);
-                bodies.push_back(std::move(body));
             }
         }
+        if (!pre_play_expired && !pre_play_over_budget) {
+            if (auto fed{protocol->feed(id, bytes)}; !fed) {
+                failed = true;
+            } else {
+                for (;;) {
+                    std::uint32_t packet_id{0};
+                    std::span<const std::byte> payload{};
+                    auto next{protocol->next_packet(id, packet_id, payload)};
+                    if (!next) {
+                        failed = true;
+                        break;
+                    }
+                    if (!*next) {
+                        break;
+                    }
+                    if (connection_data.state == connection_state::play &&
+                        !connection_data.limiter.allow(now_ns())) {
+                        rate_limited = true;
+                        break;
+                    }
+                    connection_data.last_packet_ns = now_ns();
+                    std::vector<std::byte> body;
+                    writer out{body};
+                    out.write_varint(packet_id);
+                    out.write_bytes(payload);
+                    if (connection_data.state != connection_state::play &&
+                        body.size() <= connection_data.pre_play_buffered) {
+                        connection_data.pre_play_buffered -= body.size();
+                    }
+                    bodies.push_back(std::move(body));
+                }
+            }
+        }
+    }
+    if (pre_play_expired) {
+        log_net.info(
+            "connection {} did not leave the pre-play states within {}ms", id,
+            config.login_timeout_ns / 1'000'000LL);
+        close(id);
+        return;
+    }
+    if (pre_play_over_budget) {
+        log_net.warn(
+            "connection {} exceeded the pre-play buffer budget of {} bytes", id,
+            config.pre_play_buffer_bytes);
+        close(id);
+        return;
     }
     if (failed) {
         close(id);
@@ -867,31 +1043,62 @@ void server::impl::handle(std::uint64_t id, std::span<const std::byte> body) {
             }
             log_net.info("connection {} started login as {}", id, packet.name);
             const auto session{random_uuid()};
-            if (!with_connection(
-                    id, [&packet, session](connection_state_data &data) {
-                        data.name = std::move(packet.name);
-                        auto profile{uuid::from_halves(packet.profile_high,
-                                                       packet.profile_low)};
-                        const bool zero_profile{std::ranges::all_of(
-                            profile.bytes,
-                            [](std::uint8_t byte) { return byte == 0U; })};
-                        data.profile = zero_profile ? random_uuid() : profile;
-                        data.session = session;
-                    })) {
+            if (!session) {
+                send_login_disconnect(id, "Server entropy is unavailable");
+                reject(id, "malformed or unexpected packet");
+                return;
+            }
+            if (!with_connection(id, [this, &packet, session = *session](
+                                         connection_state_data &data) {
+                    data.name = std::move(packet.name);
+                    data.session = session;
+                    if (config.online_mode) {
+                        // Online mode only uses the client-declared id as a
+                        // provisional profile until the session server
+                        // returns the authoritative one.
+                        data.profile = uuid::from_halves(packet.profile_high,
+                                                         packet.profile_low);
+                    }
+                })) {
                 return;
             }
             if (config.online_mode) {
-                std::random_device device{};
-                std::vector<std::byte> token(4);
-                for (auto &byte : token) {
-                    byte = static_cast<std::byte>(device() & 0xFFU);
-                }
-                if (!with_connection(id, [&token](connection_state_data &data) {
-                        data.verify_token = std::move(token);
-                    })) {
+                std::array<std::byte, 4> token{};
+                if (auto filled{random_bytes(token)}; !filled) {
+                    send_login_disconnect(id, "Server entropy is unavailable");
+                    reject(id, "malformed or unexpected packet");
                     return;
                 }
+                if (!with_connection(id, [&token](connection_state_data &data) {
+                        data.verify_token.assign(token);
+                    })) {
+                    secure_zero(token);
+                    return;
+                }
+                secure_zero(token);
                 send_login_hello(id);
+                return;
+            }
+            // Offline mode has no session server, so the identity is derived
+            // from the name exactly like vanilla's offline profile. The UUID a
+            // client sent in the hello packet is ignored: trusting it would let
+            // a client impersonate an existing profile, and a random fallback
+            // would make the identity change on every login.
+            std::string name;
+            if (!with_connection(id, [&name](connection_state_data &data) {
+                    name = data.name;
+                })) {
+                return;
+            }
+            auto profile{offline_profile(name)};
+            if (!profile) {
+                send_login_disconnect(id, "Authentication is unavailable");
+                reject(id, "malformed or unexpected packet");
+                return;
+            }
+            if (!with_connection(id, [&profile](connection_state_data &data) {
+                    data.profile = profile->id;
+                })) {
                 return;
             }
             complete_login(id);
@@ -974,6 +1181,10 @@ void server::impl::handle(std::uint64_t id, std::span<const std::byte> body) {
             if (!with_connection(
                     id, [this, id, next_state](connection_state_data &data) {
                         data.state = next_state;
+                        // The frame decoder is empty once the client finishes
+                        // configuration; the pre-play budget no longer
+                        // applies.
+                        data.pre_play_buffered = 0;
                         enqueue_lifecycle(lifecycle_kind::join, id,
                                           data.profile, data.name, {});
                     })) {
@@ -1056,10 +1267,71 @@ void server::impl::handle(std::uint64_t id, std::span<const std::byte> body) {
     }
 
     if (state == connection_state::play) {
+        // Queue the play packet for the simulation thread under two budgets:
+        // one connection may not grow its own backlog without bound, and the
+        // connections together may not grow the shared queue without bound. A
+        // packet that would pass either budget closes the sending connection
+        // and is never queued, so a tick that is slow (or not running yet)
+        // cannot turn one flooding client into unbounded memory.
+        const auto packet_bytes{body.size()};
+        bool per_connection_over{false};
+        if (!with_connection(id, [this, packet_bytes, &per_connection_over](
+                                     connection_state_data &data) {
+                if (data.inbound_pending_packets >=
+                        config.max_inbound_packets ||
+                    packet_bytes > config.max_inbound_bytes ||
+                    data.inbound_pending_bytes >
+                        config.max_inbound_bytes - packet_bytes) {
+                    per_connection_over = true;
+                    return;
+                }
+                ++data.inbound_pending_packets;
+                data.inbound_pending_bytes += packet_bytes;
+            })) {
+            return;
+        }
+        if (per_connection_over) {
+            log_net.warn(
+                "connection {} exceeded its inbound queue budget of {} packets "
+                "and {} bytes",
+                id, config.max_inbound_packets, config.max_inbound_bytes);
+            close(id);
+            return;
+        }
         std::vector<std::byte> copy{body.begin(), body.end()};
-        const std::lock_guard lock{inbound_mutex};
-        inbound.push_back(
-            queued_packet{.connection = id, .body = std::move(copy)});
+        bool total_over{false};
+        {
+            const std::lock_guard lock{inbound_mutex};
+            if (inbound_queued_packets >= config.max_inbound_packets_total ||
+                inbound_queued_bytes > config.max_inbound_bytes_total ||
+                packet_bytes >
+                    config.max_inbound_bytes_total - inbound_queued_bytes) {
+                total_over = true;
+            } else {
+                ++inbound_queued_packets;
+                inbound_queued_bytes += packet_bytes;
+                inbound.push_back(
+                    queued_packet{.connection = id, .body = std::move(copy)});
+            }
+        }
+        if (total_over) {
+            static_cast<void>(with_connection(
+                id, [packet_bytes](connection_state_data &data) {
+                    if (data.inbound_pending_packets > 0) {
+                        --data.inbound_pending_packets;
+                    }
+                    data.inbound_pending_bytes =
+                        data.inbound_pending_bytes > packet_bytes
+                            ? data.inbound_pending_bytes - packet_bytes
+                            : 0;
+                }));
+            log_net.warn(
+                "connection {} exceeded the global inbound queue budget of {} "
+                "packets and {} bytes",
+                id, config.max_inbound_packets_total,
+                config.max_inbound_bytes_total);
+            close(id);
+        }
     }
 }
 
@@ -1072,10 +1344,16 @@ void server::impl::send_login_disconnect(std::uint64_t id,
 }
 
 void server::impl::send_login_hello(std::uint64_t id) {
-    std::vector<std::byte> token;
-    if (!with_connection(id, [&token](connection_state_data &data) {
-            token = data.verify_token;
+    secret_buffer token;
+    bool present{false};
+    if (!with_connection(id, [&token, &present](connection_state_data &data) {
+            token.assign(data.verify_token.span());
+            present = !token.empty();
         })) {
+        return;
+    }
+    if (!present) {
+        reject(id, "malformed or unexpected packet");
         return;
     }
     auto public_key{server_key->public_key_der()};
@@ -1087,29 +1365,77 @@ void server::impl::send_login_hello(std::uint64_t id) {
     login_cb::hello packet{
         .server_id = {},
         .public_key = std::move(*public_key),
-        .challenge = std::move(token),
+        .challenge =
+            std::vector<std::byte>{token.span().begin(), token.span().end()},
         .should_authenticate = true,
     };
     send_packet(id, login_cb::hello::packet_id, packet, login_cb::encode_hello);
+    // The challenge is a per-login secret; wipe the packet copy as soon as the
+    // encode is done instead of letting the vector die with live bytes.
+    secure_zero(packet.challenge);
 }
 
 void server::impl::complete_login(std::uint64_t id) {
-    if (config.compression_threshold >= 0) {
-        login_cb::login_compression packet{
-            .threshold =
-                static_cast<std::uint32_t>(config.compression_threshold)};
-        send_packet(id, login_cb::login_compression::packet_id, packet,
-                    login_cb::encode_login_compression);
-        const auto live{find_connection(id)};
-        if (!live || live->closed.load(std::memory_order_acquire)) {
+    const auto live{find_connection(id)};
+    if (!live || live->closed.load(std::memory_order_acquire)) {
+        return;
+    }
+    bool failed{false};
+    {
+        // One critical section: the codec switches to compressed framing and
+        // the first compressed packet is sent before the I/O thread can decode
+        // another frame on this connection. `send_locked` and
+        // `protocol->set_compression` both run under the connection mutex,
+        // which is the same lock `on_data` holds while it feeds the decoder.
+        const std::lock_guard lock{live->mutex};
+        auto &data{live->data};
+        if (live->closed.load(std::memory_order_relaxed) ||
+            data.state != connection_state::login) {
             return;
         }
-        if (protocol) {
-            static_cast<void>(
-                protocol->set_compression(id, config.compression_threshold));
+        if (config.compression_threshold >= 0) {
+            login_cb::login_compression compression_packet{
+                .threshold =
+                    static_cast<std::uint32_t>(config.compression_threshold)};
+            auto body{encode_packet(login_cb::login_compression::packet_id,
+                                    compression_packet,
+                                    login_cb::encode_login_compression)};
+            if (!body) {
+                failed = true;
+            } else {
+                send_locked(*live, id, *body);
+                if (protocol) {
+                    static_cast<void>(protocol->set_compression(
+                        id, config.compression_threshold));
+                }
+            }
+        }
+        if (!failed) {
+            data.login_finished = true;
+            const auto [profile_high, profile_low] = data.profile.halves();
+            const auto [session_high, session_low] = data.session.halves();
+            login_cb::login_finished finished{
+                .profile_high = profile_high,
+                .profile_low = profile_low,
+                .name = data.name,
+                .properties = {},
+                .session_high = session_high,
+                .session_low = session_low,
+            };
+            auto body{encode_packet(login_cb::login_finished::packet_id,
+                                    finished, login_cb::encode_login_finished)};
+            if (!body) {
+                failed = true;
+            } else {
+                send_locked(*live, id, *body);
+            }
         }
     }
-    send_login_finished(id);
+    if (failed) {
+        log_net.error("failed to encode the login completion for connection {}",
+                      id);
+        close(id);
+    }
 }
 
 void server::impl::handle_login_key(std::uint64_t id, reader &in) {
@@ -1119,10 +1445,46 @@ void server::impl::handle_login_key(std::uint64_t id, reader &in) {
         reject(id, "malformed or unexpected packet");
         return;
     }
-    std::vector<std::byte> expected_token;
-    if (!with_connection(id, [&expected_token](connection_state_data &data) {
-            expected_token = data.verify_token;
+    bool pending{false};
+    std::string peer;
+    if (!with_connection(id, [&pending, &peer](connection_state_data &data) {
+            pending = data.online_pending;
+            peer = data.peer_address;
         })) {
+        return;
+    }
+    // Every connection gets at most one verification attempt. Repeating the
+    // key packet while one is in flight would amplify the session-server
+    // request without changing the outcome.
+    if (pending) {
+        send_login_disconnect(id, "Login verification is already in progress");
+        reject(id, "malformed or unexpected packet");
+        return;
+    }
+    if (!peer.empty() && !register_login_attempt(peer)) {
+        log_net.warn(
+            "connection {} exceeded the login attempt budget for its address",
+            id);
+        send_login_disconnect(id, "Too many login attempts from your address");
+        reject(id, "malformed or unexpected packet");
+        return;
+    }
+    // Take the challenge out of the connection into a zeroizing buffer: the
+    // expected token is secret material and is wiped on every path, including
+    // a failed comparison. Moving it out also rotates the challenge, so a
+    // replayed key packet cannot reuse it.
+    secret_buffer expected_token;
+    bool challenge_present{false};
+    if (!with_connection(id, [&expected_token,
+                              &challenge_present](connection_state_data &data) {
+            expected_token = std::move(data.verify_token);
+            challenge_present = !expected_token.empty();
+        })) {
+        return;
+    }
+    if (!challenge_present) {
+        send_login_disconnect(id, "Invalid verify token");
+        reject(id, "malformed or unexpected packet");
         return;
     }
     auto secret{server_key->decrypt_pkcs1_v1_5(packet.keybytes)};
@@ -1132,18 +1494,20 @@ void server::impl::handle_login_key(std::uint64_t id, reader &in) {
         reject(id, "malformed or unexpected packet");
         return;
     }
-    if (token->size() != expected_token.size() ||
-        !std::equal(token->begin(), token->end(), expected_token.begin())) {
+    secret_buffer shared_secret{std::move(*secret)};
+    secret_buffer decrypted_token{std::move(*token)};
+    if (!constant_time_equal(decrypted_token.span(), expected_token.span())) {
         send_login_disconnect(id, "Invalid verify token");
         reject(id, "malformed or unexpected packet");
         return;
     }
-    if (secret->size() != aes128_key_bytes) {
+    if (shared_secret.size() != aes128_key_bytes) {
         send_login_disconnect(id, "Invalid shared secret");
         reject(id, "malformed or unexpected packet");
         return;
     }
-    auto cipher{aes128_cfb8::create(*secret, *secret)};
+    auto cipher{
+        aes128_cfb8::create(shared_secret.span(), shared_secret.span())};
     if (!cipher) {
         send_login_disconnect(id, "Encryption is unavailable");
         reject(id, "malformed or unexpected packet");
@@ -1155,7 +1519,7 @@ void server::impl::handle_login_key(std::uint64_t id, reader &in) {
         reject(id, "malformed or unexpected packet");
         return;
     }
-    auto digest{minecraft_server_hash("", *secret, *public_key)};
+    auto digest{minecraft_server_hash("", shared_secret.span(), *public_key)};
     if (!digest) {
         send_login_disconnect(id, "Encryption is unavailable");
         reject(id, "malformed or unexpected packet");
@@ -1171,67 +1535,169 @@ void server::impl::handle_login_key(std::uint64_t id, reader &in) {
         name = live->data.name;
     }
     if (protocol) {
-        static_cast<void>(protocol->set_cipher(
-            id, std::span<const std::byte>{secret->data(), secret->size()},
-            std::span<const std::byte>{secret->data(), secret->size()}));
+        static_cast<void>(protocol->set_cipher(id, shared_secret.span(),
+                                               shared_secret.span()));
     }
-    session_profile profile{};
-    if (verify_session) {
-        auto verified{verify_session(name, *digest)};
-        if (!verified) {
-            send_login_disconnect(id, "Failed to verify username");
-            reject(id, "malformed or unexpected packet");
+    if (!with_connection(id, [](connection_state_data &data) {
+            data.online_pending = true;
+        })) {
+        return;
+    }
+    if (!enqueue_auth(id, std::move(name), std::move(*digest),
+                      std::move(peer))) {
+        log_net.warn(
+            "rejected the login of connection {}: the verification queue is "
+            "full",
+            id);
+        send_login_disconnect(id, "Too many logins are being verified");
+        reject(id, "malformed or unexpected packet");
+    }
+}
+
+void server::impl::start_auth_workers() {
+    const std::lock_guard lock{auth_mutex};
+    auth_stopping = false;
+    auth_threads.reserve(auth_worker_count);
+    for (std::size_t index{0}; index < auth_worker_count; ++index) {
+        auth_threads.emplace_back([this] { auth_worker_loop(); });
+    }
+}
+
+void server::impl::stop_auth_workers() {
+    {
+        const std::lock_guard lock{auth_mutex};
+        auth_stopping = true;
+    }
+    auth_cv.notify_all();
+    for (auto &thread : auth_threads) {
+        if (thread.joinable()) {
+            thread.join();
+        }
+    }
+    auth_threads.clear();
+    const std::lock_guard lock{auth_mutex};
+    auth_jobs.clear();
+}
+
+void server::impl::auth_worker_loop() {
+    log::set_thread_name("net-auth");
+    for (;;) {
+        auth_job job{};
+        {
+            std::unique_lock lock{auth_mutex};
+            auth_cv.wait(
+                lock, [this] { return auth_stopping || !auth_jobs.empty(); });
+            if (auth_stopping) {
+                return;
+            }
+            job = std::move(auth_jobs.front());
+            auth_jobs.pop_front();
+        }
+        result<session_profile> verified{std::unexpected{make_error(
+            error_code::not_initialized, "no session verifier is configured")}};
+        if (verify_session) {
+            verified = verify_session(job.name, job.server_hash);
+        } else if (auth) {
+            auto service_result{
+                auth->has_joined(job.name, job.server_hash, job.remote_ip)};
+            if (service_result) {
+                verified = session_profile{
+                    .id = service_result->id,
+                    .name = service_result->name,
+                };
+            } else {
+                verified = std::unexpected{std::move(service_result.error())};
+            }
+        }
+        if (stopped.load(std::memory_order_acquire)) {
             return;
         }
-        profile = std::move(*verified);
-    } else if (auth) {
-        auto verified{auth->has_joined(name, *digest)};
-        if (!verified) {
-            send_login_disconnect(id, "Failed to verify username");
-            reject(id, "malformed or unexpected packet");
-            return;
-        }
-        profile.id = verified->id;
-        profile.name = verified->name;
-    } else {
-        send_login_disconnect(id, "Authentication is unavailable");
+        finish_auth(job.connection, std::move(verified));
+    }
+}
+
+auto server::impl::enqueue_auth(std::uint64_t id, std::string name,
+                                std::string server_hash, std::string remote_ip)
+    -> bool {
+    const std::lock_guard lock{auth_mutex};
+    if (auth_stopping || auth_jobs.size() >= auth_queue_limit) {
+        return false;
+    }
+    auth_jobs.push_back(auth_job{
+        .connection = id,
+        .name = std::move(name),
+        .server_hash = std::move(server_hash),
+        .remote_ip = std::move(remote_ip),
+    });
+    auth_cv.notify_one();
+    return true;
+}
+
+void server::impl::finish_auth(std::uint64_t id,
+                               result<session_profile> verified) {
+    if (!verified) {
+        send_login_disconnect(id, "Failed to verify username");
         reject(id, "malformed or unexpected packet");
         return;
     }
-    if (!with_connection(id, [&profile](connection_state_data &data) {
+    auto profile{std::move(*verified)};
+    bool applied{false};
+    if (!with_connection(id, [&profile, &applied](connection_state_data &data) {
+            if (data.state != connection_state::login || !data.online_pending) {
+                return;
+            }
             data.profile = profile.id;
             data.name = std::move(profile.name);
+            data.online_pending = false;
+            applied = true;
         })) {
+        return;
+    }
+    if (!applied) {
         return;
     }
     complete_login(id);
 }
 
-void server::impl::send_login_finished(std::uint64_t id) {
-    uuid profile{};
-    uuid session{};
-    std::string name;
-    if (!with_connection(
-            id, [&profile, &session, &name](connection_state_data &data) {
-                profile = data.profile;
-                session = data.session;
-                name = data.name;
-                data.login_finished = true;
-            })) {
-        return;
+auto server::impl::register_login_attempt(std::string_view address) -> bool {
+    const auto now{now_ns()};
+    const std::lock_guard lock{login_attempt_mutex};
+    const auto found{login_attempts.find(std::string{address})};
+    if (found == login_attempts.end()) {
+        // The table is bounded: an attacker who cycles source addresses must
+        // not turn attempt tracking into unbounded memory. Expired windows go
+        // first; if the table is still full, the entry that sorts first is
+        // dropped, which only forgets that address's counter.
+        if (login_attempts.size() >= login_attempt_tracker_limit) {
+            for (auto iterator = login_attempts.begin();
+                 iterator != login_attempts.end();) {
+                if (now - iterator->second.window_start_ns >=
+                    login_attempt_window_ns) {
+                    iterator = login_attempts.erase(iterator);
+                } else {
+                    ++iterator;
+                }
+            }
+            if (login_attempts.size() >= login_attempt_tracker_limit) {
+                login_attempts.erase(login_attempts.begin());
+            }
+        }
+        login_attempts.emplace(
+            std::string{address},
+            login_attempt_window{.window_start_ns = now, .attempts = 1});
+        return true;
     }
-    const auto [profile_high, profile_low] = profile.halves();
-    const auto [session_high, session_low] = session.halves();
-    login_cb::login_finished packet{
-        .profile_high = profile_high,
-        .profile_low = profile_low,
-        .name = std::move(name),
-        .properties = {},
-        .session_high = session_high,
-        .session_low = session_low,
-    };
-    send_packet(id, login_cb::login_finished::packet_id, packet,
-                login_cb::encode_login_finished);
+    auto &window{found->second};
+    if (now - window.window_start_ns >= login_attempt_window_ns) {
+        window.window_start_ns = now;
+        window.attempts = 1;
+        return true;
+    }
+    if (window.attempts >= login_attempt_limit) {
+        return false;
+    }
+    ++window.attempts;
+    return true;
 }
 
 void server::impl::send_configuration(std::uint64_t id) {
@@ -2784,6 +3250,37 @@ void server::impl::handle_play(std::uint64_t id,
             reject(id, "malformed or unexpected packet");
             return;
         }
+        // The slot packet is an item-creation primitive: it only exists for a
+        // player with infinite materials (creative mode). The reference
+        // protocol skips the packet entirely for every other game mode, so a
+        // survival or spectator client cannot author items.
+        game_mode mode{game_mode::survival};
+        if (!with_connection(id, [&mode](connection_state_data &data) {
+                mode = data.mode;
+            })) {
+            return;
+        }
+        if (mode != game_mode::creative) {
+            log_net.debug(
+                "ignored a creative slot packet from connection {} because its "
+                "game mode is not creative",
+                id);
+            return;
+        }
+        // Menu slots 1..45 are the modeled player menu; 0 is the crafting
+        // result and negative slots are the reference's drop request, which
+        // this server does not model. A slot outside the range never reaches
+        // gameplay state.
+        constexpr std::int16_t first_menu_slot{1};
+        constexpr std::int16_t last_menu_slot{45};
+        if (packet.slot_num < first_menu_slot ||
+            packet.slot_num > last_menu_slot) {
+            log_net.warn(
+                "ignored a creative slot packet from connection {} for menu "
+                "slot {}",
+                id, packet.slot_num);
+            return;
+        }
         const std::lock_guard lock{click_mutex};
         creative_slots.push_back(creative_slot_event{
             .connection = id,
@@ -2924,8 +3421,15 @@ void server::impl::handle_play(std::uint64_t id,
         if (!live || live->closed.load(std::memory_order_acquire)) {
             return;
         }
-        const auto distance =
+        // The client asks for a viewport; the server owns the effective value.
+        // Clamping here keeps the event inside the configured range, so the
+        // gameplay layer never has to clamp an unvalidated pair where a
+        // misconfigured 0 would break `lo <= hi`.
+        const auto requested =
             static_cast<std::int32_t>(packet.information.view_distance);
+        constexpr std::int32_t minimum_view_distance{2};
+        const auto distance{std::min(std::max(requested, minimum_view_distance),
+                                     config.view_distance)};
         if (view_distance_hook) {
             view_distance_hook(
                 view_distance_event{.connection = id, .distance = distance});
@@ -3296,6 +3800,31 @@ void server::impl::send(std::uint64_t id, std::uint16_t packet_id,
     }
 }
 
+void server::impl::send_locked(connection &live, std::uint64_t id,
+                               std::span<const std::byte> body) {
+    static_cast<void>(live);
+    reader in{body};
+    const auto packet_id{in.read_varint()};
+    if (!packet_id) {
+        return;
+    }
+    const auto payload{body.subspan(in.position())};
+    packets_out.fetch_add(1, std::memory_order_relaxed);
+    bytes_out.fetch_add(payload.size(), std::memory_order_relaxed);
+    if (!protocol) {
+        return;
+    }
+    if (auto sent{protocol->send_packet(id, *packet_id, payload)}; !sent) {
+        return;
+    }
+    if (socket) {
+        std::span<const std::byte> framed{};
+        while (protocol->take_outbound(id, framed)) {
+            socket->send(id, framed);
+        }
+    }
+}
+
 void server::impl::reject(std::uint64_t id, std::string_view reason) {
     log_net.warn("connection {} hit a protocol error: {}", id, reason);
     close(id);
@@ -3342,8 +3871,54 @@ void server::impl::close(std::uint64_t id) {
     }
 }
 
+void server::impl::sweep_timeouts() {
+    constexpr std::int64_t keepalive_interval_ms{15'000};
+    const auto now{now_ns()};
+    const auto now_ms{now / 1'000'000};
+    std::vector<std::uint64_t> pre_play_expired;
+    std::vector<std::uint64_t> keepalive_missed;
+    std::vector<std::uint64_t> keepalive_due;
+    for (const auto &entry : connection_snapshot()) {
+        const std::lock_guard lock{entry.handle->mutex};
+        const auto &data{entry.handle->data};
+        if (entry.handle->closed.load(std::memory_order_relaxed)) {
+            continue;
+        }
+        if (data.state != connection_state::play) {
+            // Handshake, status, login and configuration share one deadline:
+            // a connection that cannot reach play in time is not a player and
+            // must not hold a slot, a descriptor and a decoder buffer.
+            if (config.login_timeout_ns > 0 &&
+                now - data.opened_ns > config.login_timeout_ns) {
+                pre_play_expired.push_back(entry.id);
+            }
+            continue;
+        }
+        if (now_ms - data.keepalive_sent_ms < keepalive_interval_ms) {
+            continue;
+        }
+        if (data.keepalive_pending) {
+            keepalive_missed.push_back(entry.id);
+        } else {
+            keepalive_due.push_back(entry.id);
+        }
+    }
+    for (const auto id : pre_play_expired) {
+        log_net.info(
+            "connection {} did not leave the pre-play states within {}ms", id,
+            config.login_timeout_ns / 1'000'000LL);
+        close(id);
+    }
+    for (const auto id : keepalive_missed) {
+        log_net.warn("connection {} missed its keepalive", id);
+        close(id);
+    }
+    for (const auto id : keepalive_due) {
+        send_keepalive(id);
+    }
+}
+
 void server::impl::keepalive_loop() {
-    constexpr std::int64_t interval_ms{15'000};
     while (!stopped.load(std::memory_order_acquire)) {
         for (int tick{0}; tick < 10 && !stopped.load(std::memory_order_acquire);
              ++tick) {
@@ -3352,34 +3927,7 @@ void server::impl::keepalive_loop() {
         if (stopped.load(std::memory_order_acquire)) {
             break;
         }
-        std::vector<std::uint64_t> expired;
-        std::vector<std::uint64_t> due;
-        const auto now{now_ns() / 1'000'000};
-        {
-            for (const auto &entry : connection_snapshot()) {
-                const std::lock_guard lock{entry.handle->mutex};
-                auto &data{entry.handle->data};
-                if (entry.handle->closed.load(std::memory_order_relaxed) ||
-                    data.state != connection_state::play) {
-                    continue;
-                }
-                if (now - data.keepalive_sent_ms < interval_ms) {
-                    continue;
-                }
-                if (data.keepalive_pending) {
-                    expired.push_back(entry.id);
-                } else {
-                    due.push_back(entry.id);
-                }
-            }
-        }
-        for (const auto id : expired) {
-            log_net.warn("connection {} missed its keepalive", id);
-            close(id);
-        }
-        for (const auto id : due) {
-            send_keepalive(id);
-        }
+        sweep_timeouts();
     }
 }
 
@@ -3461,8 +4009,23 @@ void server::impl::tick() {
     {
         const std::lock_guard lock{inbound_mutex};
         local.swap(inbound);
+        inbound_queued_packets = 0;
+        inbound_queued_bytes = 0;
     }
     for (const auto &packet : local) {
+        // Release this connection's share of the queue budget before applying
+        // the packet: `handle_play` may close the connection, after which its
+        // counters are gone with it.
+        static_cast<void>(with_connection(
+            packet.connection, [&packet](connection_state_data &data) {
+                if (data.inbound_pending_packets > 0) {
+                    --data.inbound_pending_packets;
+                }
+                data.inbound_pending_bytes =
+                    data.inbound_pending_bytes > packet.body.size()
+                        ? data.inbound_pending_bytes - packet.body.size()
+                        : 0;
+            }));
         handle_play(packet.connection, packet.body);
     }
     if (config.idle_timeout_seconds > 0) {
@@ -3518,40 +4081,80 @@ auto server::start(server_inputs inputs, core::config::view view)
                            : inputs.fallback_bind_host.value_or("0.0.0.0");
     config.bind.port = static_cast<std::uint16_t>(port);
     config.compression_threshold = static_cast<int>(compression);
-    config.view_distance = static_cast<std::int32_t>(
-        int_or("view_distance", inputs.fallback_view_distance.value_or(10)));
-    config.simulation_distance = static_cast<std::int32_t>(
-        int_or("simulation_distance",
-               inputs.fallback_simulation_distance.value_or(10)));
+
+    // Every numeric network setting is range-checked here, before it is used.
+    // The values come from operator configuration and from imported
+    // `server.properties`, so an out-of-range value must stop startup instead
+    // of being narrowed into a different setting or reaching a contract that
+    // requires an ordered pair.
+    const auto assign_range =
+        [&int_or](std::string_view key, std::int64_t fallback,
+                  std::int64_t minimum, std::int64_t maximum,
+                  std::int64_t &out) -> status {
+        const auto value{int_or(key, fallback)};
+        if (value < minimum || value > maximum) {
+            return std::unexpected{
+                make_error(error_code::invalid_argument,
+                           fmt::format("network.{} is out of range", key))};
+        }
+        out = value;
+        return status_ok();
+    };
+    std::int64_t configured{0};
+    if (auto checked{assign_range("view_distance",
+                                  inputs.fallback_view_distance.value_or(10), 2,
+                                  32, configured)};
+        !checked) {
+        return std::unexpected{std::move(checked.error())};
+    }
+    config.view_distance = static_cast<std::int32_t>(configured);
+    if (auto checked{
+            assign_range("simulation_distance",
+                         inputs.fallback_simulation_distance.value_or(10), 2,
+                         32, configured)};
+        !checked) {
+        return std::unexpected{std::move(checked.error())};
+    }
+    config.simulation_distance = static_cast<std::int32_t>(configured);
     config.online_mode =
         bool_or("online_mode", inputs.fallback_online_mode.value_or(false));
     config.status.description =
         view.contains("status.motd")
             ? view.get_string("status.motd", "A Refrain Server")
             : inputs.fallback_motd.value_or("A Refrain Server");
-    config.status.max_players = static_cast<std::int32_t>(
-        int_or("status.max_players", inputs.fallback_max_players.value_or(20)));
+    if (auto checked{assign_range("status.max_players",
+                                  inputs.fallback_max_players.value_or(20), 0,
+                                  1'000'000, configured)};
+        !checked) {
+        return std::unexpected{std::move(checked.error())};
+    }
+    config.status.max_players = static_cast<std::int32_t>(configured);
     config.status.online_players = 0;
     config.status.replies_to_status = view.get_bool("status.enabled", true);
     config.status.enforces_secure_chat = bool_or(
         "enforce_secure_profile", inputs.fallback_secure_chat.value_or(true));
     config.session_server =
         view.get_string("session_server", "https://sessionserver.mojang.com");
-    config.auth_timeout_ms =
-        static_cast<std::int32_t>(view.get_int64("auth_timeout_ms", 5000));
+    if (auto checked{
+            assign_range("auth_timeout_ms",
+                         static_cast<std::int64_t>(config.auth_timeout_ms), 1,
+                         60'000, configured)};
+        !checked) {
+        return std::unexpected{std::move(checked.error())};
+    }
+    config.auth_timeout_ms = static_cast<std::int32_t>(configured);
     // `rate_limit` is documented in packets per second for a play connection,
     // which is the unit the token bucket refills in, so the key needs no unit
-    // conversion. Narrow the integer here, where the value is read, and reject
-    // a value the field cannot represent instead of truncating it into a
-    // different rate.
-    const auto rate_limit{int_or("rate_limit", 0)};
-    if (rate_limit < 0 ||
-        rate_limit > std::numeric_limits<std::int32_t>::max()) {
-        return std::unexpected{
-            make_error(error_code::invalid_argument,
-                       "network.rate_limit is out of range")};
+    // conversion. The default is deliberately non-zero: a single connection
+    // that floods the shared I/O thread is bounded even before the queue
+    // budgets below come into play. Zero still disables the limiter.
+    if (auto checked{assign_range(
+            "rate_limit", static_cast<std::int64_t>(config.rate_limit), 0,
+            std::numeric_limits<std::int32_t>::max(), configured)};
+        !checked) {
+        return std::unexpected{std::move(checked.error())};
     }
-    config.rate_limit = static_cast<std::int32_t>(rate_limit);
+    config.rate_limit = static_cast<std::int32_t>(configured);
     // `player_idle_timeout` is documented in minutes, matching the Java
     // `server.properties` key it is imported from. The keepalive path compares
     // packets against a timeout in seconds, so the unit conversion belongs
@@ -3564,6 +4167,62 @@ auto server::start(server_inputs inputs, core::config::view view)
                        "network.player_idle_timeout is out of range")};
     }
     config.idle_timeout_seconds = static_cast<std::int32_t>(idle_minutes * 60);
+    // The connection ceiling defaults to the advertised player count plus a
+    // small margin for the status list, reconnects and the login burst. An
+    // operator may set it explicitly; zero or a negative value is refused
+    // rather than silently meaning "unlimited".
+    if (view.contains("max_connections")) {
+        if (auto checked{
+                assign_range("max_connections", 1, 1, 1'000'000, configured)};
+            !checked) {
+            return std::unexpected{std::move(checked.error())};
+        }
+        config.max_connections = static_cast<std::size_t>(configured);
+    } else {
+        config.max_connections = static_cast<std::size_t>(
+            config.status.max_players + server_settings::connection_margin);
+    }
+    // Pre-play deadline: handshake, status, login and configuration share one
+    // budget, so an unauthenticated peer cannot hold a connection slot open
+    // indefinitely.
+    if (auto checked{assign_range("login_timeout_ms", 30'000, 1'000, 600'000,
+                                  configured)};
+        !checked) {
+        return std::unexpected{std::move(checked.error())};
+    }
+    config.login_timeout_ns = configured * 1'000'000LL;
+    if (auto checked{assign_range("pre_play_buffer_bytes", 64LL * 1024LL, 1024,
+                                  static_cast<std::int64_t>(max_frame_buffer),
+                                  configured)};
+        !checked) {
+        return std::unexpected{std::move(checked.error())};
+    }
+    config.pre_play_buffer_bytes = static_cast<std::size_t>(configured);
+    if (auto checked{
+            assign_range("max_inbound_packets", 256, 1, 1'000'000, configured)};
+        !checked) {
+        return std::unexpected{std::move(checked.error())};
+    }
+    config.max_inbound_packets = static_cast<std::size_t>(configured);
+    if (auto checked{assign_range("max_inbound_bytes", 1LL * 1024LL * 1024LL, 1,
+                                  256LL * 1024LL * 1024LL, configured)};
+        !checked) {
+        return std::unexpected{std::move(checked.error())};
+    }
+    config.max_inbound_bytes = static_cast<std::size_t>(configured);
+    if (auto checked{assign_range("max_inbound_packets_total", 8192, 1,
+                                  10'000'000, configured)};
+        !checked) {
+        return std::unexpected{std::move(checked.error())};
+    }
+    config.max_inbound_packets_total = static_cast<std::size_t>(configured);
+    if (auto checked{assign_range("max_inbound_bytes_total",
+                                  8LL * 1024LL * 1024LL, 1,
+                                  1LL * 1024LL * 1024LL * 1024LL, configured)};
+        !checked) {
+        return std::unexpected{std::move(checked.error())};
+    }
+    config.max_inbound_bytes_total = static_cast<std::size_t>(configured);
     config.spawn_x = inputs.spawn_x;
     config.spawn_y = inputs.spawn_y;
     config.spawn_z = inputs.spawn_z;
@@ -3609,6 +4268,17 @@ auto server::start(server_inputs inputs, core::config::view view)
     state->protocol = std::move(inputs.protocol);
     state->verify_session = std::move(inputs.verify_session);
     state->config = std::move(config);
+    if (state->config.online_mode) {
+        if (inputs.session_keypair) {
+            state->server_key = std::move(*inputs.session_keypair);
+        } else {
+            auto key{rsa_keypair::generate()};
+            if (!key) {
+                return std::unexpected{std::move(key.error())};
+            }
+            state->server_key = std::move(*key);
+        }
+    }
     if (auto started{state->start()}; !started) {
         return std::unexpected{std::move(started.error())};
     }

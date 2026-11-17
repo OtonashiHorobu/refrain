@@ -261,10 +261,19 @@ bind_host = "0.0.0.0"
 port = 25565
 compression_threshold = 256
 online_mode = true
+view_distance = 10          # 2..32; also sent to the client as chunk radius
+simulation_distance = 10    # 2..32
 transport_instance = "asio_tcp"   # provider instance name
 protocol_instance = "java_777"    # provider instance name
-rate_limit = 0          # packets/second per play connection; 0 disables
+rate_limit = 500        # packets/second per play connection; 0 disables
 player_idle_timeout = 0 # minutes; 0 disables
+login_timeout_ms = 30000
+max_connections = 28    # default: [status].max_players + 8
+pre_play_buffer_bytes = 65536
+max_inbound_packets = 256
+max_inbound_bytes = 1048576
+max_inbound_packets_total = 8192
+max_inbound_bytes_total = 8388608
 
 [status]
 motd = "A Refrain Server"
@@ -280,6 +289,31 @@ spawns_per_tick = 8000
 max_connection_backlog = 1048576
 max_total_backlog = 67108864
 ```
+
+`view_distance` and `simulation_distance` must be between 2 and 32; any other
+value stops startup with an error instead of being narrowed into a different
+setting. `max_connections` caps the sockets the server accepts at once and
+defaults to `[status].max_players` plus eight slots for the status list,
+reconnects and the login burst; a connection above the cap is closed before it
+gets a session. `login_timeout_ms` is the deadline for a connection to reach
+play: handshake, status, login and configuration share it, so an
+unauthenticated peer cannot hold a slot, a descriptor and a receive buffer
+forever. `pre_play_buffer_bytes` bounds what one unauthenticated connection may
+leave in its frame decoder; an ordinary handshake, status or login packet is a
+few hundred bytes, so the default is far below the 2 MiB frame ceiling.
+
+The play queue limits bound the work a tick has to catch up on.
+`max_inbound_packets` and `max_inbound_bytes` apply per connection,
+`max_inbound_packets_total` and `max_inbound_bytes_total` apply to every
+connection together. A play packet that would pass either budget closes the
+connection that sent it and is never queued, so a client flooding a server
+whose tick is stalled cannot grow memory without bound. `rate_limit` is the
+per-connection packet ceiling the token bucket enforces while a client is in
+play; it defaults to 500 packets per second, well above the traffic of a
+normal client, and 0 disables it. `online_mode` also bounds session
+verification: the request runs on a small worker pool with a bounded queue
+rather than on the network I/O thread, and one client address may start at most
+eight login attempts per minute.
 
 `[broadcast]` bounds the work one tick spends on the player list and on entity
 visibility. The byte counts are tick work budgets, not wire limits:

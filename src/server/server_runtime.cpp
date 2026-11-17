@@ -77,6 +77,24 @@ constexpr refrain::log::logger log_world{"world"};
 namespace refrain::server {
 
 using app::report_error;
+
+/// Clamp a client-requested view distance into the range the server supports.
+///
+/// The client controls `requested`; `configured` comes from the validated
+/// network configuration, which the loader already limits to 2..32. Taking
+/// `std::max(2, configured)` keeps the upper bound at least the lower bound, so
+/// this function has defined behavior even when a caller bypasses the loader
+/// and hands in an out-of-range configuration: the result then collapses to the
+/// minimum renderable distance instead of forming an invalid `std::clamp`
+/// range. Defined here without a header declaration so the regression test can
+/// pin the defensive branch; production code only calls it from this file.
+[[nodiscard]] auto clamp_view_distance(std::int32_t requested,
+                                       std::int32_t configured) noexcept
+    -> std::int32_t {
+    const auto upper{std::max(configured, std::int32_t{2})};
+    return std::clamp(requested, std::int32_t{2}, upper);
+}
+
 namespace {
 constexpr std::uint64_t max_console_file_bytes = 1ULL * 1024ULL * 1024ULL;
 
@@ -1042,9 +1060,11 @@ auto run_server(const server_run_options &options,
          view_distance](const refrain::net::view_distance_event &event) {
             // The server owns the viewport: a client asking for more than the
             // configured distance gets the configured one, and a client asking
-            // for nothing still gets the minimum renderable square.
+            // for nothing still gets the minimum renderable square. The loader
+            // rejects an out-of-range configured distance, so this call is a
+            // defense in depth for an embedding rather than the primary check.
             const auto clamped_distance{
-                std::clamp(event.distance, std::int32_t{2}, view_distance)};
+                clamp_view_distance(event.distance, view_distance)};
             static_cast<void>(
                 players.set_view_distance(event.connection, clamped_distance));
             const auto player{players.player_of(event.connection)};

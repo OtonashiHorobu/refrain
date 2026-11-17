@@ -54,6 +54,9 @@ class transport_impl final : public transport {
     [[nodiscard]] auto connection_count() const -> std::size_t override;
     [[nodiscard]] auto backlog(std::uint64_t connection) const
         -> std::size_t override;
+    void set_connection_limit(std::size_t limit) override;
+    [[nodiscard]] auto peer_address(std::uint64_t connection) const
+        -> std::string override;
     [[nodiscard]] auto local_port() const -> std::uint16_t override;
     [[nodiscard]] auto descriptor() const -> transport_descriptor override;
 
@@ -107,6 +110,9 @@ class transport_impl final : public transport {
     std::unordered_map<std::uint64_t, std::shared_ptr<session>> sessions_{};
     std::atomic<std::uint64_t> next_id_{1};
     std::atomic<std::uint16_t> local_port_{0};
+    /// Inbound session ceiling; zero means unlimited. Set once by the owner
+    /// before `listen` and read in the accept callback.
+    std::atomic<std::size_t> connection_limit_{0};
     std::vector<std::thread> threads_{};
     std::atomic<bool> stopping_{false};
 };
@@ -187,6 +193,24 @@ void transport_impl::accept_next() {
                 if (!stopping_ && handler_.on_error) {
                     handler_.on_error(error.message());
                 }
+                if (!stopping_) {
+                    accept_next();
+                }
+                return;
+            }
+            // The connection ceiling is enforced here, before a session owns
+            // the socket: an unauthenticated peer cannot make the process
+            // accumulate file descriptors or per-session read buffers past
+            // the configured bound.
+            const auto limit{connection_limit_.load(std::memory_order_relaxed)};
+            bool at_limit{false};
+            if (limit != 0) {
+                const std::lock_guard lock{mutex_};
+                at_limit = sessions_.size() >= limit;
+            }
+            if (at_limit) {
+                std::error_code close_error{};
+                socket.close(close_error);
                 if (!stopping_) {
                     accept_next();
                 }
@@ -309,6 +333,24 @@ void transport_impl::stop() noexcept {
 auto transport_impl::connection_count() const -> std::size_t {
     const std::lock_guard lock{mutex_};
     return sessions_.size();
+}
+
+void transport_impl::set_connection_limit(std::size_t limit) {
+    connection_limit_.store(limit, std::memory_order_relaxed);
+}
+
+auto transport_impl::peer_address(std::uint64_t connection) const
+    -> std::string {
+    const auto target{session_for(connection)};
+    if (!target) {
+        return {};
+    }
+    std::error_code error{};
+    const auto endpoint{target->socket.remote_endpoint(error)};
+    if (error) {
+        return {};
+    }
+    return endpoint.address().to_string();
 }
 
 auto transport_impl::local_port() const -> std::uint16_t {

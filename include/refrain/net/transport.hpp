@@ -97,6 +97,21 @@ class transport {
         return 0;
     }
 
+    /// Refuse new inbound connections once this many are open. Zero (the
+    /// default) leaves the count unlimited. A listening transport applies the
+    /// limit in the accept path, before a session, a socket buffer or a file
+    /// descriptor is committed to the peer; an outbound transport ignores it.
+    virtual void set_connection_limit(std::size_t /*limit*/) {}
+
+    /// Remote transport address of one connection, or an empty string when the
+    /// transport does not expose one. The address is used for diagnostics and
+    /// for per-address abuse throttling; it is not an identity. Implementations
+    /// must be callable from the thread that reports `on_open`.
+    [[nodiscard]] virtual auto peer_address(std::uint64_t /*connection*/) const
+        -> std::string {
+        return {};
+    }
+
     [[nodiscard]] virtual auto connection_count() const -> std::size_t = 0;
 
     /// Bound listener port (0 when not listening).

@@ -163,9 +163,22 @@ void inventory_sync::tick(refrain::session::play_session &players) {
 void inventory_sync::process_container_clicks(
     refrain::session::play_session &players) {
     for (const auto &slot : gateway_.take_creative_slots()) {
+        const auto *record{players.player_of(slot.connection)};
         auto *inventory = players.inventory_of(slot.connection);
-        const auto index{static_cast<std::size_t>(slot.slot)};
-        if (inventory == nullptr || slot.slot < 0 ||
+        if (inventory == nullptr || record == nullptr) {
+            continue;
+        }
+        // The network layer already ignores a slot packet from a non-creative
+        // connection; the authoritative game-mode record is the second gate, so
+        // a stale network-side mode can never author items either.
+        if (record->game_mode != sim::game_mode_creative) {
+            continue;
+        }
+        // The protocol names menu slots, not inventory indices: 36..44 is the
+        // hotbar (inventory 0..8) and 9..35 is the main inventory. A slot
+        // outside the modeled menu (crafting, armor, offhand) is not applied.
+        const auto index{refrain::server::inventory_index_of(slot.slot)};
+        if (index == refrain::server::no_inventory_index ||
             index >= inventory->size()) {
             continue;
         }
@@ -179,6 +192,17 @@ void inventory_sync::process_container_clicks(
         } else {
             const auto name{item_names_.find(slot.item_id)};
             if (name == item_names_.end()) {
+                continue;
+            }
+            // A creative stack is subject to the item's own stack limit, just
+            // as the reference rejects a count above the item's maximum. The
+            // event is dropped, not clamped, so the client's prediction is
+            // reverted by the next menu sync.
+            if (slot.count > items_.stack_limit(name->second)) {
+                log_server.warn(
+                    "dropped a creative slot event from connection {}: {} "
+                    "items of {} exceed the stack limit",
+                    slot.connection, slot.count, name->second);
                 continue;
             }
             target = sim::item_stack{

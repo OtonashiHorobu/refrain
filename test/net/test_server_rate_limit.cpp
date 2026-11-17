@@ -237,7 +237,8 @@ struct fixture {
     std::filesystem::path dir{};
     std::string error{};
 
-    explicit fixture(std::optional<std::int64_t> rate_limit) {
+    explicit fixture(std::optional<std::int64_t> rate_limit,
+                     std::string extra_config = {}) {
         static std::atomic<std::uint64_t> sequence{0};
         dir =
             std::filesystem::temp_directory_path() /
@@ -254,6 +255,7 @@ struct fixture {
             if (rate_limit) {
                 stream << "rate_limit = " << *rate_limit << "\n";
             }
+            stream << extra_config;
         }
         auto store{refrain::core::config::store::empty()};
         static_cast<void>(store.mount(
@@ -406,7 +408,9 @@ suite<"net/rate_limit"> server_rate_limit_tests = [] {
     };
 
     "net/server disables the rate limit when the key is zero"_test = [] {
-        fixture test{std::int64_t{0}};
+        // The queue budget would otherwise close the connection long before
+        // the disabled limiter matters, so the burst budget is raised.
+        fixture test{std::int64_t{0}, "max_inbound_packets = 2000\n"};
         expect(static_cast<bool>(test.running));
         if (!test.running) {
             return;
@@ -421,21 +425,24 @@ suite<"net/rate_limit"> server_rate_limit_tests = [] {
         expect(test.wire->close_calls() == 0U);
     };
 
-    "net/server disables the rate limit when the key is absent"_test = [] {
-        fixture test{std::nullopt};
-        expect(static_cast<bool>(test.running));
-        if (!test.running) {
-            return;
-        }
-        constexpr std::uint64_t connection{4};
-        test.open(connection);
-        test.join_play(connection);
+    "net/server applies a non-zero rate limit when the key is absent"_test =
+        [] {
+            // An absent key uses the documented default rather than disabling
+            // the limiter, so a single burst larger than one second closes the
+            // connection.
+            fixture test{std::nullopt, "max_inbound_packets = 2000\n"};
+            expect(static_cast<bool>(test.running));
+            if (!test.running) {
+                return;
+            }
+            constexpr std::uint64_t connection{4};
+            test.open(connection);
+            test.join_play(connection);
 
-        test.feed_play(connection, 1000);
-        expect(test.codec->live(connection));
-        expect(test.running->active_connections().size() == 1U);
-        expect(test.wire->close_calls() == 0U);
-    };
+            test.feed_play(connection, 1000);
+            expect(!test.codec->live(connection));
+            expect(test.wire->close_calls() == 1U);
+        };
 
     "net/server rejects a negative or oversized rate limit"_test = [] {
         fixture negative{std::int64_t{-1}};

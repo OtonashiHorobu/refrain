@@ -6,6 +6,7 @@
 
 #include <refrain/core/config.hpp>
 #include <refrain/core/error.hpp>
+#include <refrain/net/crypto.hpp>
 #include <refrain/net/protocol_codec.hpp>
 #include <refrain/net/status.hpp>
 #include <refrain/net/transport.hpp>
@@ -347,6 +348,11 @@ struct server_inputs {
     /// create the HTTP session client, which makes online login testable
     /// without the Mojang service.
     session_verifier verify_session{};
+    /// Optional online-mode RSA keypair. Empty generates a fresh keypair at
+    /// start; an embedding or a test that drives the encrypted login itself
+    /// supplies the keypair so it knows the public key the client must encrypt
+    /// to.
+    std::optional<rsa_keypair> session_keypair{};
     /// Monotonic time source in nanoseconds used for packet timestamps,
     /// keepalive scheduling and the idle timeout. Empty uses the steady clock.
     /// The callable is invoked from the I/O thread and the simulation thread,
