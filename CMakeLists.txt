@@ -89,6 +89,17 @@ endif()
 include(cmake/refrain_arch.cmake)
 refrain_apply_arch_level("${REFRAIN_ARCH_LEVEL}")
 
+# The Windows x64 ABI guarantees 16-byte stack alignment only. AVX2 code
+# generation may keep 32-byte vector values in a frame and spill them with an
+# aligned 256-bit store; in a large frame the store can run with the stack
+# aligned to 16 bytes and raise 0xC0000005. Prefer 128-bit vectors for the
+# MinGW x86-64-v3 build: AVX2 stays enabled for everything else, and only the
+# 32-byte vector code generation that requires 32-byte stack alignment is
+# dropped.
+if(MINGW AND REFRAIN_ARCH_LEVEL STREQUAL "x86-64-v3")
+    add_compile_options(-mprefer-vector-width=128)
+endif()
+
 # Sanitizer instrumentation for every first-party target (the CI matrix uses
 # dedicated ASan/UBSan and TSan builds; Release timings stay unaffected).
 if(REFRAIN_SANITIZE)
