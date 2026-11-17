@@ -42,7 +42,7 @@ constexpr float max_health_points = 20.0F;
                                    double offset_y) noexcept -> block_state_id {
     return level.block_at(
         block_pos{static_cast<std::int32_t>(std::floor(player.x)),
-                  static_cast<std::int16_t>(std::floor(player.y + offset_y)),
+                  block_y_of(player.y + offset_y),
                   static_cast<std::int32_t>(std::floor(player.z))});
 }
 
@@ -208,6 +208,19 @@ void apply_predicted_move(world &level, player_state &player) noexcept {
 }
 
 } // namespace
+
+auto block_y_of(double y) noexcept -> std::int16_t {
+    const auto lowest{static_cast<double>(world::build_min_y())};
+    const auto highest{static_cast<double>(world::build_max_y())};
+    auto bounded{highest};
+    if (std::isfinite(y)) {
+        bounded = std::clamp(y, lowest, highest);
+    } else if (y < 0.0) {
+        // Negative infinity: any bound below the build floor behaves the same.
+        bounded = lowest;
+    }
+    return static_cast<std::int16_t>(std::floor(bounded));
+}
 
 auto experience_for_level(std::int32_t level) noexcept -> std::int32_t {
     if (level <= 0) {
@@ -411,7 +424,7 @@ void tick_player(world &level, player_state &player) noexcept {
         } else if (was_on_ground) {
             const auto below{level.block_at(
                 block_pos{static_cast<std::int32_t>(std::floor(player.x)),
-                          static_cast<std::int16_t>(std::floor(player.y - 0.2)),
+                          block_y_of(player.y - 0.2),
                           static_cast<std::int32_t>(std::floor(player.z))})};
             const auto friction{level.block_friction(below)};
             player.vx += intent.x * player_walk_speed *

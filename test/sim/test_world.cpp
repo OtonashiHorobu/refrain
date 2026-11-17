@@ -16,6 +16,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <span>
 #include <string>
@@ -478,6 +479,52 @@ namespace world = refrain::world;
             expect(runtime->remove_entity(*spawned));
             expect(!runtime->remove_entity(*spawned));
             expect(runtime->state_hash() != grounded_hash);
+        }
+        std::error_code error;
+        fs::remove_all(directory, error);
+    };
+
+    "sim/entity vertical coordinates clamp to the build range"_test = [] {
+        const auto directory{scratch_directory()};
+        {
+            auto store{make_store(directory)};
+            expect(store.has_value());
+            if (!store) {
+                return;
+            }
+            auto runtime{refrain::sim::world::open(directory.string())};
+            expect(runtime.has_value());
+            if (!runtime) {
+                return;
+            }
+            expect(runtime->ensure_chunk({0, 0}).has_value());
+            // Console spawns can place an entity far outside the modeled
+            // sections. The fall scan has to stay bounded to the build range
+            // and the narrowing block-coordinate conversion must not overflow.
+            auto high{runtime->spawn_entity("minecraft:pig", 0.5, 1.0e10, 0.5)};
+            auto low{runtime->spawn_entity("minecraft:cow", 0.5, -1.0e10, 0.5)};
+            expect(high.has_value());
+            expect(low.has_value());
+            if (!high || !low) {
+                return;
+            }
+            for (int tick{0}; tick < 5; ++tick) {
+                runtime->tick();
+            }
+            const auto fallen_high{runtime->entity(*high)};
+            expect(fallen_high.has_value());
+            if (fallen_high) {
+                expect(std::isfinite(fallen_high->y));
+                expect(fallen_high->y < 1.0e10);
+                expect(!fallen_high->on_ground);
+            }
+            const auto fallen_low{runtime->entity(*low)};
+            expect(fallen_low.has_value());
+            if (fallen_low) {
+                expect(std::isfinite(fallen_low->y));
+                expect(fallen_low->y < -1.0e10);
+                expect(!fallen_low->on_ground);
+            }
         }
         std::error_code error;
         fs::remove_all(directory, error);

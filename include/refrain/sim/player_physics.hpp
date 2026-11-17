@@ -85,6 +85,16 @@ inline constexpr std::int32_t player_drowning_air = -20;
 [[nodiscard]] auto experience_for_level(std::int32_t level) noexcept
     -> std::int32_t;
 
+/// Block Y of a vertical body position, for a block lookup.
+///
+/// The runtime world only models blocks between `world::build_min_y()` and
+/// `world::build_max_y()`; those bounds fit in `int16`, so clamping there
+/// first keeps the lookup inside the modeled sections and makes the narrowing
+/// conversion defined for every input, including the large positions a console
+/// command or a modified client can produce. Non-finite input (NaN, infinity)
+/// maps to the nearer build bound.
+[[nodiscard]] auto block_y_of(double y) noexcept -> std::int16_t;
+
 /// Add experience points and recompute level and progress. Negative points are
 /// ignored (the vanilla call never removes experience).
 void add_experience(player_state &player, std::int32_t points) noexcept;

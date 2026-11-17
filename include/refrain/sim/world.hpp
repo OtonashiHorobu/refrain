@@ -426,7 +426,9 @@ class world {
     /// `zstd_policy_`, and reloads the chunks that were loaded. Tickets are
     /// kept; a ticketed column that is not resident is loaded on demand after
     /// the rebuild, because a viewport pin may cover a column the store does
-    /// not hold yet. `state_hash()` is unchanged when every reload succeeds.
+    /// not hold yet. Generated column entities keep the logical ids they had
+    /// before the rebuild, so `state_hash()` is unchanged when every reload
+    /// succeeds.
     ///
     /// On failure the original world is reopened and reloaded when possible
     /// and the maintenance error is returned. If the reopen itself fails, a
@@ -459,8 +461,10 @@ class world {
     auto cancel_timer(timer_id id) -> bool;
 
     /// Event bus for sim-thread notification events (tick, later block hooks).
+    /// The bus, its subscriptions included, moves with the world: a world that
+    /// is moved after configuration keeps listening.
     [[nodiscard]] auto events() noexcept -> core::events::bus & {
-        return events_;
+        return *events_;
     }
     [[nodiscard]] auto ticks() const noexcept -> std::int64_t { return tick_; }
 
@@ -726,8 +730,13 @@ class world {
                            block_state_id new_state);
     /// Spawn the generated entities of a column and record their runtime ids
     /// on it. Called exactly once per column load; a column already holding
-    /// ids is refused so a reload path cannot spawn a second copy.
+    /// ids is refused so a reload path cannot spawn a second copy. A non-empty
+    /// `entity_ids` reuses those ids instead of allocating new ones; it must
+    /// have one id per stored entity record, and the ids must ascend.
     [[nodiscard]] auto spawn_column_entities(chunk &column) -> status;
+    [[nodiscard]] auto
+    spawn_column_entities(chunk &column, std::span<const entity_id> entity_ids)
+        -> status;
     /// Remove the generated entities a column holds.
     void despawn_column_entities(chunk &column) noexcept;
     /// Remove every generated entity the world holds. Used by the full chunk
@@ -750,6 +759,14 @@ class world {
     /// One player's physics/survival step; `tick()` applies it to every record
     /// in ascending entity id order.
     void tick_player(player_state &player) noexcept;
+
+    /// Load a column like `ensure_chunk`, using `entity_ids` for the generated
+    /// entities instead of allocating fresh logical ids. Used by the palette
+    /// rebuild, which reloads the columns it had loaded and must keep the ids
+    /// the rest of the simulation already knows.
+    [[nodiscard]] auto load_chunk(const chunk_pos &pos,
+                                  std::span<const entity_id> entity_ids)
+        -> result<chunk *>;
 
     /// Runtime collision description of one block state, derived from its
     /// registry key and cached per id. The storage model carries no
@@ -842,7 +859,10 @@ class world {
         std::function<void()> fn{};
     };
 
-    core::events::bus events_{};
+    /// The notification bus is not movable (its queued callbacks capture the
+    /// owning object), so the world holds it behind a pointer: moving the
+    /// world moves the bus and its subscriptions instead of dropping them.
+    std::unique_ptr<core::events::bus> events_{};
     std::vector<scheduled_task> timers_{};
     timer_id next_timer_id_{1};
     rng rng_{};

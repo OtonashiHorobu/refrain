@@ -5,6 +5,7 @@
 #include <refrain/sim/world_clock.hpp>
 
 #include <refrain/data/nbt.hpp>
+#include <refrain/sim/rng.hpp>
 #include <refrain/world/object_store.hpp>
 #include <refrain/world/saved_data.hpp>
 
@@ -17,19 +18,37 @@
 namespace refrain::sim {
 namespace {
 
-/// Seed of the weather stream. The value is fixed so a world replays the same
-/// weather sequence; it is mixed with the world seed by `seed()`.
+/// Domain separator of the weather draws, mixed with the world seed.
 constexpr std::uint64_t weather_stream_salt{0x9E3779B97F4A7C15ULL};
+/// Domain separators of the two independent duration streams. A draw never
+/// depends on the draw order: it is keyed by the tick it happens on.
+constexpr std::uint64_t rain_stream{0x2545F4914F6CDD1DULL};
+constexpr std::uint64_t thunder_stream{0x51ED270B1A2C3D4EULL};
+/// Odd multipliers that spread the tick and the stream over the key. They are
+/// constants of the weather derivation, not of a saved format.
+constexpr std::uint64_t tick_multiplier{0x9E3779B97F4A7C15ULL};
+constexpr std::uint64_t stream_multiplier{0xBF58476D1CE4E5B9ULL};
 
-/// Uniform integer in `[minimum, maximum]` from the world's deterministic
-/// stream. The reference samples an inclusive integer range.
-[[nodiscard]] auto sample(rng &random, std::int32_t minimum,
+/// Uniform integer in `[minimum, maximum]` for one (seed, tick, stream) key.
+///
+/// The reference samples an inclusive integer range from a mutable level
+/// random. Keying the draw by the tick instead keeps the sequence reproducible
+/// from saved state: the only inputs are the world seed, the level age and
+/// which stream asks, and the save carries all three. One 64-bit draw is used;
+/// the modulo bias for the timer ranges (at most 180001 values) is below
+/// 2^-32 and irrelevant to weather timing.
+[[nodiscard]] auto sample(std::uint64_t seed, std::int64_t tick,
+                          std::uint64_t stream, std::int32_t minimum,
                           std::int32_t maximum) noexcept -> std::int32_t {
     if (maximum <= minimum) {
         return minimum;
     }
     const auto span{static_cast<std::uint32_t>(maximum - minimum) + 1U};
-    return minimum + static_cast<std::int32_t>(random.next_bounded(span));
+    const auto key{(seed ^ weather_stream_salt) ^
+                   (static_cast<std::uint64_t>(tick) * tick_multiplier) ^
+                   (stream * stream_multiplier)};
+    rng draw{key};
+    return minimum + static_cast<std::int32_t>(draw.next_u64() % span);
 }
 
 [[nodiscard]] auto clamp_level(float value) noexcept -> float {
@@ -58,25 +77,23 @@ constexpr std::uint64_t weather_stream_salt{0x9E3779B97F4A7C15ULL};
 
 /// Duration of the pending rain or thunder phase. A running phase is resampled
 /// from its duration range; a stopped one from its delay range.
-[[nodiscard]] auto sample_phase(rng &random, bool active,
-                                std::int32_t active_min,
-                                std::int32_t active_max, std::int32_t delay_min,
-                                std::int32_t delay_max) noexcept
+[[nodiscard]] auto
+sample_phase(std::uint64_t seed, std::int64_t tick, std::uint64_t stream,
+             bool active, std::int32_t active_min, std::int32_t active_max,
+             std::int32_t delay_min, std::int32_t delay_max) noexcept
     -> std::int32_t {
-    return active ? sample(random, active_min, active_max)
-                  : sample(random, delay_min, delay_max);
+    return active ? sample(seed, tick, stream, active_min, active_max)
+                  : sample(seed, tick, stream, delay_min, delay_max);
 }
 
 } // namespace
 
-world_clock::world_clock() : weather_random_{0} { seed(weather_stream_salt); }
+world_clock::world_clock() = default;
 
 world_clock::world_clock(std::uint64_t seed_value) noexcept
-    : weather_random_{seed_value ^ weather_stream_salt} {}
+    : weather_seed_{seed_value} {}
 
-void world_clock::seed(std::uint64_t value) noexcept {
-    weather_random_.seed(value ^ weather_stream_salt);
-}
+void world_clock::seed(std::uint64_t value) noexcept { weather_seed_ = value; }
 
 void world_clock::tick() {
     ++game_time_;
@@ -103,8 +120,9 @@ void world_clock::advance_weather() {
             }
         } else {
             thunder_time_ = sample_phase(
-                weather_random_, thundering_, thunder_duration_min,
-                thunder_duration_max, thunder_delay_min, thunder_delay_max);
+                weather_seed_, game_time_, thunder_stream, thundering_,
+                thunder_duration_min, thunder_duration_max, thunder_delay_min,
+                thunder_delay_max);
         }
         if (rain_time_ > 0) {
             if (--rain_time_ == 0) {
@@ -112,8 +130,9 @@ void world_clock::advance_weather() {
             }
         } else {
             rain_time_ =
-                sample_phase(weather_random_, raining_, rain_duration_min,
-                             rain_duration_max, rain_delay_min, rain_delay_max);
+                sample_phase(weather_seed_, game_time_, rain_stream, raining_,
+                             rain_duration_min, rain_duration_max,
+                             rain_delay_min, rain_delay_max);
         }
     }
     thunder_level_ =
@@ -281,8 +300,10 @@ auto write_world_clock(refrain::world::object_store &objects,
     if (!weather_path) {
         return std::unexpected{weather_path.error()};
     }
-    // The reference persists the flags and timers; the levels are derived from
-    // the flags on load (a raining world starts at level one).
+    // The reference persists the flags and timers. The eased levels are
+    // persisted too: they ramp over a hundred ticks and a reload that derived
+    // them from the flag alone would snap a half-ramped front, so the restored
+    // weather would not continue the sequence the world had before the save.
     const auto weather{clock.weather()};
     return write_nbt_object(
         objects, *weather_path,
@@ -294,6 +315,8 @@ auto write_world_clock(refrain::world::object_store &objects,
                  {"raining", make_byte(weather.raining ? 1 : 0)},
                  {"thunder_time", make_int(weather.thunder_time)},
                  {"thundering", make_byte(weather.thundering ? 1 : 0)},
+                 {"rain_level", make_float(weather.rain_level)},
+                 {"thunder_level", make_float(weather.thunder_level)},
              })},
             {"DataVersion", make_int(5023)}}),
         false);

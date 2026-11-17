@@ -259,6 +259,77 @@ suite<"sim/chunk-entities"> chunk_entity_tests = [] {
         expect(static_cast<bool>(opened->unload_chunk(entity_column)));
     };
 
+    "a palette rebuild keeps generated entity ids and the state hash"_test =
+        [] {
+            const refrain::test_support::scratch_directory scratch;
+            const auto root{scratch.path() / "world"};
+            expect(static_cast<bool>(
+                world::create_world(root.string(), 3, "palette-entities")));
+            {
+                auto created{world::world_store::open(root.string())};
+                expect(static_cast<bool>(created));
+                if (!created) {
+                    return;
+                }
+                expect(static_cast<bool>(created->write_chunk(
+                    entity_column,
+                    make_column({
+                        make_entity("minecraft:shulker", 2.5, 3.5, 3),
+                        make_entity("minecraft:item_frame", 0.5, 0.5, 0),
+                    }))));
+                expect(static_cast<bool>(created->commit()));
+            }
+
+            auto opened{sim::world::open(root.string())};
+            expect(static_cast<bool>(opened))
+                << (opened ? "" : opened.error().message);
+            if (!opened) {
+                return;
+            }
+            auto loaded{opened->ensure_chunk(entity_column)};
+            expect(static_cast<bool>(loaded))
+                << (loaded ? "" : loaded.error().message);
+            if (!loaded) {
+                return;
+            }
+            const auto before{opened->chunk_entities(entity_column)};
+            expect(before.size() == 2U);
+            if (before.size() != 2U) {
+                return;
+            }
+            const auto hash_before{opened->state_hash()};
+            auto report{opened->rebuild_palette_in_place(1, 3)};
+            expect(static_cast<bool>(report))
+                << (report ? "" : report.error().message);
+            if (!report) {
+                return;
+            }
+            // The reload reuses the logical ids instead of allocating new
+            // ones, so clients keep the ids they were announced with and the
+            // state hash is unchanged.
+            const auto after{opened->chunk_entities(entity_column)};
+            expect(after.size() == before.size());
+            if (after.size() != before.size()) {
+                return;
+            }
+            for (std::size_t index{0}; index < before.size(); ++index) {
+                expect(after[index].id == before[index].id) << index;
+                expect(after[index].record.id == before[index].record.id)
+                    << index;
+            }
+            expect(opened->state_hash() == hash_before);
+            expect(opened->entities().size() == before.size());
+            // Reusing the ids must not advance the shared logical id sequence:
+            // the next spawn continues where the pre-rebuild world left off.
+            const auto next{
+                opened->spawn_entity("minecraft:pig", 0.5, 70.0, 0.5)};
+            expect(next.has_value());
+            if (next) {
+                expect(*next ==
+                       static_cast<sim::entity_id>(before.back().id + 1U));
+            }
+        };
+
     "a column without entities leaves the entity table alone"_test = [] {
         const refrain::test_support::scratch_directory scratch;
         const auto root{scratch.path() / "world"};
