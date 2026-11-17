@@ -13,6 +13,13 @@ Read the surrounding code, tests and documentation before changing behavior.
 Prefer the smallest change that solves the problem, and keep unrelated
 refactors out of the same commit.
 
+Search before you implement. Before writing code, look for the behavior in the
+repository and in the available reference sources: the abstraction may already
+exist, and the target version may already define the call chain. Use the
+code-search tooling rather than walking directories, and record what the search
+found in the feature's specification. A second implementation is justified only
+when the search came back empty or the existing one cannot be reused.
+
 Every feature that reproduces vanilla behavior starts by reading the complete
 relevant source of the target version (26.3, official mappings): the entry
 point, the full call chain, every branch, the data it reads, where it consumes
