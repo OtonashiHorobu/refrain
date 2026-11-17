@@ -676,6 +676,15 @@ switches the rules on the next tick: creative takes no damage and may fly,
 spectator passes through blocks, adventure and spectator cannot break or place
 blocks.
 
+Survival mining is server-authoritative. The client reports the selected hotbar
+slot and the start, stop and abort block actions; the server accumulates the
+destroy progress from the block's destroy time and the held tool, shows the
+destroy-stage animation to nearby players, writes air when the progress
+completes and damages the tool. An incorrect tool mines slower, a block that
+needs a tool tier leaves its break progress without the tool bonus, and
+creative breaks immediately. Broken blocks do not drop items yet, and neither
+placement rules nor neighbour updates are implemented.
+
 A replay script exercises a deterministic path:
 
 ```text

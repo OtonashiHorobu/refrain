@@ -142,10 +142,12 @@ across calls.
 
 The network shell reports neutral events (`player_join`, `player_leave`,
 `movement`, `player_input`, `flight`, `teleport_confirm`, `attack`,
-`animation`, `play_ready`, `view_distance`) and provides a raw packet sink plus
-the gameplay packet senders (teleport, health, experience, death screen, entity
-events). It does not decide which entities exist, who can see them, how much
-health a player has, or when a chunk view changes.
+`animation`, `play_ready`, `view_distance`, `held_slot`,
+`start_destroy_block`, `stop_destroy_block`, `abort_destroy_block`) and
+provides a raw packet sink plus the gameplay packet senders (teleport, health,
+experience, death screen, entity events, destroy-stage animation). It does not
+decide which entities exist, who can see them, how much health a player has, or
+when a chunk view changes.
 
 ## World storage
 
@@ -226,6 +228,58 @@ Block collision is derived from the block-state key rather than a full
 carpets; fences, walls and stairs collide as full blocks. That approximation
 can over-restrict a move but never lets a player through a solid block, and it
 is the one place where collision differs from the reference implementation.
+
+### Block breaking
+
+Block breaking is server-authoritative. The network shell decodes the three
+block actions of `player_action` (`START_DESTROY_BLOCK`, `STOP_DESTROY_BLOCK`,
+`ABORT_DESTROY_BLOCK`) and the selected hotbar slot and forwards them on the
+simulation thread; it acknowledges every action packet and sends the
+destroy-stage animation to the observers, but it never changes a block itself.
+The runtime owns one break record per connection: the target position, the
+tick the break started, the last stage sent, the game mode and the hotbar slot
+the break started with. The record's order is the connection order, so the
+packets a tick produces are deterministic.
+
+Destroy times and tool rules come from the tracked mining tables, not from
+source constants. One tick of progress is
+`toolSpeed / destroyTime / (correctTool ? 30 : 100)`; a block that does not
+require a correct tool counts as correct for bare hands, and a tool counts when
+its family and harvest level match the block. The reference accumulates that
+fraction times the elapsed ticks plus one, because the tick a break starts on
+counts, and progress is written to the client as tenths so the destroy-stage
+animation follows the reference's packet sequence. The held tool is the stack
+in the recorded hotbar slot; an empty slot mines at the bare-hand speed. A zero
+destroy time breaks on the start tick, and a block with no destroy time never
+progresses. Creative breaks any block on the start tick, except one whose held
+tool component forbids creative destruction.
+
+The break advances on the server clock. When the accumulated progress reaches
+one the server writes air through the world port, which records the edit the
+chunk streamer publishes as `block_update` in the same tick, and charges the
+held tool its per-block durability; creative breaks and zero-destroy-time
+blocks are free. A `STOP_DESTROY_BLOCK` that arrives after the reference's 0.7
+completion threshold finishes the break early, and one that arrives below it
+keeps the accumulated progress so the break still finishes without a new start
+packet. `ABORT_DESTROY_BLOCK` drops the progress and clears the animation, and
+a new start replaces the previous target. The destroy-stage animation goes to
+the players within 32 blocks of the block in the same level, never to the
+player that mines it, which renders its own prediction.
+
+A break is refused for adventure and spectator players, for a target farther
+from the eye than the reference's block interaction range (5.5 blocks in
+survival, 6 in creative), for a column the runtime has not loaded and for air.
+A refused action where the client predicted a change answers with the
+authoritative block state, while a target that is too far answers nothing, like
+the reference. Disconnect, teleport, respawn and a game-mode change drop the
+record and clear its animation.
+
+Breaking does not model drops, item entities, placement rules or neighbour
+updates yet: a broken block leaves nothing behind and its neighbours are not
+updated. Mining speed modifiers (effects, enchantments, the break-speed
+attribute, the underwater and airborne penalties), spawn protection, the world
+border, game-master blocks and adventure-mode `can_break` components are not
+modelled either.
 
 ### Lighting
 

@@ -17,6 +17,7 @@
 #include <refrain/core/io.hpp>
 #include <refrain/core/log.hpp>
 #include <refrain/core/time.hpp>
+#include <refrain/data/mining.hpp>
 #include <refrain/data/vanilla.hpp>
 #include <refrain/mod/host.hpp>
 #include <refrain/mod/rfmod.hpp>
@@ -33,6 +34,7 @@
 #include <refrain/server/entity_broadcaster.hpp>
 #include <refrain/server/inventory_sync.hpp>
 #include <refrain/server/maintenance_service.hpp>
+#include <refrain/server/mining_service.hpp>
 #include <refrain/server/mod_lifecycle_inputs.hpp>
 #include <refrain/server/mod_management_settings.hpp>
 #include <refrain/server/play_gateway.hpp>
@@ -323,6 +325,25 @@ auto run_server(const server_run_options &options,
                     "state falls back to opaque and emits nothing");
             }
             sim_level->set_block_light_table(std::move(light_table));
+        }
+    }
+    // Block breaking reads the mining and tool records of the same content
+    // container: the destroy time and tool rules of every block, and the
+    // family, harvest level and durability of every tool item.
+    std::optional<refrain::data::block_mining_table> block_mining{};
+    std::optional<refrain::data::item_tool_table> item_tools{};
+    if (tables) {
+        block_mining = refrain::data::block_mining_table::from_tables(*tables);
+        item_tools = refrain::data::item_tool_table::from_tables(*tables);
+        if (block_mining->empty()) {
+            log_world.warn(
+                "vanilla tables carry no block mining data: survival cannot "
+                "break any block");
+        }
+        if (item_tools->empty()) {
+            log_world.warn(
+                "vanilla tables carry no tool data: every item mines at the "
+                "bare-hand speed");
         }
     }
     auto boot_projection{world.level()};
@@ -728,6 +749,63 @@ auto run_server(const server_run_options &options,
     refrain::net::server *active_listener{nullptr};
     const auto external_join{options.player_join};
     const auto external_leave{options.player_leave};
+    // Server-authoritative block breaking. The service owns one break record
+    // per connection and reads the destroy time, the correct-tool rule and the
+    // held tool from the content tables; the listener carries its stage
+    // animations to the observers and the block-update corrections back to the
+    // client whose prediction the server rejected.
+    std::unique_ptr<refrain::server::mining_service> mining{};
+    if (block_mining && item_tools) {
+        if (auto *sim_players{world.players()}; sim_players != nullptr) {
+            mining = std::make_unique<refrain::server::mining_service>(
+                *block_mining, *item_tools, world, *sim_players,
+                refrain::server::mining_service::outbound{
+                    .destroy_stage =
+                        [&active_listener](std::uint64_t connection,
+                                           std::int32_t entity_id,
+                                           const refrain::sim::block_pos &pos,
+                                           std::int32_t stage) {
+                            if (active_listener != nullptr) {
+                                active_listener->send_block_destroy_stage(
+                                    connection, entity_id, pos.x,
+                                    static_cast<std::int32_t>(pos.y), pos.z,
+                                    stage);
+                            }
+                        },
+                    .block_state =
+                        [&active_listener, &world, &tables,
+                         &registries](std::uint64_t connection,
+                                      const refrain::sim::block_pos &pos,
+                                      refrain::sim::block_state_id state) {
+                            if (active_listener == nullptr || !tables ||
+                                !registries) {
+                                return;
+                            }
+                            auto body{refrain::server::encode_block_update(
+                                refrain::server::chunk_packet_source{
+                                    .world = &world,
+                                    .tables = &*tables,
+                                    .registries = &*registries},
+                                refrain::sim::block_change{.pos = pos,
+                                                           .old_state = state,
+                                                           .new_state =
+                                                               state})};
+                            if (!body) {
+                                log_net.warn(
+                                    "failed to encode the block update for "
+                                    "connection {}: {}",
+                                    connection, body.error().message);
+                                return;
+                            }
+                            active_listener->send_raw(connection, *body);
+                        },
+                });
+        } else {
+            log_server.warn(
+                "survival mining is unavailable: the world provider exposes "
+                "no in-process player table");
+        }
+    }
     refrain::net::server_inputs network_inputs{};
     network_inputs.commands =
         refrain::server::make_command_bridge(command_environment);
@@ -792,8 +870,11 @@ auto run_server(const server_run_options &options,
             }
         };
     network_inputs.player_leave =
-        [&players, &views, &broadcaster, &survival_sent,
+        [&players, &views, &broadcaster, &survival_sent, &mining,
          external_leave](const refrain::net::player_identity &identity) {
+            if (mining) {
+                mining->reset(identity.connection);
+            }
             const auto leaving{players.player_of(identity.connection)};
             const auto copy{
                 leaving == nullptr
@@ -810,7 +891,7 @@ auto run_server(const server_run_options &options,
             }
         };
     network_inputs.movement = [&players, &views, view_distance, &world,
-                               &active_listener](
+                               &active_listener, &mining](
                                   const refrain::net::movement_event &event) {
         const auto update_view =
             [&views, view_distance](std::uint64_t connection,
@@ -841,7 +922,11 @@ auto run_server(const server_run_options &options,
                 // The client reported a position the world does not
                 // allow. Send the authoritative position and keep the
                 // teleport confirmation handshake, so the client's next
-                // packets are not validated against the stale position.
+                // packets are not validated against the stale position. A
+                // break in flight must not finish from the old position.
+                if (mining) {
+                    mining->reset(event.connection);
+                }
                 active_listener->teleport_player(event.connection, record->x,
                                                  record->y, record->z,
                                                  record->yaw, record->pitch);
@@ -901,8 +986,11 @@ auto run_server(const server_run_options &options,
         }
     };
     network_inputs.teleport_confirm =
-        [&players, &views, view_distance,
-         &world](const refrain::net::teleport_confirm_event &event) {
+        [&players, &views, view_distance, &world,
+         &mining](const refrain::net::teleport_confirm_event &event) {
+            if (mining) {
+                mining->reset(event.connection);
+            }
             if (auto *sim_level{world.sim_world()}; sim_level != nullptr) {
                 if (auto *record{sim_level->players().find_by_connection(
                         event.connection)};
@@ -999,8 +1087,11 @@ auto run_server(const server_run_options &options,
         const auto *record{sim_level->players().find_by_connection(connection)};
         return record != nullptr && record->dead;
     };
-    network_inputs.respawn = [&players, &broadcaster, &world, spawn_x, spawn_y,
-                              spawn_z](std::uint64_t connection) {
+    network_inputs.respawn = [&players, &broadcaster, &world, &mining, spawn_x,
+                              spawn_y, spawn_z](std::uint64_t connection) {
+        if (mining) {
+            mining->reset(connection);
+        }
         if (auto *sim_level{world.sim_world()}; sim_level != nullptr) {
             if (auto *record{
                     sim_level->players().find_by_connection(connection)};
@@ -1031,12 +1122,10 @@ auto run_server(const server_run_options &options,
                     .pos = pos, .old_state = before, .new_state = value}})};
         return applied.has_value();
     };
-    // The game-mode rules and the interaction reach are enforced before the
-    // world changes: adventure and spectator cannot edit, and an edit must be
-    // close to the player's eye. Survival break progress, tool tiers and drops
-    // are not modelled yet.
-    // TODO: breaking ignores block hardness, the held tool, break progress and
-    // neighbour updates; every block becomes air immediately.
+    // The game-mode rules and the interaction reach are enforced before a
+    // placement changes the world: adventure and spectator cannot edit, and an
+    // edit must be close to the player's eye. Breaking has its own rules in the
+    // mining service; neither path models neighbour updates yet.
     const auto may_edit = [&world](std::uint64_t connection, std::int32_t x,
                                    std::int32_t y, std::int32_t z) {
         auto *sim_level{world.sim_world()};
@@ -1058,17 +1147,40 @@ auto run_server(const server_run_options &options,
         const auto dz{static_cast<double>(z) + 0.5 - record->z};
         return dx * dx + dy * dy + dz * dz <= reach * reach;
     };
-    network_inputs.break_block =
-        [apply_block, may_edit](std::uint64_t connection, std::int32_t x,
-                                std::int32_t y, std::int32_t z) {
-            if (y < std::numeric_limits<std::int16_t>::min() ||
-                y > std::numeric_limits<std::int16_t>::max() ||
-                !may_edit(connection, x, y, z)) {
-                return false;
+    // The selected hotbar slot is part of the player record: the break rules
+    // read the held tool from it and the console can inspect it.
+    network_inputs.held_slot = [&world](std::uint64_t connection,
+                                        std::uint8_t slot) {
+        auto *sim_level{world.sim_world()};
+        if (sim_level == nullptr) {
+            return;
+        }
+        if (auto *record{sim_level->players().find_by_connection(connection)};
+            record != nullptr) {
+            record->selected_slot = slot;
+        }
+    };
+    const auto action_pos = [](const refrain::net::break_action_event &event) {
+        return refrain::sim::block_pos{
+            event.x, static_cast<std::int16_t>(event.y), event.z};
+    };
+    network_inputs.start_destroy_block =
+        [&mining, action_pos](const refrain::net::break_action_event &event) {
+            if (mining) {
+                mining->start(event.connection, action_pos(event));
             }
-            return apply_block(
-                refrain::sim::block_pos{x, static_cast<std::int16_t>(y), z},
-                refrain::sim::air_block);
+        };
+    network_inputs.stop_destroy_block =
+        [&mining, action_pos](const refrain::net::break_action_event &event) {
+            if (mining) {
+                mining->stop(event.connection, action_pos(event));
+            }
+        };
+    network_inputs.abort_destroy_block =
+        [&mining, action_pos](const refrain::net::break_action_event &event) {
+            if (mining) {
+                mining->abort(event.connection, action_pos(event));
+            }
         };
     // TODO: placing ignores the held item, placement rules and orientation;
     // every placement writes minecraft:stone.
@@ -1104,6 +1216,9 @@ auto run_server(const server_run_options &options,
             "ready for Minecraft {} clients, type help for console commands "
             "and stop to shut down",
             options.game_version);
+        if (options.on_listening) {
+            options.on_listening(listener->local_port());
+        }
     }
 
     // Chunk streaming owns its state (per-connection viewports and the shared
@@ -1346,6 +1461,12 @@ auto run_server(const server_run_options &options,
             listener->tick();
             broadcaster.tick(players);
         }
+        // Break progress advances after this tick's play packets were applied
+        // and before the block updates are broadcast, so a break that finishes
+        // here announces its air block in the same tick.
+        if (mining) {
+            mining->tick();
+        }
         chunks.tick(world, players, views, tick_start_ns);
         chunks.broadcast_updates(world);
         inventory.tick(players);
@@ -1486,8 +1607,13 @@ auto run_server(const server_run_options &options,
     if (watchdog.joinable()) {
         watchdog.join();
     }
-    // Stop accepting connections before the world teardown so no handler can
-    // observe a half-destroyed store.
+    // Clear the animations of the breaks that were still in flight while the
+    // connections can still receive them, then stop accepting connections
+    // before the world teardown so no handler can observe a half-destroyed
+    // store.
+    if (mining) {
+        mining->clear();
+    }
     if (listener) {
         listener->stop();
         listener.reset();

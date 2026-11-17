@@ -159,10 +159,28 @@ struct view_distance_event {
     std::uint64_t connection{0};
     std::int32_t distance{0};
 };
+
 /// Optional protocol-owned encoder for the tab_list packet body. The network
 /// layer falls back to its generated encoder when empty.
 using tab_encoder = std::function<result<std::vector<std::byte>>(
     std::string_view header, std::string_view footer)>;
+
+/// One block-break action a client reported. The network layer decodes the
+/// packet and hands the target to the gameplay layer; the simulation owns the
+/// progress state and the world change.
+struct break_action_event {
+    std::uint64_t connection{0};
+    std::int32_t x{0};
+    std::int32_t y{0};
+    std::int32_t z{0};
+};
+
+/// Selected hotbar slot reported by a play connection, `0..8`. Delivered on
+/// the simulation thread; the network layer validates the range first.
+using held_slot_handler =
+    std::function<void(std::uint64_t connection, std::uint8_t slot)>;
+
+using break_action_handler = std::function<void(const break_action_event &)>;
 
 /// World-level policy that is part of the login handshake.
 struct server_policy {
@@ -310,11 +328,18 @@ struct server_inputs {
     flight_handler flight{};
     /// Position a client confirmed after a server teleport.
     teleport_confirm_handler teleport_confirm{};
-    /// Called on the simulation thread when a player destroys a block. The
-    /// connection is the actor; the gameplay layer enforces the game-mode and
-    /// reach rules before the world changes.
-    std::function<bool(std::uint64_t, std::int32_t, std::int32_t, std::int32_t)>
-        break_block{};
+    /// Selected hotbar slot of a play connection, `0..8`, delivered on the
+    /// simulation thread. The gameplay layer mirrors it onto the player record;
+    /// the break rules read the held tool from that slot.
+    held_slot_handler held_slot{};
+    /// The three block-break actions of `player_action`, delivered on the
+    /// simulation thread. START begins a break, STOP reports that the client
+    /// believes the block is finished, ABORT drops the progress. The network
+    /// layer acknowledges the packet sequence for all of them on its own; the
+    /// gameplay layer owns the progress state and the world change.
+    break_action_handler start_destroy_block{};
+    break_action_handler stop_destroy_block{};
+    break_action_handler abort_destroy_block{};
     /// Called on the simulation thread for a block placement.
     std::function<bool(std::uint64_t, std::int32_t, std::int32_t, std::int32_t)>
         place_block{};
@@ -484,6 +509,14 @@ class server {
     /// Send one entity event (hurt, death, permission level) for an entity.
     void send_entity_event(std::uint64_t connection, std::int32_t entity_id,
                            std::uint8_t event);
+
+    /// Send one `block_destruction` packet: the destroy-stage animation of a
+    /// block, owned by the entity that is mining it. The stage is the packet's
+    /// progress field; `0..9` animate and anything else removes the animation.
+    void send_block_destroy_stage(std::uint64_t connection,
+                                  std::int32_t entity_id, std::int32_t x,
+                                  std::int32_t y, std::int32_t z,
+                                  std::int32_t stage);
 
     /// Send a full container snapshot (player inventory uses container 0).
     void send_container_content(std::uint64_t connection,

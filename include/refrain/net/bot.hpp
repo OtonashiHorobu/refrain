@@ -56,6 +56,19 @@ struct bot_options {
     /// Ask the server to respawn the player once the play login is done. The
     /// server accepts the request only while the player is dead.
     bool request_respawn{false};
+    /// One encoded play packet a test client sends by itself. The body carries
+    /// its VarInt packet id, like the bodies the bot captures.
+    struct play_action {
+        /// Delay before this packet, relative to the previous action or the
+        /// play login.
+        std::chrono::milliseconds delay{0};
+        std::vector<std::byte> body{};
+    };
+    /// Play packets to send after the play login, in order, from a helper
+    /// thread. The bot reports done after the last one and then lingers for
+    /// `linger`. This is the hook protocol tests use to send gameplay input
+    /// (block actions, held-slot changes) the typed options do not cover.
+    std::vector<play_action> play_actions{};
     /// Record decoded packet bodies for capture tooling.
     bool capture{false};
 };
