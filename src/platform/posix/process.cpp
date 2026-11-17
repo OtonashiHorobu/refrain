@@ -307,6 +307,26 @@ auto process_alive(std::uint64_t pid) noexcept -> bool {
 
 void abort_process() noexcept { std::abort(); }
 
+auto set_environment_variable(std::string_view name, std::string_view value)
+    -> status {
+    const std::string owned_name{name};
+    const std::string owned_value{value};
+    if (::setenv(owned_name.c_str(), owned_value.c_str(), 1) != 0) {
+        return std::unexpected{make_error(
+            error_code::io_error, "failed to set an environment variable")};
+    }
+    return status_ok();
+}
+
+auto unset_environment_variable(std::string_view name) -> status {
+    const std::string owned_name{name};
+    if (::unsetenv(owned_name.c_str()) != 0) {
+        return std::unexpected{make_error(
+            error_code::io_error, "failed to unset an environment variable")};
+    }
+    return status_ok();
+}
+
 void trigger_segmentation_fault() noexcept {
     // Genuine null dereference inside the platform layer: the compiler is not
     // allowed to optimize it away, and any installed fault handler sees a real
