@@ -33,17 +33,19 @@ source files or in the libraries below.
 | liburing | 2.15 | MIT | Linux io_uring backend (optional) |
 | mimalloc | 3.6.0 | MIT | allocator backend (optional) |
 | simdjson | 5.1.0 | Apache-2.0 | JSON parsing and serialization |
+| Google Highway | 1.4.0 | Apache-2.0 | portable SIMD kernels for world generation noise |
 | zlib (zlib-ng drop-in) | 1.3.1 | Zlib | deflate for zip and region data |
 | zstd | 1.5.7 | BSD-3-Clause | RWF and content compression |
 | LZ4 | 1.10.0 | BSD-2-Clause | LZ4-compressed Anvil region import and export |
 | BLAKE3 | 1.8.7 | CC0-1.0 OR Apache-2.0 OR Apache-2.0 WITH LLVM-exception | content addressing |
 | libsodium | 1.0.22 | ISC | Ed25519 package signatures |
+| OpenSSL | 3.6.5 | Apache-2.0 | TLS, hashing and cipher primitives for online-mode login |
+| libcurl | 8.23.0 | curl | HTTPS transport to the session server |
 | libzip | 1.12.1 | BSD-3-Clause | jar and zip extraction |
 | libarchive | 3.8.11 | BSD-2-Clause | package tar read side |
 | crc32c | 1.1.2 | BSD-3-Clause | container and record checksums |
 | Crashpad | 2026.10.26 | Apache-2.0 | crash reporting (optional) |
 | wasmtime | 50.0.1 | Apache-2.0 WITH LLVM-exception | WebAssembly runtime (optional) |
-| Steam Audio | 4.8.1 | Apache-2.0 | spatial audio (optional) |
 
 ## Test and development libraries
 

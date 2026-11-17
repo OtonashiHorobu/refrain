@@ -55,9 +55,10 @@ sanitizer configuration.
 `-DREFRAIN_COVERAGE=ON` instruments the same binary for gcov and lowers the
 optimisation the same way. `scripts/dev/coverage.sh` drives the whole sequence
 and writes `build/coverage-report/summary.txt`; set `REFRAIN_COVERAGE_MIN` to
-fail under a threshold. Coverage is a local and scheduled measurement, never a
-pull-request gate: the total is a weak signal, and the list of files no test
-ever enters is the part worth reading.
+fail under a threshold. Coverage is a local measurement only: neither
+`scripts/ci.sh` nor the CI workflows build an instrumented binary, because the
+total is a weak signal and the report is worth reading for the list of files no
+test ever enters, not for the percentage.
 
 ## Continuous integration
 
