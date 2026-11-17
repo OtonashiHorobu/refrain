@@ -13,6 +13,7 @@
 
 #include <refrain/core/error.hpp>
 #include <refrain/worldgen/chunk/block_state_registry.hpp>
+#include <refrain/worldgen/chunk/proto_cache.hpp>
 #include <refrain/worldgen/chunk/proto_chunk.hpp>
 #include <refrain/worldgen/dimension_generator.hpp>
 #include <refrain/worldgen/feature/feature_registry.hpp>
@@ -138,6 +139,12 @@ struct chunk_generator_config {
     /// feature writes its neighbours make across its border, exactly as a
     /// saved world does. The single-chunk entry points ignore it.
     jint tile_size{8};
+    /// Chunks one generator's per-chunk pipeline cache keeps. Each cached
+    /// chunk costs about one terrain chunk, roughly 200 KiB at full height, so
+    /// the default bound is a few tens of megabytes per worker. Entries over
+    /// the bound are evicted in insertion order, and an evicted chunk loses
+    /// the feature writes its neighbours already made into it.
+    jint proto_cache_capacity{256};
 };
 
 /// The chunks a force-load of `box` runs features for, in the order the
@@ -201,6 +208,34 @@ class chunk_generator {
                                            jint depth, std::size_t workers = 0)
         -> result<std::vector<std::unique_ptr<proto_chunk>>>;
 
+    /// Generates one chunk through the per-chunk status pipeline. The chunk,
+    /// the eight neighbours whose features cross into it and one more terrain
+    /// ring are materialised in this generator's cache, the neighbours'
+    /// features are applied in ascending chunk order, and the returned chunk is
+    /// a copy at the configured target status. A repeated request returns the
+    /// same blocks without re-running terrain or decoration. Additive: the
+    /// tile and single-chunk entry points above keep their own path.
+    [[nodiscard]] auto generate_chunk(const chunk_pos &pos)
+        -> result<std::unique_ptr<proto_chunk>>;
+
+    /// Serves a `width` by `depth` chunk rectangle through the per-chunk
+    /// pipeline in ascending x then z order and returns the chunks in x-major
+    /// order. Workers replay the same call sequence on their own caches, so
+    /// the chunks do not depend on the worker count. The scheduler that
+    /// replaces the tile jobs is a separate step; this entry point only proves
+    /// the content, not the throughput.
+    [[nodiscard]] auto generate_chunk_area(chunk_pos origin, jint width,
+                                           jint depth, std::size_t workers = 0)
+        -> result<std::vector<std::unique_ptr<proto_chunk>>>;
+
+    /// Counters of this generator's per-chunk cache.
+    [[nodiscard]] auto cache_stats() const noexcept -> proto_cache_stats {
+        return proto_cache_.stats();
+    }
+    /// Drops every cached chunk and structure start, so the next request
+    /// generates its neighbourhood from scratch.
+    void clear_proto_cache() noexcept;
+
     [[nodiscard]] auto config() const noexcept
         -> const chunk_generator_config & {
         return config_;
@@ -261,6 +296,67 @@ class chunk_generator {
     /// its ring in force-load order, then serve the inner tile.
     [[nodiscard]] auto generate_tile_impl(const chunk_pos &origin)
         -> result<std::vector<std::unique_ptr<proto_chunk>>>;
+
+    /// Decoration and terrain radii of the per-chunk pipeline, in chunks. A
+    /// served chunk runs its own features step, so it needs the decoration of
+    /// its eight neighbours (the write radius) and one further terrain ring
+    /// those decorations read. Structure starts keep the reference search
+    /// radius.
+    static constexpr jint pipeline_decoration_radius = 1;
+    static constexpr jint pipeline_terrain_radius = 2;
+    static constexpr jint pipeline_structure_radius = 8;
+
+    /// The structure starts of one chunk rectangle, copied into one list in
+    /// ascending chunk order because the beard and reference collectors take
+    /// a contiguous vector.
+    struct cached_start_window {
+        std::vector<structure::structure_start> starts{};
+    };
+
+    /// Starts owned by `pos`, generated on first request and cached. The
+    /// result is a pure function of the seed and the position: the multi-noise
+    /// search is reset before the scan, so a cached entry never depends on
+    /// which chunk ran before it.
+    [[nodiscard]] auto cached_start_at(const chunk_pos &pos)
+        -> result<const std::vector<structure::structure_start> *>;
+
+    /// Copies the starts of every chunk of `box` into one list, ascending x
+    /// then z. Doubles as the bound check for the pipeline.
+    [[nodiscard]] auto start_window(const chunk_rectangle &box)
+        -> result<cached_start_window>;
+
+    /// Materialises the chunks of `box` at `terrain` status, reading the
+    /// beardifier inputs of `starts`.
+    [[nodiscard]] auto
+    ensure_terrain(const chunk_rectangle &box,
+                   const std::vector<structure::structure_start> &starts)
+        -> result<void>;
+
+    /// Places the structure pieces of every chunk of `positions` before any
+    /// feature runs, like the tile staging. `box` is the terrain the pieces
+    /// read.
+    [[nodiscard]] auto ensure_structure_pieces(
+        std::span<const chunk_pos> positions, const chunk_rectangle &box,
+        const std::vector<structure::structure_start> &starts) -> result<void>;
+
+    /// Runs the features step of every chunk of `positions` that has not run
+    /// it yet, ascending. `box` is the terrain and decorated neighbourhood
+    /// the pass reads and writes.
+    [[nodiscard]] auto ensure_decorated(std::span<const chunk_pos> positions,
+                                        const chunk_rectangle &box)
+        -> result<void>;
+
+    /// Copies a served chunk out of the cache: its blocks, heightmaps,
+    /// structure records (owned starts plus the references its start window
+    /// produces) and the configured status.
+    [[nodiscard]] auto
+    serve_cached(const chunk_pos &pos,
+                 const std::vector<structure::structure_start> &starts)
+        -> result<std::unique_ptr<proto_chunk>>;
+
+    /// Attaches every cached chunk of `box` to `region`. A served chunk is
+    /// read-only: the neighbours still read it and drop their writes into it.
+    void attach_cached(chunk_region &region, const chunk_rectangle &box);
 
     /// The structure-start context of this generator. A lazy height or block
     /// probe that fails stores its error in `error` and keeps returning a
@@ -343,19 +439,6 @@ class chunk_generator {
             -> bool = default;
     };
 
-    struct chunk_pos_hash {
-        [[nodiscard]] auto operator()(const chunk_pos &pos) const noexcept
-            -> std::size_t {
-            const auto x =
-                static_cast<std::uint64_t>(static_cast<std::uint32_t>(pos.x));
-            const auto z =
-                static_cast<std::uint64_t>(static_cast<std::uint32_t>(pos.z));
-            return static_cast<std::size_t>(
-                (x * 0x9E3779B97F4A7C15ULL) ^
-                (z + 0x165667B19E3779F9ULL + (x << 6U) + (x >> 2U)));
-        }
-    };
-
     struct block_column_hash {
         [[nodiscard]] auto
         operator()(const block_column_key &key) const noexcept -> std::size_t {
@@ -421,6 +504,20 @@ class chunk_generator {
     std::unique_ptr<dimension_generator> dimension_{};
     std::unique_ptr<feature::feature_registry> features_{};
     std::unique_ptr<structure::structure_template_manager> templates_{};
+
+    /// Working set of the per-chunk pipeline: terrain, the neighbour feature
+    /// writes and the served chunks of this worker. Separate from the
+    /// single-chunk neighbour cache above so neither path changes the other.
+    proto_chunk_cache proto_cache_{
+        static_cast<std::size_t>(proto_chunk_cache::default_capacity)};
+    /// Structure starts of the per-chunk pipeline, keyed by the chunk that
+    /// owns them. Bounded like the chunk cache; a missed chunk is regenerated
+    /// from the seed and the position.
+    std::unordered_map<chunk_pos, std::vector<structure::structure_start>,
+                       chunk_pos_hash>
+        start_cache_{};
+    std::deque<chunk_pos> start_cache_order_{};
+    static constexpr std::size_t start_cache_capacity = 4096;
     /// Extra generators created by the batch entry points. They share
     /// `shared_` and keep their registries alive for the chunks they returned.
     std::vector<std::unique_ptr<chunk_generator>> workers_{};

@@ -360,6 +360,72 @@ region. The final heightmaps are primed in one top-down pass per column when
 the terrain status is reached and updated by every piece and feature write, so
 they cover the finished chunk.
 
+### Per-chunk status pipeline
+
+A second generation path serves one chunk at a time from a per-generator proto
+chunk cache. `chunk_generator::generate_chunk` materialises the requested chunk,
+the eight neighbours whose feature writes cross into it, and one further terrain
+ring, then returns a copy of the requested chunk at the configured target
+status. `generate_chunk_area` serves a rectangle in ascending x then z order.
+Both entry points are additive: `generate`, `generate_tile` and
+`generate_area_tiled` keep their own path, and the runtime does not use the
+pipeline.
+
+The cache holds the chunks one worker touched, keyed by chunk position, and
+records two stages. A chunk at `terrain` has its biomes, fill, surface, carvers
+and final heightmaps. A chunk at `decorated` has additionally placed its
+structure pieces and run its feature step. A served chunk is sealed: later
+decorations read it and their writes into it are dropped, the way a generation
+region reads a completed chunk without modifying it. A repeat request therefore
+returns the same blocks and the same digest without running terrain or
+decoration again. The cache is bounded by `proto_cache_capacity`; entries over
+the bound are evicted in insertion order, and an evicted chunk loses the feature
+writes its neighbours already made into it, so a caller keeps the capacity above
+its working set.
+
+The dependency radii follow the reference status chain. The features step reads
+and writes over a radius of one chunk, and its terrain dependency is one chunk,
+so a served chunk needs its own three-by-three decorated and a five-by-five of
+terrain. Structure starts keep the reference search radius of eight chunks. A
+chunk is served only after every chunk of its three-by-three is decorated, so
+the served copy contains the cross-border feature writes a saved world has; its
+structure records are the starts it owns plus one reference for every start in
+the radius-eight window whose box overlaps it.
+
+The pipeline never serves a chunk whose three-by-three is incomplete, and it
+decorates an undecorated chunk only after the earlier chunks of its decorated
+neighbourhood were processed, so the write order is ascending x then z. Terrain is a pure function of the seed,
+the data and the position: every fill resets the multi-noise search, and the
+structure starts of a chunk are generated from a fresh biome search too, so a
+cached start never depends on which chunk the worker scanned before it. Feature
+decoration of a cached chunk reads the palettes of the chunks around it from the
+cache, which are the same palettes the reference possible-biome set uses. A
+terrain fill reads the structure starts of the requesting chunk's window, which
+is the reference dependency radius, and a chunk keeps the fill of the request
+that first cached it.
+
+A chunk served through the pipeline carries the configured `generation_target`
+status. The `features` and `full` targets both settle the three-by-three ring
+and differ only in the status field, because the pipeline always produces the
+complete chunk; a `terrain` target uses the single-chunk path, which has no
+neighbour writes to settle.
+
+The batch entry point proves content equality, not scheduling. Every worker
+replays the same per-chunk requests up to its own slice on its own cache, so the
+served chunks equal the serial sequence for any worker count. The tile batch
+keeps serving production; the replay exists because no scheduler orders the
+status work by priority.
+
+The path has two observable limits. A cache that is reused across requests
+accumulates the decorations of every chunk processed before the request, so a
+chunk served as part of a large sequential area can differ from the same chunk
+served alone, where only its fixed three-by-three ring decorates. The content is
+therefore a function of the request sequence, and the scheduler that fixes that
+sequence comes with the per-chunk ticket rings. The configured tile edge no
+longer selects content on this path: `generate_chunk` and
+`generate_chunk_area` ignore `tile_size`, and the same request produces the same
+digest for tile edges two, four and eight.
+
 ## Density sampling
 
 The final density contains the two sampling layers the documents declare. An

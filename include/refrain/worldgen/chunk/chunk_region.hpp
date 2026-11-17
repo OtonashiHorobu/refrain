@@ -24,12 +24,37 @@ struct chunk_pos {
                                       const chunk_pos &) = default;
 };
 
+/// Hashes a chunk position for the containers keyed by it. The seed and the
+/// mixing are fixed so iteration helpers that sort positions are the only
+/// order that reaches generation; a hash-map bucket order never does.
+struct chunk_pos_hash {
+    [[nodiscard]] auto operator()(const chunk_pos &pos) const noexcept
+        -> std::size_t {
+        const auto x =
+            static_cast<std::uint64_t>(static_cast<std::uint32_t>(pos.x));
+        const auto z =
+            static_cast<std::uint64_t>(static_cast<std::uint32_t>(pos.z));
+        return static_cast<std::size_t>(
+            (x * 0x9E3779B97F4A7C15ULL) ^
+            (z + 0x165667B19E3779F9ULL + (x << 6U) + (x >> 2U)));
+    }
+};
+
 class chunk_region {
   public:
     chunk_region(proto_chunk &center, jint write_radius);
 
     /// Makes `chunk` readable (and writable when inside the write radius).
     void attach(proto_chunk &chunk);
+
+    /// Makes `chunk` readable and read-only. Writes and block-entity writes
+    /// into it are dropped and counted like writes outside the write zone. A
+    /// served chunk stays readable for the neighbours that decorate after it,
+    /// but nothing changes it any more.
+    void attach_read_only(proto_chunk &chunk);
+
+    /// Whether `pos` was attached read-only.
+    [[nodiscard]] auto read_only(const chunk_pos &pos) const -> bool;
 
     /// Moves the write zone to `center`. The zone starts at the region's
     /// centre chunk; a feature reference run sets it to the chunk it decorates
@@ -89,6 +114,7 @@ class chunk_region {
     chunk_pos write_center_{};
     jint write_radius_{0};
     std::map<chunk_pos, proto_chunk *> chunks_{};
+    std::map<chunk_pos, bool> read_only_{};
     std::uint64_t dropped_writes_{0};
 };
 
