@@ -7,6 +7,7 @@
 #include <refrain/command/dispatcher.hpp>
 #include <refrain/contracts/services/permissions_abi.h>
 #include <refrain/net/server.hpp>
+#include <refrain/server/permissions_admin.hpp>
 #include <refrain/server/world_port.hpp>
 
 #include <cstdint>
@@ -98,10 +99,17 @@ struct command_environment {
     /// provider is active.
     std::function<std::uint64_t()> permission_revision{};
 
+    /// Management surface of the active base resolver, injected by the
+    /// composition root from `server_service_handles`. The in-game
+    /// `/permissions` tree and the console `permissions` line read it; when it
+    /// is null the commands report that no permission service is active.
+    permissions_admin_state permissions{};
+
     mutable std::mutex mode_mutex{};
     std::unordered_map<std::uint64_t, net::game_mode> modes{};
     std::unordered_map<std::uint64_t, std::uint64_t> key_to_connection{};
     std::unordered_map<std::uint64_t, std::string> identity_uuids{};
+    std::unordered_map<std::uint64_t, std::string> identity_names{};
     std::unordered_map<std::uint64_t, std::string> identity_worlds{};
     net::game_mode default_mode{net::game_mode::creative};
 
@@ -110,7 +118,8 @@ struct command_environment {
     [[nodiscard]] auto mode_of(std::uint64_t connection) const
         -> net::game_mode;
     void remember_key(std::uint64_t key, std::uint64_t connection,
-                      std::string uuid, std::string world_name = {});
+                      std::string uuid, std::string name,
+                      std::string world_name = {});
     [[nodiscard]] auto connection_for(std::uint64_t key) const
         -> std::optional<std::uint64_t>;
     /// Canonical uuid of the player this identity key was first resolved for;
@@ -122,6 +131,11 @@ struct command_environment {
     /// Game mode name of the player for the permission query context
     /// (`survival`, `creative`, `adventure`, `spectator`).
     [[nodiscard]] auto gamemode_name(std::uint64_t key) const -> std::string;
+
+    /// Resolve an online player by profile name (case-insensitive) or by
+    /// canonical uuid. Null for a name or uuid this bridge never saw join.
+    [[nodiscard]] auto find_online_player(std::string_view name_or_uuid) const
+        -> std::optional<permissions_online_player>;
 
     /// Answer one permission node for a command source through the injected
     /// provider, or `not_handled` when no provider is active.
@@ -142,6 +156,11 @@ void bind_permissions(std::shared_ptr<command_environment> environment,
 
 /// Register the commands implemented by the server runtime.
 void register_runtime_commands(
+    std::shared_ptr<command_environment> environment);
+
+/// Register the `/permissions` administration tree: `check`, `grant`,
+/// `revoke`, `groups` and `reload`, gated by `refrain.permissions.admin`.
+void register_permissions_commands(
     std::shared_ptr<command_environment> environment);
 
 /// Build the network bridge that forwards parsed commands to the runtime

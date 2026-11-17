@@ -526,4 +526,143 @@ late = ["refrain.command.*"]
     };
 };
 
+const suite explanation_tests = [] {
+    "explanation/names the rule set that decided the answer"_test = [] {
+        const auto loaded{parse_ok(R"(
+[defaults]
+default = "deny"
+nodes = ["refrain.command.help"]
+[op]
+min_level = 2
+nodes = ["refrain.command.gamemode"]
+[grants]
+"player:069a79f4-44e9-4726-a5be-fca90e38aaf5" = ["refrain.command.*", "!refrain.command.stop", "@moderators"]
+"entity:aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" = ["entity.node"]
+[groups]
+moderators = ["refrain.mods.admin", "!refrain.mods.trust"]
+)")};
+        const auto view =
+            permissions::subject_view{.kind = subject_kind::player,
+                                      .id = player_uuid,
+                                      .profile_name = {}};
+        const auto explain = [&loaded, &view](std::string_view node,
+                                              std::uint32_t op_level = 0) {
+            return permissions::explain(loaded, view, node, op_level);
+        };
+        auto answer{explain("refrain.command.teleport")};
+        expect(answer.result == permission_result::allowed);
+        expect(answer.source == permissions::decision_source::subject_grant);
+        expect(answer.rule == "refrain.command.*");
+        answer = explain("refrain.command.stop");
+        expect(answer.result == permission_result::denied);
+        expect(answer.source == permissions::decision_source::subject_deny);
+        expect(answer.rule == "!refrain.command.stop");
+        answer = explain("refrain.mods.admin");
+        expect(answer.result == permission_result::allowed);
+        expect(answer.source == permissions::decision_source::group_grant);
+        expect(answer.group == "moderators");
+        expect(answer.rule == "refrain.mods.admin");
+        answer = explain("refrain.mods.trust");
+        expect(answer.result == permission_result::denied);
+        expect(answer.source == permissions::decision_source::group_deny);
+        expect(answer.rule == "!refrain.mods.trust");
+        // A subject without a matching grant falls through to the public
+        // default and to the configured fallback.
+        const auto plain_view = permissions::subject_view{
+            .kind = subject_kind::player, .id = other_uuid};
+        answer =
+            permissions::explain(loaded, plain_view, "refrain.command.help", 0);
+        expect(answer.result == permission_result::allowed);
+        expect(answer.source == permissions::decision_source::default_grant);
+        expect(answer.rule == "refrain.command.help");
+        answer =
+            permissions::explain(loaded, plain_view, "refrain.command.fly", 0);
+        expect(answer.result == permission_result::denied);
+        expect(answer.source == permissions::decision_source::fallback_deny);
+        expect(answer.rule.empty());
+        // An operator reaches the operator node set.
+        const auto operator_view = permissions::subject_view{
+            .kind = subject_kind::player, .id = other_uuid, .profile_name = {}};
+        const auto operator_answer = permissions::explain(
+            loaded, operator_view, "refrain.command.gamemode", 2);
+        expect(operator_answer.result == permission_result::allowed);
+        expect(operator_answer.source ==
+               permissions::decision_source::op_grant);
+        expect(operator_answer.rule == "refrain.command.gamemode");
+        const auto console_answer = permissions::explain(
+            loaded, permissions::subject_view{.kind = subject_kind::console},
+            "refrain.command.stop", 0);
+        expect(console_answer.result == permission_result::allowed);
+        expect(console_answer.source == permissions::decision_source::console);
+        expect(console_answer.rule.empty());
+        const auto invalid = explain("NotANode");
+        expect(invalid.result == permission_result::denied);
+        expect(invalid.source == permissions::decision_source::invalid_node);
+    };
+
+    "explanation/agrees with evaluate on every rule set"_test = [] {
+        const auto loaded{parse_ok(R"(
+[defaults]
+default = "op"
+nodes = ["refrain.command.help"]
+[op]
+min_level = 1
+nodes = ["refrain.command.gamemode", "!refrain.command.gamemode.special"]
+[ops]
+players = ["Notch"]
+[grants]
+"player:069a79f4-44e9-4726-a5be-fca90e38aaf5" = ["refrain.command.*", "!refrain.command.stop"]
+[groups]
+moderators = ["refrain.mods.admin"]
+)")};
+        const auto view =
+            permissions::subject_view{.kind = subject_kind::player,
+                                      .id = player_uuid,
+                                      .profile_name = "Notch"};
+        for (const auto *node :
+             {"refrain.command.teleport", "refrain.command.stop",
+              "refrain.command.gamemode", "refrain.command.gamemode.special",
+              "refrain.mods.admin", "refrain.mods.trust",
+              "refrain.command.help"}) {
+            for (const auto op_level : {0U, 1U}) {
+                expect(
+                    permissions::explain(loaded, view, node, op_level).result ==
+                    permissions::evaluate(loaded, view, node, op_level))
+                    << node;
+            }
+        }
+    };
+
+    "explanation/lists groups with nodes and members"_test = [] {
+        const auto loaded{parse_ok(R"(
+[grants]
+"player:069a79f4-44e9-4726-a5be-fca90e38aaf5" = ["@moderators"]
+"plugin:com.example.mymod" = ["@moderators"]
+[groups]
+moderators = ["refrain.command.*", "!refrain.command.stop"]
+builders = []
+)")};
+        const auto groups{permissions::list_groups(loaded)};
+        expect(groups.size() == 2U);
+        if (groups.size() != 2U) {
+            return;
+        }
+        expect(groups[0].name == "builders");
+        expect(groups[0].nodes.empty());
+        expect(groups[0].members.empty());
+        expect(groups[1].name == "moderators");
+        expect(groups[1].nodes.size() == 2U);
+        if (groups[1].nodes.size() == 2U) {
+            expect(groups[1].nodes[0] == "refrain.command.*");
+            expect(groups[1].nodes[1] == "!refrain.command.stop");
+        }
+        expect(groups[1].members.size() == 2U);
+        if (groups[1].members.size() == 2U) {
+            expect(groups[1].members[0] ==
+                   "player:069a79f4-44e9-4726-a5be-fca90e38aaf5");
+            expect(groups[1].members[1] == "plugin:com.example.mymod");
+        }
+    };
+};
+
 } // namespace

@@ -15,6 +15,12 @@
 // configuration view because the policy parser has to reject unknown tables and
 // keys, which needs the document tree, and because a reload must be safe to run
 // while other threads query the current snapshot.
+//
+// The provider is also the administration surface of the base resolver: the
+// host-side `permissions::admin` interface publishes grant, revoke, groups and
+// reload for the operator commands. A change edits the configuration file,
+// writes it atomically and only then publishes the new in-memory snapshot, so a
+// failed write leaves the running policy untouched.
 
 #include <refrain/contracts/services/permissions_abi.h>
 #include <refrain/core/config.hpp>
@@ -24,6 +30,8 @@
 #include <refrain/host/abi_bridge.hpp>
 #include <refrain/mod/host.hpp>
 #include <refrain/mod/static_mod.hpp>
+#include <refrain/permissions/admin.hpp>
+#include <refrain/permissions/persist.hpp>
 #include <refrain/permissions/policy.hpp>
 
 #include <algorithm>
@@ -33,6 +41,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <utility>
 
 namespace {
@@ -75,12 +84,12 @@ constexpr std::uint64_t max_config_bytes{1ULL * 1024ULL * 1024ULL};
 /// The published policy plus the raw text it was built from. The text lets a
 /// reload tell "the file did not change" from "it changed to the same policy",
 /// so an unchanged reload neither allocates a snapshot nor bumps the revision.
-struct snapshot {
+struct policy_state {
     permissions::policy policy{};
     std::string source_text{};
 };
 
-class provider_impl {
+class provider_impl final : public permissions::admin {
   public:
     /// Build the provider for one host load. A host without a mounted
     /// `permissions` namespace serves the built-in policy (deny every
@@ -128,7 +137,7 @@ class provider_impl {
     auto operator=(const provider_impl &) -> provider_impl & = delete;
     provider_impl(provider_impl &&) = delete;
     auto operator=(provider_impl &&) -> provider_impl & = delete;
-    ~provider_impl() = default;
+    ~provider_impl() override { permissions::retract_admin(this); }
 
     [[nodiscard]] auto config_path() const noexcept -> std::string_view {
         return path_;
@@ -153,14 +162,53 @@ class provider_impl {
                                      abi::to_view(query->node), op_level);
     }
 
-    /// Re-read the configuration file and publish a new snapshot when its text
-    /// changed. Returns the (possibly unchanged) revision.
-    [[nodiscard]] auto reload() -> refrain::result<std::uint64_t> {
+    // -- permissions::admin -------------------------------------------------
+    [[nodiscard]] auto explain(const permissions::subject_view &subject,
+                               std::string_view node,
+                               std::uint32_t op_level) const
+        -> permissions::decision_explanation override {
+        const auto snapshot{policy_.load(std::memory_order_acquire)};
+        return permissions::explain(snapshot->policy, subject, node, op_level);
+    }
+
+    [[nodiscard]] auto snapshot() const
+        -> permissions::policy_snapshot override {
+        const auto published{policy_.load(std::memory_order_acquire)};
+        return permissions::policy_snapshot{
+            .value = published->policy,
+            .revision = revision_.load(std::memory_order_acquire),
+            .persistent = !path_.empty(),
+        };
+    }
+
+    [[nodiscard]] auto grant(std::string_view subject, std::string_view rule)
+        -> refrain::result<permissions::policy_change> override {
+        return change(subject, rule, true);
+    }
+
+    [[nodiscard]] auto revoke(std::string_view subject, std::string_view rule)
+        -> refrain::result<permissions::policy_change> override {
+        return change(subject, rule, false);
+    }
+
+    [[nodiscard]] auto groups() const
+        -> std::vector<permissions::group_listing> override {
+        const auto published{policy_.load(std::memory_order_acquire)};
+        return permissions::list_groups(published->policy);
+    }
+
+    [[nodiscard]] auto reload()
+        -> refrain::result<permissions::reload_outcome> override {
         std::lock_guard lock{reload_mutex_};
+        const auto previous{revision_.load(std::memory_order_acquire)};
         if (path_.empty()) {
-            // No mounted namespace: the built-in policy is the whole policy,
-            // so a reload has nothing to read.
-            return revision_.load(std::memory_order_acquire);
+            // No mounted namespace: the built-in policy is the whole policy, so
+            // a reload has nothing to read.
+            return permissions::reload_outcome{
+                .changed = false,
+                .previous_revision = previous,
+                .revision = previous,
+            };
         }
         auto next{read_snapshot()};
         if (!next) {
@@ -168,35 +216,126 @@ class provider_impl {
         }
         const auto committed{policy_.load(std::memory_order_acquire)};
         if (next->source_text == committed->source_text) {
-            return revision_.load(std::memory_order_acquire);
+            return permissions::reload_outcome{
+                .changed = false,
+                .previous_revision = previous,
+                .revision = previous,
+            };
         }
         const auto subject_count{next->policy.subjects.size()};
         const auto group_count{next->policy.groups.size()};
         publish(std::move(*next));
-        const auto revision{revision_.load(std::memory_order_acquire)};
+        const auto reloaded{revision_.load(std::memory_order_acquire)};
         log_permissions.info(
             "reloaded permission policy from '{}' at revision {}, {} subject "
             "rule sets and {} groups",
-            path_, revision, subject_count, group_count);
-        return revision;
+            path_, reloaded, subject_count, group_count);
+        return permissions::reload_outcome{
+            .changed = true,
+            .previous_revision = previous,
+            .revision = reloaded,
+        };
     }
 
-    [[nodiscard]] auto revision() const noexcept -> std::uint64_t {
+    [[nodiscard]] auto revision() const noexcept -> std::uint64_t override {
         return revision_.load(std::memory_order_acquire);
+    }
+
+    [[nodiscard]] auto persistent() const noexcept -> bool override {
+        return !path_.empty();
     }
 
   private:
     provider_impl() = default;
 
+    /// Apply one grant or revoke to the policy and the configuration file.
+    ///
+    /// The order is deliberate: validate the rule, edit the file text, validate
+    /// the edited document, write it atomically and only then publish the new
+    /// snapshot. A failed write therefore leaves the running policy and the
+    /// revision untouched, and a successful write is already durable before a
+    /// query can observe it.
+    [[nodiscard]] auto change(std::string_view subject, std::string_view rule,
+                              bool add)
+        -> refrain::result<permissions::policy_change> {
+        std::lock_guard lock{reload_mutex_};
+        if (path_.empty()) {
+            return std::unexpected{make_error(
+                error_code::unsupported,
+                "the permission policy was not loaded from a configuration "
+                "file, so a change cannot be persisted")};
+        }
+        auto parsed_rule{permissions::parse_rule(rule, "permission rule")};
+        if (!parsed_rule) {
+            return std::unexpected{std::move(parsed_rule.error())};
+        }
+        if (!permissions::valid_subject_key(subject)) {
+            return std::unexpected{make_error(
+                error_code::invalid_argument,
+                "the permission subject is not a configurable identity")};
+        }
+        const auto committed{policy_.load(std::memory_order_acquire)};
+        auto edited{permissions::edit_grants(committed->source_text, subject,
+                                             rule, add)};
+        if (!edited) {
+            return std::unexpected{std::move(edited.error())};
+        }
+        const auto canonical_rule{permissions::rule_text(*parsed_rule)};
+        const auto unchanged{*edited == committed->source_text};
+        if (unchanged) {
+            return permissions::policy_change{
+                .changed = false,
+                .revision = revision_.load(std::memory_order_acquire),
+                .subject = std::string{subject},
+                .rule = canonical_rule,
+            };
+        }
+        auto document{config::document::parse_text(*edited, path_)};
+        if (!document) {
+            return std::unexpected{make_error(
+                error_code::unknown,
+                "the edited permission configuration is not valid TOML")};
+        }
+        auto next_policy{permissions::parse_policy(*document)};
+        if (!next_policy) {
+            return std::unexpected{make_error(
+                error_code::unknown,
+                "the edited permission configuration is not a valid policy")};
+        }
+        if (auto written{io::atomic_write_text(path_, *edited)}; !written) {
+            log_permissions.warn(
+                "failed to write the permission policy to '{}', keeping "
+                "revision {}: {}",
+                path_, revision_.load(std::memory_order_acquire),
+                written.error().message);
+            return std::unexpected{make_error(
+                written.error().code,
+                "failed to write the permission configuration file")};
+        }
+        publish(policy_state{.policy = std::move(*next_policy),
+                             .source_text = std::move(*edited)});
+        const auto revision{revision_.load(std::memory_order_acquire)};
+        log_permissions.info(
+            "{} '{}' for {} in the permission policy, revision {}",
+            add ? "granted" : "revoked", canonical_rule, subject, revision);
+        return permissions::policy_change{
+            .changed = true,
+            .revision = revision,
+            .subject = std::string{subject},
+            .rule = canonical_rule,
+        };
+    }
+
     /// The currently published snapshot; the caller keeps it alive while it
     /// reads the policy.
-    [[nodiscard]] auto published() const -> std::shared_ptr<const snapshot> {
+    [[nodiscard]] auto published() const
+        -> std::shared_ptr<const policy_state> {
         return policy_.load(std::memory_order_acquire);
     }
 
     /// Read and validate the configuration. A missing file is an empty policy,
     /// which the caller turns into the built-in deny-by-default behaviour.
-    [[nodiscard]] auto read_snapshot() -> refrain::result<snapshot> {
+    [[nodiscard]] auto read_snapshot() -> refrain::result<policy_state> {
         std::string text{};
         if (!path_.empty() && io::exists(path_)) {
             auto read{io::read_text(path_, {.max_bytes = max_config_bytes,
@@ -209,7 +348,7 @@ class provider_impl {
             text = std::move(*read);
         }
 
-        snapshot value{};
+        policy_state value{};
         value.source_text = std::move(text);
         if (value.source_text.empty()) {
             return value;
@@ -230,8 +369,8 @@ class provider_impl {
         return value;
     }
 
-    void publish(snapshot next) {
-        policy_.store(std::make_shared<const snapshot>(std::move(next)),
+    void publish(policy_state next) {
+        policy_.store(std::make_shared<const policy_state>(std::move(next)),
                       std::memory_order_release);
         revision_.fetch_add(1, std::memory_order_acq_rel);
     }
@@ -313,15 +452,15 @@ class provider_impl {
                 provider->revision());
             return reload_status(reloaded.error());
         }
-        *out_value = *reloaded;
+        *out_value = reloaded->revision;
         return REFRAIN_STATUS_OK;
     }
 
   private:
     std::string path_{};
     mutable std::mutex reload_mutex_{};
-    std::atomic<std::shared_ptr<const snapshot>> policy_{
-        std::make_shared<const snapshot>()};
+    std::atomic<std::shared_ptr<const policy_state>> policy_{
+        std::make_shared<const policy_state>()};
     std::atomic<std::uint64_t> revision_{0};
 };
 
@@ -361,6 +500,9 @@ auto make_permissions(refrain::mod::host &host) -> refrain::status {
         provider.reset();
         return registered;
     }
+    // The service is active, so the management surface answers for this
+    // process until the composition replaces the provider.
+    permissions::publish_admin(provider.get());
     return refrain::status_ok();
 }
 

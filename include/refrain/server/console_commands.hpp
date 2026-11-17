@@ -10,6 +10,7 @@
 
 #include <refrain/core/config.hpp>
 #include <refrain/core/time.hpp>
+#include <refrain/server/permissions_admin.hpp>
 #include <refrain/server/world_port.hpp>
 
 #include <array>
@@ -55,6 +56,9 @@ struct console_dependencies {
     /// Mod management application service shared with the in-game command;
     /// null when the runtime was not composed with one.
     refrain::app::mod_management *mods{nullptr};
+    /// Permission administration state shared with the in-game `/permissions`
+    /// tree; null when the runtime was not composed with a permission service.
+    const permissions_admin_state *permissions{nullptr};
 };
 
 /// Parses and executes one console line.

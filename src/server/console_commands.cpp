@@ -30,6 +30,7 @@ namespace {
 constexpr refrain::log::logger log_config{"config"};
 constexpr refrain::log::logger log_mods{"mods"};
 constexpr refrain::log::logger log_net{"net"};
+constexpr refrain::log::logger log_permissions{"permissions"};
 constexpr refrain::log::logger log_schedule{"schedule"};
 constexpr refrain::log::logger log_server{"server"};
 constexpr refrain::log::logger log_sim{"sim"};
@@ -58,7 +59,8 @@ void print_console_help() {
         "[confirm]|uninstall <id>[@version] [confirm]|reload "
         "<id>[@version]|reload-data|trust [list|pin <id>|clear <id>]; install, "
         "uninstall and trust changes need confirm, --dry-run reports without "
-        "changing state");
+        "changing state; permissions check|grant|revoke <subject> <node>, "
+        "permissions groups, permissions reload");
 }
 
 [[nodiscard]] auto split_console_line(std::string_view line)
@@ -262,6 +264,28 @@ void execute_mods_command(std::span<const std::string_view> tokens,
     }
     if (!report.ok) {
         log_mods.error("{}", report.error);
+    }
+}
+
+/// Run one `permissions ...` line through the shared administration frontend.
+/// The command writes its lines through the `permissions` logger and reports a
+/// failure at error level with the same message the in-game command shows.
+void execute_console_permissions_command(
+    std::span<const std::string_view> tokens,
+    const permissions_admin_state *state) {
+    if (state == nullptr) {
+        log_permissions.warn("permission administration is unavailable");
+        return;
+    }
+    permissions_actor actor{};
+    actor.kind = permissions_actor_kind::console;
+    actor.name = "@console";
+    const auto report{execute_permissions_command(*state, tokens, actor)};
+    for (const auto &line : report.lines) {
+        log_permissions.info("{}", line);
+    }
+    if (!report.ok) {
+        log_permissions.error("{}", report.error);
     }
 }
 
@@ -656,6 +680,12 @@ void console_commands::execute(std::string_view line,
         execute_mods_command(
             std::span<const std::string_view>{tokens}.subspan(1),
             dependencies_.mods);
+        return;
+    }
+    if (!tokens.empty() && tokens[0] == "permissions") {
+        execute_console_permissions_command(
+            std::span<const std::string_view>{tokens}.subspan(1),
+            dependencies_.permissions);
         return;
     }
     if ((tokens.size() == 1 || tokens.size() == 2) && tokens[0] == "jump") {

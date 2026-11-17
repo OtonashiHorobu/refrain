@@ -643,6 +643,18 @@ auto run_server(const server_run_options &options,
             "no permission provider is active; commands fall back to their "
             "declared op levels");
     }
+    if (services.permissions_admin != nullptr) {
+        command_environment->permissions.admin = services.permissions_admin;
+        // The command layer resolves the subject of a `/permissions` command
+        // against the live player identities the bridge already tracks.
+        auto *const raw{command_environment.get()};
+        command_environment->permissions.find_player =
+            [raw](std::string_view name) {
+                return raw->find_online_player(name);
+            };
+        log_permissions.info("permission administration is available to the "
+                             "'refrain.permissions.admin' node");
+    }
     const auto initial_permission_revision{
         command_environment->permission_revision
             ? command_environment->permission_revision()
@@ -1206,13 +1218,15 @@ auto run_server(const server_run_options &options,
                               std::memory_order_relaxed);
 
     tick_metrics metrics{};
-    console_commands commands{console_dependencies{.world = &world,
-                                                   .maintenance = &maintenance,
-                                                   .listener = listener.get(),
-                                                   .config = options.config,
-                                                   .stop = state->stop.get(),
-                                                   .mods = &mods_management},
-                              metrics};
+    console_commands commands{
+        console_dependencies{.world = &world,
+                             .maintenance = &maintenance,
+                             .listener = listener.get(),
+                             .config = options.config,
+                             .stop = state->stop.get(),
+                             .mods = &mods_management,
+                             .permissions = &command_environment->permissions},
+        metrics};
     console_service console{[&commands](std::string_view line,
                                         const refrain::core::tick_info &tick) {
         commands.execute(line, tick);
