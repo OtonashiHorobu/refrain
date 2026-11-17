@@ -153,12 +153,50 @@ boost::ut::suite event_suite = [] {
             expect(added);
             expect(bus.subscribers() == std::size_t{2});
 
-            // The next publish does reach the listener added by the callback.
+            // The next publish does reach the listener added by the callback,
+            // in registration order: both listeners use the default priority,
+            // so the appended listener sorts after the existing one.
             order.clear();
             bus.publish(ping{.value = 1});
-            expect(order == "AD" || order == "DA");
+            expect(order == "AD");
             expect(order.size() == std::size_t{2});
         };
+
+    // A listener subscribed during a publish is appended so the running
+    // iteration is not shifted; the outermost publish must restore dispatch
+    // order before it returns, otherwise a higher-priority listener added from
+    // inside a callback stays behind the lower-priority listeners forever.
+    "event/subscribe during publish restores priority order"_test = [] {
+        ev::bus bus{};
+        auto order{std::string{}};
+        auto added{false};
+        (void)bus.subscribe<ping>([&bus, &order, &added](const ping &) {
+            order += 'A';
+            if (!added) {
+                added = true;
+                (void)bus.subscribe<ping>(
+                    ev::event_priority::high,
+                    [&order](const ping &) { order += 'H'; });
+            }
+        });
+        (void)bus.subscribe<ping>(ev::event_priority::low,
+                                  [&order](const ping &) { order += 'L'; });
+
+        // The in-flight publish is unaffected: the new listener does not
+        // receive the event and the registered listeners keep their order.
+        bus.publish(ping{.value = 0});
+        expect(order == "AL");
+
+        // The next publish runs the high-priority listener first.
+        order.clear();
+        bus.publish(ping{.value = 1});
+        expect(order == "HAL");
+
+        // No further subscription happens: the restored order stays stable.
+        order.clear();
+        bus.publish(ping{.value = 2});
+        expect(order == "HAL");
+    };
 
     "event/clear from a listener is safe and stops delivery"_test = [] {
         ev::bus bus{};
