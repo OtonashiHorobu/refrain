@@ -134,6 +134,25 @@ class block_position_parser final : public argument_parser {
                  suggestion_builder &out) const override;
 };
 
+/// Position argument for entities: three coordinates read as one argument.
+///
+/// Unlike the block position form, an absolute component is a floating-point
+/// number (the reference's `vec3`), so `0.5 64 -0.5` is accepted. The reference
+/// centres an integer absolute X and Z by half a block because a block
+/// position names the block the entity stands in, and leaves Y alone; this
+/// parser applies the same rule. `~` is relative to the source and `^` is a
+/// local left/up/forwards offset from the source anchor. Completion offers the
+/// same `~`/`^` templates as the block position form.
+class vec3_parser final : public argument_parser {
+  public:
+    vec3_parser() = default;
+
+    [[nodiscard]] auto descriptor() const -> parser_descriptor override;
+    [[nodiscard]] auto parse(reader &in) const -> parse_result override;
+    void suggest(std::string_view remaining, const source &src,
+                 suggestion_builder &out) const override;
+};
+
 /// Rotation argument: yaw and pitch, each absolute degrees or `~` relative.
 class rotation_parser final : public argument_parser {
   public:
@@ -250,6 +269,7 @@ integer_arg(std::optional<std::int64_t> minimum = std::nullopt,
 
 [[nodiscard]] auto resource_location_arg() -> resource_location_parser;
 [[nodiscard]] auto block_position_arg() -> block_position_parser;
+[[nodiscard]] auto vec3_arg() -> vec3_parser;
 [[nodiscard]] auto rotation_arg() -> rotation_parser;
 [[nodiscard]] auto player_name_arg() -> player_name_parser;
 [[nodiscard]] auto time_arg(std::int64_t minimum_ticks = 0,

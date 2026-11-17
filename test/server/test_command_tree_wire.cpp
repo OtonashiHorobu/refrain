@@ -77,6 +77,7 @@ constexpr std::uint8_t flag_redirect = 8U;
         expect(wire_parser_id(parser_kind::string) == 5U);
         expect(wire_parser_id(parser_kind::player_name) == 7U);
         expect(wire_parser_id(parser_kind::block_position) == 8U);
+        expect(wire_parser_id(parser_kind::vec3) == 10U);
         expect(wire_parser_id(parser_kind::rotation) == 29U);
         expect(wire_parser_id(parser_kind::resource_location) == 36U);
         expect(wire_parser_id(parser_kind::dimension) == 41U);
@@ -294,8 +295,8 @@ constexpr std::uint8_t flag_redirect = 8U;
         expect(offered_false);
 
         const std::string before_mode{
-            "example true 7 1 0.5 1.25 w x minecraft:stone 1 2 3 90 45 "
-            "Steve "};
+            "example true 7 1 0.5 1.25 w x minecraft:stone 1 2 3 0.5 64 1.5 "
+            "90 45 Steve "};
         auto modes =
             bridge.suggest(identity, before_mode,
                            static_cast<std::int32_t>(before_mode.size()));
@@ -322,7 +323,7 @@ constexpr std::uint8_t flag_redirect = 8U;
 
         const std::string line{
             "example true 7 123456789012 0.5 1.25 word \"quoted text\" "
-            "minecraft:stone 1 2 3 90 45 Steve creative 20s "
+            "minecraft:stone 1 2 3 0.5 64 1.5 90 45 Steve creative 20s "
             "minecraft:overworld dd12be42-52a9-4a91-a8a1-11c01849e498"};
         const auto feedback = bridge.execute(identity, line);
         expect(feedback.handled);

@@ -32,6 +32,10 @@ void report_example_values(context &ctx) {
                               pos->local ? " local" : "",
                               pos->relative_x ? " relative-x" : ""));
     }
+    if (const auto *vec = ctx.vec3("vec"); vec != nullptr) {
+        ctx.reply(fmt::format("vec {} {} {}{}", vec->x, vec->y, vec->z,
+                              vec->local ? " local" : ""));
+    }
     if (const auto *rot = ctx.rotation_value("rot"); rot != nullptr) {
         ctx.reply(fmt::format("rot {} {}", rot->yaw, rot->pitch));
     }
@@ -65,6 +69,7 @@ void register_parser_examples(dispatcher &into) {
     auto quoted{into.argument("quoted", quoted_arg())};
     auto id{into.argument("id", resource_location_arg())};
     auto pos{into.argument("pos", block_position_arg())};
+    auto vec{into.argument("vec", vec3_arg())};
     auto rot{into.argument("rot", rotation_arg())};
     auto player{into.argument("player", player_name_arg())};
     auto mode{into.argument("mode", gamemode_arg())};
@@ -79,7 +84,8 @@ void register_parser_examples(dispatcher &into) {
     word.then(quoted);
     quoted.then(id);
     id.then(pos);
-    pos.then(rot);
+    pos.then(vec);
+    vec.then(rot);
     rot.then(player);
     player.then(mode);
     mode.then(time);

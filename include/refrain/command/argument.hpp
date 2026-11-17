@@ -49,6 +49,28 @@ struct block_position {
         -> bool = default;
 };
 
+/// One `vec3` argument: a world position with fractional absolute values.
+///
+/// Absolute components are used as given, with the reference's rule that an
+/// integer absolute X or Z names the block centre and is rounded by half a
+/// block; Y is never centred. The parser applies that rule, so the values an
+/// executor reads are the final coordinates it should use. A `~` component is
+/// relative to the command source and `^` marks the local form, whose three
+/// components are a left/up/forwards offset from the source anchor instead of
+/// world axes.
+struct vec3_position {
+    double x{0.0};
+    double y{0.0};
+    double z{0.0};
+    bool relative_x{false};
+    bool relative_y{false};
+    bool relative_z{false};
+    bool local{false};
+
+    friend auto operator==(const vec3_position &, const vec3_position &)
+        -> bool = default;
+};
+
 /// One rotation argument: yaw followed by pitch, in degrees. A `~` component is
 /// relative to the command source's current rotation.
 struct rotation {
@@ -86,8 +108,8 @@ struct uuid {
 /// "decoded or canonicalized copy".
 using argument_value =
     std::variant<std::monostate, bool, std::int64_t, double, std::string_view,
-                 std::string, data::resource_location, block_position, rotation,
-                 uuid, game_mode>;
+                 std::string, data::resource_location, block_position,
+                 vec3_position, rotation, uuid, game_mode>;
 
 /// Why a parser rejected its input, and where.
 ///

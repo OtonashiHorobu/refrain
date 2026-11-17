@@ -48,6 +48,7 @@ that the argument ends at a token boundary.
 | `enum_arg()` | canonical name `std::string` | `brigadier:string` greedy, server vocabulary | vocabulary with tooltips |
 | `resource_location_arg()` | `data::resource_location` | `resource_location` | none |
 | `block_position_arg()` | `block_position` | `block_pos` | `~` and `^` coordinate templates |
+| `vec3_arg()` | `vec3_position` | `vec3` | `~` and `^` coordinate templates |
 | `rotation_arg()` | `rotation` | `rotation` | yaw and pitch template |
 | `player_name_arg()` | `std::string_view` | `game_profile` | online player names |
 | `gamemode_arg()` | `game_mode` | `gamemode` | four modes with tooltips |
@@ -177,16 +178,62 @@ a registration decision; the reference's permission levels are available as
 `command::level`. The complete node table of the built-in tree is in
 [Running a server](running.md#in-game-commands).
 
+## World and player command batch
+
+The first vanilla command batch registers on the runtime tree and follows the
+26.3 argument and bounds rules wherever the modelled world can express them.
+
+| Command | Forms | Behaviour |
+|---|---|---|
+| `/teleport`, `/tp` | `<x> <y> <z>`, `<player>`, `<player> <x> <y> <z>`, `<player> <player>` | Moves the source or the named target, sends the clientbound position packet and adopts the destination player's rotation. Integer absolute X/Z name the block centre, `~` is relative to the source and `^` is the source-local basis. The `/tp` literal redirects to `/teleport`, so both share one subtree and one permission check. |
+| `/setblock` | `<x> <y> <z> <block> [replace\|keep]` | Parses the canonical block-state key, interns it in the runtime registry and writes one block. `keep` refuses a position that is not air. A position outside the build height or in a column that is not loadable fails before the write. |
+| `/fill` | `<from> <to> <block> [replace\|keep\|hollow\|outline]` | Walks the closed region in X, then Y, then Z order and applies one batch. `hollow` fills the shell and clears the interior, `outline` fills the shell only, `keep` leaves non-air positions. The region is rejected above the default `max_block_modifications` bound and when any column is not loadable. |
+| `/clone` | `<from> <to> <destination> [replace\|masked]` | Snapshots the source region before writing the destination box, so an overlapping clone is order-independent. `masked` copies non-air blocks only. Same volume and loaded-column checks as `/fill`. |
+| `/give` | `<player> <item> [count]` | Resolves the item in the world item table, caps the count at 100 stacks of the item's stack size and appends to the player's simulation inventory. An unknown player or item fails instead of writing a placeholder. The per-tick inventory sync publishes the changed slots. |
+| `/me` | `<action>` | Broadcasts `* <name> <action>` as system chat. |
+| `/msg`, `/tell`, `/w` | `<player> <message>` | Sends the whisper line to the named player and the sender's confirmation. `/tell` and `/w` redirect to `/msg`. |
+| `/save-all` | `[flush]` | Calls the world port's flush, which persists dirty columns and the clock state; both forms perform the same flush. |
+
+Region commands report the reference's bounds failure with the maximum and the
+requested volume, reject a region rather than clipping it to the build height,
+and publish the applied block changes through the world port's block-edit path,
+which the chunk service turns into block-update packets.
+
+### Not covered by this batch
+
+The remaining arguments of these commands need content registries or argument
+parsers the tree does not have yet: entity selectors (`@p`, `@a`, ...), the
+rotation and facing forms of `/tp`, `/clone` `filtered`/`force`/`move`/`strict`
+and its dimension forms, `/fill` `destroy`/`strict` and the block-predicate
+filter, block-state or item components in the argument (the arguments are
+words resolved by the executor, and the client tree renders them as strings),
+and `/give` overflow as dropped item entities. `/save-all` covers chunks and
+the clock; player data, entities and world metadata are not persisted yet.
+
 ## Current limits
 
 - Entity selectors (`@a`, `@p`, `@s`, ...) are not part of the parser set yet,
   so player-name arguments accept a bare name only. The selector grammar and
-  the entity argument family are a separate parser family.
+  the entity argument family are a separate parser family; every command that
+  takes a player target in this batch therefore takes one bare name.
 - The reference's registry-backed arguments (block state, block predicate, item
   stack and predicate, nbt, component, style, message, particle, score holder,
   objective, team, slot, function, heightmap, resource or tag lookups, ranges)
   are not registered yet. They need a parser plus a provider for the values and
-  are listed in the batches below rather than stubbed.
+  are listed in the batches below rather than stubbed. `/setblock`, `/fill` and
+  `/clone` therefore take the block state as a word argument and resolve it in
+  the executor, and `/give` takes a resource location; the client tree renders
+  these as strings and asks the server for completion.
+- `/fill` and `/clone` use the reference's default region bound (32768 blocks)
+  because the `max_block_modifications` game rule is not modelled, reject a
+  region outside the build height instead of clipping it, and require every
+  column of the region to be loadable before they write anything.
+- `/clone` copies through a snapshot, so an overlapping source and destination
+  are order-independent instead of failing the way the reference's normal mode
+  does. `/give` appends beyond a full inventory instead of dropping item
+  entities, because item entities are not implemented. Chat commands use system
+  chat text; the reference's chat types (emote, msg incoming/outgoing) are not
+  modelled.
 - Every argument is required: the tree has no optional-argument modifier, so a
   command that ends at a parent node is executable there instead (for example
   `/weather clear` and `/weather clear <duration>` are two executable nodes).
@@ -214,7 +261,7 @@ commands are delivered in the batches named in the notes.
 | `/bossbar` | planned | batch 3: scoreboard and teams |
 | `/chase` | planned | batch 1: player and world basics |
 | `/clear` | planned | batch 2: blocks and entities |
-| `/clone` | planned | batch 2: blocks and entities |
+| `/clone` | partial | `replace` and `masked` over a single dimension; `filtered`, `force`, `move`, `strict` and the dimension forms are planned for the blocks and entities batch. |
 | `/compute` | planned | batch 5: remaining administration |
 | `/damage` | planned | batch 2: blocks and entities |
 | `/data` | planned | batch 4: execute and functions |
@@ -232,13 +279,13 @@ commands are delivered in the batches named in the notes.
 | `/execute` | planned | batch 4: execute and functions |
 | `/experience` | planned | batch 1: player and world basics |
 | `/fetchprofile` | planned | batch 2: blocks and entities |
-| `/fill` | planned | batch 2: blocks and entities |
+| `/fill` | partial | `replace`, `keep`, `hollow` and `outline`; `destroy`, `strict` and the block-predicate filter are planned for the blocks and entities batch. |
 | `/fillbiome` | planned | batch 2: blocks and entities |
 | `/forceload` | planned | batch 4: execute and functions |
 | `/function` | planned | batch 4: execute and functions |
 | `/gamemode` | partial | Applies to the calling player only; the reference also accepts a target and has a query form. |
 | `/gamerule` | planned | batch 4: execute and functions |
-| `/give` | planned | batch 2: blocks and entities |
+| `/give` | partial | A named player and an item id with a count; item components and NBT are planned for the blocks and entities batch. |
 | `/help` | partial | Returns a fixed hint instead of generating usage from the tree. |
 | `/item` | planned | batch 2: blocks and entities |
 | `/jfr` | planned | batch 5: remaining administration |
@@ -247,8 +294,8 @@ commands are delivered in the batches named in the notes.
 | `/list` | implemented | Lists the players currently in play. |
 | `/locate` | planned | batch 4: execute and functions |
 | `/loot` | planned | batch 2: blocks and entities |
-| `/me` | planned | batch 1: player and world basics |
-| `/msg` | planned | batch 1: player and world basics |
+| `/me` | implemented | Broadcasts the emote as system chat; the reference's emote chat type is not modelled. |
+| `/msg` | partial | Named-player targets with `/tell` and `/w` aliases; entity selectors are planned with the selector parser. |
 | `/op` | planned | batch 5: remaining administration |
 | `/pardon` | planned | batch 5: remaining administration |
 | `/pardon-ip` | planned | batch 5: remaining administration |
@@ -265,7 +312,7 @@ commands are delivered in the batches named in the notes.
 | `/return` | planned | batch 4: execute and functions |
 | `/ride` | planned | batch 2: blocks and entities |
 | `/rotate` | planned | batch 2: blocks and entities |
-| `/save-all` | planned | batch 1: player and world basics |
+| `/save-all` | partial | Flushes dirty chunks and the clock state; player data, entities and level metadata are not persisted yet. |
 | `/save-off` | planned | batch 1: player and world basics |
 | `/save-on` | planned | batch 1: player and world basics |
 | `/say` | implemented | `/say <message>` broadcasts to every player. |
@@ -273,7 +320,7 @@ commands are delivered in the batches named in the notes.
 | `/scoreboard` | planned | batch 3: scoreboard and teams |
 | `/seed` | planned | batch 1: player and world basics |
 | `/serverpack` | planned | batch 5: remaining administration |
-| `/setblock` | planned | batch 2: blocks and entities |
+| `/setblock` | partial | `replace` and `keep`; `destroy`, `strict` and block entity data are planned for the blocks and entities batch. |
 | `/setidletimeout` | planned | batch 1: player and world basics |
 | `/setworldspawn` | planned | batch 1: player and world basics |
 | `/spawn_armor_trims` | planned | batch 1: player and world basics |
@@ -288,7 +335,7 @@ commands are delivered in the batches named in the notes.
 | `/tag` | planned | batch 2: blocks and entities |
 | `/team` | planned | batch 3: scoreboard and teams |
 | `/teammsg` | planned | batch 3: scoreboard and teams |
-| `/teleport` | planned | batch 2: blocks and entities |
+| `/teleport` | partial | `/tp` alias, position and player destinations, relative and local coordinates; rotation/facing forms, selectors and dimension changes are planned for the blocks and entities batch. |
 | `/tellraw` | planned | batch 1: player and world basics |
 | `/test` | planned | batch 5: remaining administration |
 | `/tick` | planned | batch 4: execute and functions |

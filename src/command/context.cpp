@@ -93,6 +93,11 @@ auto context::position(std::string_view name) const noexcept
     return get<block_position>(name);
 }
 
+auto context::vec3(std::string_view name) const noexcept
+    -> const vec3_position * {
+    return get<vec3_position>(name);
+}
+
 auto context::rotation_value(std::string_view name) const noexcept
     -> const rotation * {
     return get<rotation>(name);

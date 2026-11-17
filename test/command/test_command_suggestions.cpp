@@ -187,6 +187,31 @@ class source_impl final : public refrain::command::source {
         expect(complete.empty());
     };
 
+    "vec3 suggestions replace the whole partial argument"_test = [] {
+        refrain::command::dispatcher dispatcher;
+        dispatcher.literal("move").then(
+            dispatcher.argument("location", refrain::command::vec3_arg())
+                .executes([](refrain::command::context &) { return 1; }));
+        source_impl source;
+
+        auto empty = dispatcher.suggest("move ", 5, source);
+        expect(empty.start == 5U);
+        expect(empty.end == 5U);
+        expect(contains(empty, "~"));
+        expect(contains(empty, "~ ~"));
+        expect(contains(empty, "~ ~ ~"));
+
+        auto partial = dispatcher.suggest("move 0.5", 8, source);
+        expect(partial.start == 5U);
+        expect(partial.end == 8U);
+        expect(contains(partial, "0.5 ~"));
+        expect(contains(partial, "0.5 ~ ~"));
+
+        auto local = dispatcher.suggest("move ^", 6, source);
+        expect(contains(local, "^ ^"));
+        expect(contains(local, "^ ^ ^"));
+    };
+
     "rotation suggestions fill the missing pitch"_test = [] {
         refrain::command::dispatcher dispatcher;
         dispatcher.literal("rotate").then(
