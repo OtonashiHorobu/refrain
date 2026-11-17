@@ -3,8 +3,10 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 #
 # In-repo Conan 2 recipe for Crashpad (crash reporting), building the
-# getsentry/crashpad fork whose in-tree CMake support works on
-# Linux/Windows/macOS.  Upstream chromium/crashpad only ships GN
+# getsentry/crashpad fork whose in-tree CMake support works on Linux and on
+# Windows with MSVC (the fork's Windows sources only build on a
+# case-insensitive filesystem, so a MinGW cross build from Linux cannot use
+# it).  Upstream chromium/crashpad only ships GN
 # build files and needs the full Chromium toolchain; ConanCenter's
 # crashpad/cci.20220219 is a frozen snapshot and has no GCC 16 binaries.
 #
@@ -78,18 +80,21 @@ class CrashpadConan(ConanFile):
     def config_options(self):
         if self.settings.os == "Windows":
             del self.options.fPIC
+            # The Windows handler uses the system HTTP transport (WinHTTP);
+            # the minimal libcurl graph is only linked on the other hosts.
+            del self.options.http_transport
 
     def requirements(self):
         # The in-repo zlib recipe is a zlib-ng 2.3.3 drop-in
         # (zlib/1.3.1); a version range (same shape libzip/libcurl use) lets the
         # graph unify on it instead of pinning the ConanCenter zlib.
         self.requires("zlib/[>=1.2.11 <2]")
-        if self.options.http_transport == "libcurl":
+        if self.options.get_safe("http_transport") == "libcurl":
             # Deliberately minimal libcurl: no TLS/zstd/brotli/http2 so the
             # handler-only HTTP transport builds quickly and has no heavy
-            # transitive graph.  Re-enable with_ssl when server-side upload over
+            # transitive graph. Re-enable with_ssl when server-side upload over
             # TLS is enabled.
-            self.requires("libcurl/8.23.0", options={
+            libcurl_options = {
                 "with_ssl": False,
                 "with_zlib": False,
                 "with_brotli": False,
@@ -98,7 +103,6 @@ class CrashpadConan(ConanFile):
                 "with_libssh2": False,
                 "with_ldap": False,
                 "with_libidn": False,
-                "with_libgsasl": False,
                 "with_libpsl": False,
                 "with_c_ares": False,
                 "with_file": False,
@@ -115,7 +119,9 @@ class CrashpadConan(ConanFile):
                 "with_ntlm": False,
                 "with_cookies": False,
                 "build_executable": False,
-            })
+            }
+            libcurl_options["with_libgsasl"] = False
+            self.requires("libcurl/8.23.0", options=libcurl_options)
 
     def layout(self):
         cmake_layout(self)

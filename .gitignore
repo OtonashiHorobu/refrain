@@ -17,10 +17,13 @@ __pycache__/
 *.pyc
 
 # First-run server state created next to the working directory: the EULA
-# acceptance, the generated configuration and the downloaded game data.
+# acceptance, the generated configuration, the downloaded game data, the
+# rotating log and the local crash database.
 /config
 /data
 /eula.toml
+/logs
+/crash
 
 # Game files and local run directories (never committed)
 *.jar

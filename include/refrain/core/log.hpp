@@ -44,7 +44,9 @@ struct config {
     bool enable_colors{true};
     /// Opt-in asynchronous logger (dedicated queue + background thread). The
     /// server and tools keep the synchronous default; tests disable it. The
-    /// synchronous logger flushes on `warn` and above plus at shutdown().
+    /// synchronous logger flushes on `info` and above plus at shutdown(), so a
+    /// fatal fault that skips shutdown still leaves the diagnostic lines in the
+    /// file.
     bool async{false};
     /// Periodic flush interval for the asynchronous logger; 0 keeps the
     /// `warn`-and-above + shutdown-only flushing. Ignored when `async` is

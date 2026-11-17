@@ -10,6 +10,13 @@ In-repo Conan recipe for crashpad 2026.10.26.
 
 Crashpad crash-capture client and handler, from the getsentry fork with CMake support.
 
+The recipe builds the client library and the `crashpad_handler` executable for
+Linux and for Windows with MSVC. A MinGW cross build from Linux cannot compile
+the fork: its Windows sources include case-sensitive system headers such as
+`<NTSecAPI.h>`, which only resolve on a case-insensitive filesystem. The server
+has a native minidump fallback for builds without Crashpad, so the MinGW
+package still records crashes.
+
 The recipe fetches the fork and its submodule archives at pinned commits; the version is the upstream snapshot date.
 
 ## Building

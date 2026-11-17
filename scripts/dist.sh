@@ -45,6 +45,18 @@ case "$TARGET" in
         ;;
 esac
 
+# Crashpad is enabled for the Windows package whose toolchain can build the
+# vendored fork. The MSVC archive ships crashpad_handler.exe next to the server
+# and the client resolves it from the executable's directory. The MinGW cross
+# build cannot compile the fork today: its Windows sources include
+# case-sensitive system headers such as <NTSecAPI.h>, which only resolve on a
+# case-insensitive filesystem, so the MinGW archive keeps Crashpad off and the
+# server writes a native Windows minidump through its fallback handler instead.
+case "$TARGET" in
+    msvc) DIST_CRASHPAD=ON ;;
+    *) DIST_CRASHPAD=OFF ;;
+esac
+
 WORK="${REFRAIN_DIST_WORK:-$ROOT/build/dist/$TARGET}"
 CONAN_HOME="${REFRAIN_DIST_CONAN_HOME:-$WORK/conan-home}"
 HOST_CONAN_HOME="${REFRAIN_DIST_HOST_CONAN_HOME:-$HOME/.conan2}"
@@ -244,10 +256,15 @@ esac
 
 python3 tools/vendor_export.py --profile "$PROFILE" >/dev/null
 
+crashpad_option=False
+if [[ "$DIST_CRASHPAD" == ON ]]; then
+    crashpad_option=True
+fi
 common_install=(
     conan install . -pr:h "$PROFILE" -pr:b "$BUILD_PROFILE"
     -of "$WORK/conan" --build=missing
-    -o "&:with_crashpad=False" -o "&:with_wasm=False"
+    -o "&:with_crashpad=$crashpad_option"
+    -o "&:with_wasm=False"
     -o "&:build_tests=False" -o "&:build_bench=False"
     -o "&:mod_profile=$DIST_MOD_PROFILE"
     --lockfile=conan/locks/vendor.lock
@@ -317,7 +334,7 @@ cmake_flags=(
     -DREFRAIN_VERSION="$VERSION"
     -DREFRAIN_BRANCH="$BRANCH"
     -DREFRAIN_COMMIT="$COMMIT"
-    -DREFRAIN_WITH_CRASHPAD=OFF
+    -DREFRAIN_WITH_CRASHPAD="$DIST_CRASHPAD"
     -DREFRAIN_WITH_WASM=OFF
     -DREFRAIN_BUILD_SERVER=ON
     -DREFRAIN_BUILD_TESTS=OFF
@@ -426,6 +443,35 @@ cp content/vanilla/NOTICE.md content/vanilla/README.md \
     "$STAGE/$name/content/vanilla/"
 cp LICENSE NOTICE.md README.md "$STAGE/$name/"
 
+# The MSVC archive ships the Crashpad handler next to the server. The server
+# resolves it from its own directory, so the extracted archive can live
+# anywhere and the crash database never depends on a build-time path.
+if [[ "$DIST_CRASHPAD" == ON ]]; then
+    crashpad_handler="$(python3 - "$WORK/install.json" <<'PY'
+import json
+import os
+import sys
+
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+for node in data["graph"]["nodes"].values():
+    if node.get("context") != "host":
+        continue
+    if not (node.get("ref") or "").startswith("crashpad/"):
+        continue
+    folder = node.get("package_folder")
+    if not folder:
+        continue
+    candidate = os.path.join(folder, "bin", "crashpad_handler.exe")
+    if os.path.isfile(candidate):
+        print(candidate)
+        break
+PY
+)"
+    [[ -n "$crashpad_handler" ]] \
+        || fail "the crashpad package did not provide bin/crashpad_handler.exe"
+    cp "$crashpad_handler" "$STAGE/$name/bin/"
+fi
+
 case "$TARGET" in
     linux)
         strip --strip-all "$STAGE/$name/bin/refrain-server" \
@@ -443,7 +489,19 @@ RUN
             "$STAGE/$name/bin/refrain-tools.exe"
         cat > "$STAGE/$name/run-server.cmd" <<RUN
 @echo off
+setlocal
+cd /d "%~dp0"
 "%~dp0bin\refrain-server.exe" --gamepack "%~dp0$PROFILE_GAMEPACK_win" %*
+set "RC=%ERRORLEVEL%"
+echo.
+echo Server exited with code %RC%.
+if exist "%~dp0logs\refrain.log" (
+    echo Log file: %~dp0logs\refrain.log
+) else (
+    echo No log file was written.
+)
+if exist "%~dp0crash" echo Crash reports: %~dp0crash
+exit /b %RC%
 RUN
         cp -r "$ROOT/licenses/GCC-Runtime" "$ROOT/licenses/MinGW-w64" \
             "$STAGE/$name/licenses/"
@@ -451,7 +509,19 @@ RUN
     msvc)
         cat > "$STAGE/$name/run-server.cmd" <<RUN
 @echo off
+setlocal
+cd /d "%~dp0"
 "%~dp0bin\refrain-server.exe" --gamepack "%~dp0$PROFILE_GAMEPACK_win" %*
+set "RC=%ERRORLEVEL%"
+echo.
+echo Server exited with code %RC%.
+if exist "%~dp0logs\refrain.log" (
+    echo Log file: %~dp0logs\refrain.log
+) else (
+    echo No log file was written.
+)
+if exist "%~dp0crash" echo Crash reports: %~dp0crash
+exit /b %RC%
 RUN
         msvc_redist=""
         if [[ -n "${VCToolsRedistDir:-}" ]]; then

@@ -1,0 +1,4 @@
+@echo off
+taskkill /IM refrain-server.exe /F >nul 2>&1
+echo Refrain demo server stopped.
+pause >nul

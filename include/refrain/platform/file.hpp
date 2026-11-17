@@ -38,6 +38,12 @@ using native_path_string = std::string;
 [[nodiscard]] auto native_path(std::string_view utf8_path)
     -> std::filesystem::path;
 
+/// Suffix of an executable file name on this platform (`".exe"` on Windows,
+/// empty elsewhere). Code that derives a sibling executable name (for example
+/// the crash handler shipped next to the server) does not branch on the
+/// operating system.
+[[nodiscard]] auto executable_suffix() noexcept -> std::string_view;
+
 /// Convert an engine UTF-8 path to the native string accepted by OS APIs
 /// (`std::wstring` on Windows, UTF-8 `std::string` on POSIX).
 [[nodiscard]] auto native_string(std::string_view utf8_path)

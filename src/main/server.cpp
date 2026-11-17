@@ -54,12 +54,14 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <filesystem>
 #include <iostream>
 #include <optional>
 #include <random>
 #include <span>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -71,6 +73,7 @@ constexpr refrain::log::logger log_content{"content"};
 constexpr refrain::log::logger log_crash_reporter{"crash-reporter"};
 constexpr refrain::log::logger log_discovery{"discovery"};
 constexpr refrain::log::logger log_host{"host"};
+constexpr refrain::log::logger log_logging{"logging"};
 constexpr refrain::log::logger log_world{"world"};
 constexpr refrain::log::logger log_mods{"mods"};
 constexpr refrain::log::logger log_startup{"startup"};
@@ -86,6 +89,17 @@ using refrain::app::report_error;
 /// (including this one) runs it exactly once, in the right order.
 [[nodiscard]] auto report_fatal(const refrain::error &error) -> int {
     return report_error(error);
+}
+
+/// Absolute spelling of a path for operator-facing diagnostics. Falls back to
+/// the relative spelling when the operating system cannot resolve it (for
+/// example because the working directory was removed), so reporting a
+/// diagnostic never fails on the path itself.
+[[nodiscard]] auto absolute_path(std::string_view path) -> std::string {
+    std::error_code error{};
+    const auto resolved{std::filesystem::absolute(
+        std::filesystem::path{std::string{path}}, error)};
+    return error ? std::string{path} : resolved.string();
 }
 
 /// Default `--content-composition` suffix: only `[A-Za-z0-9._-]` survive,
@@ -231,7 +245,8 @@ constexpr std::array<default_config_file, 8> k_default_config_files{{
     {.name = "refrain.toml",
      .text = "# Refrain host configuration.\n"
              "\n"
-             "## Console log level: trace, debug, info, warn, error or off.\n"
+             "## Console and file log level: trace, debug, info, warn, error "
+             "or off.\n"
              "[logging]\n"
              "level = \"info\"\n"},
     {.name = "network.toml",
@@ -474,15 +489,14 @@ int main(int argc, char **argv) {
                    "created with the defaults on first start (disabled when "
                    "empty; default: config)");
     std::string log_level{"info"};
-    app.add_option("--log-level", log_level, "Console log level");
-    // Crash reporting is opt-in: without --crash-dir the server never creates a
-    // database directory (keeps the working tree/CI smoke runs clean). When
-    // given, a crash directory is created (0700) and the fallback marker is
-    // enabled; an empty handler_path is expected (Crashpad is not bundled).
+    app.add_option("--log-level", log_level, "Console and file log level");
+    // Crash reporting is on by default: the database lives in `crash/` under
+    // the instance directory and the handler is discovered next to the
+    // executable. `--crash-dir` overrides the location; an empty handler path
+    // is resolved by the kernel from the installed layout.
     std::string crash_dir;
     app.add_option("--crash-dir", crash_dir,
-                   "Directory for the local crash database; enables crash "
-                   "reporting (default: disabled)");
+                   "Directory for the local crash database (default: crash)");
     bool dump_gamepack{false};
     app.add_flag("--dump-gamepack", dump_gamepack,
                  "Print the resolved gamepack/provider graph and exit");
@@ -899,11 +913,29 @@ int main(int argc, char **argv) {
                 host_config->get_string("logging.level", log_level);
         }
     }
+    // File logging is always on: a rotating sink writes `logs/refrain.log`
+    // under the instance directory (the working directory) at the same level
+    // as the console. A start where the log directory cannot be created or
+    // opened degrades to console-only logging and reports why, because losing
+    // diagnostics must never keep the server down.
+    constexpr std::string_view default_log_path{"logs/refrain.log"};
     refrain::log::config cfg{};
     cfg.console_level = refrain::log::level_from_string(effective_log_level);
-    if (!refrain::log::init(cfg)) {
-        fmt::println(stderr, "refrain-server: failed to initialize logging");
-        return 1;
+    cfg.file_level = cfg.console_level;
+    cfg.file_path = std::string{default_log_path};
+    auto logging{refrain::log::init(cfg)};
+    std::string file_logging_error{};
+    if (!logging) {
+        file_logging_error = logging.error().message;
+        cfg.file_path.clear();
+        cfg.file_level = refrain::log::level::off;
+        logging = refrain::log::init(cfg);
+        if (!logging) {
+            fmt::println(stderr,
+                         "refrain-server: failed to initialize logging: {}",
+                         logging.error().message);
+            return 1;
+        }
     }
     // The server tick thread is the process main thread; the
     // name is what `[main/info]` and `top -H` display.
@@ -923,6 +955,12 @@ int main(int argc, char **argv) {
     log_cli.info("starting {} with mod profile {} (build {})",
                  refrain::version::string(), refrain::version::mod_profile,
                  refrain::version::mod_build_id);
+    if (file_logging_error.empty()) {
+        log_logging.info("writing the log to '{}'",
+                         absolute_path(cfg.file_path));
+    } else {
+        log_logging.warn("file logging is disabled: {}", file_logging_error);
+    }
     if (eula) {
         if (eula->imported_legacy) {
             log_cli.info("imported the EULA acceptance from '{}'",
@@ -936,31 +974,26 @@ int main(int argc, char **argv) {
                           layout->content_root);
     }
 
-    // Crash reporting is opt-in. Without --crash-dir no crash
-    // database is created (CI smoke runs and the working tree stay clean).
-    // An empty handler_path is expected here: Crashpad is not bundled with the
-    // server, so initialize() installs the fallback marker; a failure is
-    // reported but never blocks startup.
-    if (!crash_dir.empty()) {
-        refrain::kernel::crash_config crash{};
-        crash.product = "Refrain";
-        crash.version = std::string{refrain::version::release_version};
-        crash.database_path = crash_dir;
-        crash.fallback_marker = true;
-        crash.start_handler = true;
-        crash.upload = refrain::kernel::crash_upload::disabled;
-        auto crash_initialized{
-            refrain::kernel::crash_reporter::initialize(crash)};
-        if (!crash_initialized) {
-            log_cli.warn("failed to start crash reporter: {}",
-                         crash_initialized.error().message);
-        } else {
-            log_crash_reporter.info(
-                "started {} crash reporter with database {}",
-                refrain::kernel::crash_reporter::enabled() ? "crashpad"
-                                                           : "fallback",
-                refrain::kernel::crash_reporter::database_path());
-        }
+    // Crash reporting is on by default. The database lives in `crash/` under
+    // the instance directory, the handler is discovered from the installed
+    // layout next to the executable, and `--crash-dir` only overrides the
+    // location. A failure to start the reporter is reported and never blocks
+    // startup: the fallback marker and the log file remain available.
+    refrain::kernel::crash_config crash{};
+    crash.product = "Refrain";
+    crash.version = std::string{refrain::version::release_version};
+    crash.database_path = crash_dir.empty() ? std::string{"crash"} : crash_dir;
+    crash.fallback_marker = true;
+    crash.start_handler = true;
+    crash.upload = refrain::kernel::crash_upload::disabled;
+    auto crash_initialized{refrain::kernel::crash_reporter::initialize(crash)};
+    if (!crash_initialized) {
+        log_cli.warn("failed to start crash reporting: {}",
+                     crash_initialized.error().message);
+    } else {
+        log_crash_reporter.info(
+            "crash reporting is active with database '{}'",
+            absolute_path(refrain::kernel::crash_reporter::database_path()));
     }
 
     log_host.info("loading gamepack from '{}'", gamepack);

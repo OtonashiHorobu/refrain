@@ -1285,13 +1285,13 @@ python3 tools/block/pack_report.py \
 echo "  block mining report packer and tracked report OK"
 
 say "[10/11] Crashpad minidump smoke"
-HANDLER="$(find "$CONAN_HOME_DIR" -type f -name crashpad_handler \
-    -perm -u+x -print -quit 2>/dev/null || true)"
-[[ -n "$HANDLER" ]] || die "crashpad_handler not found under $CONAN_HOME_DIR \
-(run: python3 tools/vendor_export.py --build)"
+# The build stages crashpad_handler next to the binaries, and the reporter
+# discovers it from the executable's own directory; no build-time Conan path
+# and no --handler argument are needed.
+[[ -x "$BIN_DIR/crashpad_handler" ]] \
+    || die "crashpad_handler was not staged next to the binaries; rebuild with REFRAIN_WITH_CRASHPAD=ON"
 set +e
-"$BIN_DIR/refrain-tools" crash smoke -o "$CRASH_DIR/db" \
-    --handler "$HANDLER" >/dev/null 2>&1
+"$BIN_DIR/refrain-tools" crash smoke -o "$CRASH_DIR/db" >/dev/null 2>&1
 CRASH_STATUS=$?
 set -e
 [[ "$CRASH_STATUS" -ne 0 ]] || die "crash smoke: the process did not crash"
@@ -1305,6 +1305,75 @@ done
 head -c 4 "$DUMP" | grep -q 'MDMP' \
     || die "crash smoke: '$DUMP' is not a minidump"
 echo "  minidump: $(basename "$DUMP") ($(stat -c%s "$DUMP") bytes)"
+
+say "[10b/11] server diagnostics smoke (default log, crash database, fallback)"
+# A normal start creates logs/refrain.log and crash/ next to the instance and
+# names both in the log. The forced SIGSEGV leaves a minidump in crash/, so the
+# default diagnostics a Windows package relies on are exercised end to end.
+DIAG_DIR="$EXTRACT_DIR/diagnostics"
+mkdir -p "$DIAG_DIR/config"
+cp -R "$WORLD_ROOT/rwf" "$DIAG_DIR/world"
+printf 'port = 0\n' >"$DIAG_DIR/config/network.toml"
+DIAG_CONSOLE_LOG="$DIAG_DIR/console.log"
+(
+    cd "$DIAG_DIR" || exit 1
+    exec "$BIN_DIR/refrain-server" "${CI_SERVER_ARGS[@]}" \
+        --gamepack "$ROOT/gamepack/gamepack.toml" --world world \
+        --config-dir config --ticks 0 </dev/null
+) >"$DIAG_CONSOLE_LOG" 2>&1 &
+DIAG_PID=$!
+DIAG_READY=""
+for _ in $(seq 1 100); do
+    if grep -q 'ready for Minecraft 26.3 clients' "$DIAG_CONSOLE_LOG" 2>/dev/null; then
+        DIAG_READY=1
+        break
+    fi
+    kill -0 "$DIAG_PID" 2>/dev/null || break
+    sleep 0.1
+done
+[[ -n "$DIAG_READY" ]] || {
+    cat "$DIAG_CONSOLE_LOG" >&2 || true
+    kill -9 "$DIAG_PID" 2>/dev/null || true
+    die "server diagnostics smoke: the server did not become ready"
+}
+[[ -s "$DIAG_DIR/logs/refrain.log" ]] \
+    || die "server diagnostics smoke: logs/refrain.log was not created"
+grep -q 'writing the log to' "$DIAG_DIR/logs/refrain.log" \
+    || die "server diagnostics smoke: the log does not name its own file"
+grep -q 'crash reporting is active with database' "$DIAG_CONSOLE_LOG" \
+    || die "server diagnostics smoke: the log does not name the crash database"
+[[ -d "$DIAG_DIR/crash" ]] \
+    || die "server diagnostics smoke: crash/ was not created"
+kill -SEGV "$DIAG_PID" 2>/dev/null || true
+wait "$DIAG_PID" 2>/dev/null || true
+DIAG_DUMP=""
+for _ in $(seq 1 100); do
+    DIAG_DUMP="$(find "$DIAG_DIR/crash" -type f -name '*.dmp' -print -quit 2>/dev/null || true)"
+    [[ -n "$DIAG_DUMP" ]] && break
+    sleep 0.1
+done
+[[ -n "$DIAG_DUMP" ]] \
+    || die "server diagnostics smoke: the forced crash produced no minidump"
+head -c 4 "$DIAG_DUMP" | grep -q 'MDMP' \
+    || die "server diagnostics smoke: '$DIAG_DUMP' is not a minidump"
+grep -q 'ready for Minecraft 26.3 clients' "$DIAG_DIR/logs/refrain.log" \
+    || die "server diagnostics smoke: the file log does not mirror the console"
+echo "  log: logs/refrain.log, crash: crash/$(basename "$DIAG_DUMP")"
+# A start whose log directory cannot be created keeps running with console
+# logging and reports why instead of failing.
+FALLBACK_DIR="$EXTRACT_DIR/log-fallback"
+mkdir -p "$FALLBACK_DIR"
+printf 'not a directory\n' >"$FALLBACK_DIR/logs"
+(
+    cd "$FALLBACK_DIR" || exit 1
+    "$BIN_DIR/refrain-server" "${CI_SERVER_ARGS[@]}" \
+        --gamepack "$ROOT/gamepack/gamepack.toml" --world "$WORLD_ROOT/rwf" \
+        --config-dir "$FALLBACK_DIR/config" --check
+) >"$FALLBACK_DIR/check.log" 2>&1 \
+    || die "server diagnostics smoke: a run with an unwritable log directory failed"
+grep -q 'file logging is disabled' "$FALLBACK_DIR/check.log" \
+    || die "server diagnostics smoke: the log fallback was not reported"
+echo "  unwritable log directory: console logging kept, reason reported"
 
 if [[ -n "$RUN_FORMAT_CHECK" ]]; then
     say "[11/11] clang-format check (first-party sources)"
