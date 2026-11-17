@@ -355,6 +355,34 @@ in-process column entity table, so that composition streams chunks without the
 entity announcements. The first-party in-process composition is the one the
 runtime binds.
 
+### Chunk streaming
+
+The streamer sends the columns of one accepted viewport, nearest ring first, in
+small batches bounded by a per-tick time budget and a per-connection backlog.
+The accepted viewport is the only input to the packet set: the chunk tracker
+records the chunk centres the simulation validated for a connection, and a
+client can never receive a column its accepted viewport does not contain.
+
+The tracker also estimates where a moving viewport is heading. The estimate is
+built from the accepted centre changes alone, never from a client-reported
+velocity: two consecutive changes in the same direction activate a whole-chunk
+look-ahead of at most two chunks, and a change against the heading, a viewport
+that stopped changing or a direction that never repeated keeps it inactive. The
+look-ahead centre is a generation hint. It ranks tiles behind every tile the
+accepted viewport needs, so a prediction cannot starve the viewport a client is
+standing in, and it lets the streamer ask the generator for the columns of the
+band ahead of the player. Those columns are pre-generated and pinned by the
+residency policy while the estimate lasts; they are never queued for the
+client, and the band is recomputed every tick so a turn or a stop releases it
+instead of pinning chunks the player will not reach.
+
+A generation tile arrives as a whole, but the service adopts at most a small
+number of its columns per tick. Each adoption runs the column decode, its
+entity spawn and its initial light, so inserting a finished tile in one tick is
+a spike; the remainder waits in position order for the next ticks. The world
+still applies columns in ascending position order, so the adoption budget
+changes how a tile is spread across ticks, not what the world ends up holding.
+
 ### Time and weather
 
 The overworld clock advances on the tick grid: the game time counts every
@@ -381,11 +409,15 @@ for an fsync. A clean column needs no store traffic at all and is dropped
 immediately; at most a small number of dirty columns are written per tick, so a
 burst of generated columns cannot turn into a long tick.
 
-The bound is the union of the active viewport squares plus the ticket set. It
-follows the view distances, so walking away from an area releases its memory
-instead of growing the resident set for as long as the process lives. A viewport
-pin covers columns that do not exist yet, which is what keeps a generated column
-resident when it arrives.
+The bound is the union of the active viewport squares, the small look-ahead
+band of every moving player and the ticket set. It follows the view distances,
+so walking away from an area releases its memory instead of growing the resident
+set for as long as the process lives. A viewport pin covers columns that do not
+exist yet, which is what keeps a generated column resident when it arrives. A
+look-ahead pin exists so a column generated for movement prediction is not
+written to the store and read back before the player reaches it; the streamer
+bounds the band per connection and in aggregate, and it drops the band on a
+turn or a stop, so the pin set cannot grow with the time a player has moved.
 
 The pass walks resident columns in ascending position order and unloads in that
 order. `state_hash()` covers the loaded columns, so a replay has to unload the

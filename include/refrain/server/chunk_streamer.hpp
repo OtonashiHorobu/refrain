@@ -39,6 +39,16 @@ namespace refrain::server {
 /// fails, `chunk_failed()` puts the column back in a re-requestable state up to
 /// a fixed number of attempts; after that the streamer stops asking for it
 /// rather than re-requesting once per tick.
+///
+/// A moving player's accepted centre history also drives a look-ahead band:
+/// the columns of the predicted viewport that the accepted viewport does not
+/// contain yet are requested from the generator and reported through
+/// `prefetch_columns()`, so the chunk pipeline can pin them. The band is
+/// recomputed every tick from the estimate, never from a client-reported
+/// velocity, and it is rebuilt when the estimate moves; a turn or a stop
+/// clears it, which is what bounds both the generation requests and the
+/// residency claim. The band never enters the packet queue: the client is
+/// sent exactly its accepted viewport.
 class chunk_streamer {
   public:
     /// One connection's viewport, in the form the residency policy consumes:
@@ -59,6 +69,23 @@ class chunk_streamer {
     /// is left unserved for this viewport visit, and a later viewport change
     /// gives it a fresh allowance.
     static constexpr std::uint32_t max_chunk_attempts{3};
+
+    /// Columns one connection may ask the generator for outside its accepted
+    /// viewport. A look-ahead band is at most two chunks wide per moved axis,
+    /// so the cap only bites for a view distance far above the protocol
+    /// default; it is what keeps a prediction that outruns the player from
+    /// growing generation without bound.
+    static constexpr std::size_t max_prefetch_columns{64};
+
+    /// Columns of the whole stream, across connections, that residency keeps
+    /// resident while they wait for the viewport. Kept beside the per-stream
+    /// cap so a join storm cannot pin one predicted band per connection.
+    static constexpr std::size_t max_total_prefetch_columns{256};
+
+    /// New prefetch requests one connection may issue per tick. The band is
+    /// recomputed every tick, so a request that failed because the queue was
+    /// full is retried without ever issuing a burst in one tick.
+    static constexpr std::size_t max_prefetch_requests_per_tick{8};
 
     /// Wall-clock time one stream pass may spend draining client queues.
     ///
@@ -168,6 +195,12 @@ class chunk_streamer {
     /// keeps resident.
     [[nodiscard]] auto viewports() const -> std::vector<viewport>;
 
+    /// Columns outside every accepted viewport that the look-ahead currently
+    /// asks the generator for, ascending by connection and position. These are
+    /// pre-generated, never sent: the residency policy pins them while the
+    /// estimate lasts so the work is not thrown away by the next sweep.
+    [[nodiscard]] auto prefetch_columns() const -> std::vector<sim::chunk_pos>;
+
     /// Connections whose client already received the column, ascending by
     /// connection id. Used to fan out block and light updates.
     [[nodiscard]] auto connections_with_chunk(std::int32_t x,
@@ -222,6 +255,21 @@ class chunk_streamer {
         /// viewport rebuild skips them until they arrive from elsewhere.
         std::set<std::pair<std::int32_t, std::int32_t>> abandoned{};
         std::deque<std::pair<std::int32_t, std::int32_t>> pending{};
+        /// The look-ahead band of the current tick: columns outside this
+        /// viewport that generation is asked for. Recomputed from the accepted
+        /// centre history every tick, so a turn or a stop clears it instead of
+        /// leaving a stale request behind.
+        std::set<std::pair<std::int32_t, std::int32_t>> prefetch{};
+        /// Prefetch columns the generator was already asked for. A column that
+        /// is already wanted or in flight is not asked twice; the entry is
+        /// dropped when the column leaves the band.
+        std::set<std::pair<std::int32_t, std::int32_t>> prefetch_asked{};
+        /// Look-ahead centre the current band was built for. The band is
+        /// rebuilt only when the estimate moves, so a still camera costs one
+        /// comparison per tick instead of a square walk.
+        std::int32_t prefetch_center_x{0};
+        std::int32_t prefetch_center_z{0};
+        std::int32_t prefetch_radius{-1};
     };
 
     /// Encoded chunk bodies survive a tick so a second player with the same
@@ -254,6 +302,14 @@ class chunk_streamer {
     /// tick.
     [[nodiscard]] static auto cache_capacity(std::int32_t radius)
         -> std::size_t;
+
+    /// Recompute one connection's look-ahead band and ask the generator for
+    /// the columns of it that are not resident. The band follows the accepted
+    /// centre history only; the packet queue is untouched, so a prefetched
+    /// column cannot reach the client before its accepted viewport contains
+    /// it.
+    void update_prefetch(std::uint64_t connection, stream_state &stream,
+                         const refrain::session::chunk_tracker &views);
 
     /// Send the pending chunks of one connection, up to one wire batch, until
     /// the deadline passes. Returns true when the deadline stopped the drain.

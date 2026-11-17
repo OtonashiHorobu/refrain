@@ -760,4 +760,157 @@ suite<"server/chunk-service"> chunk_service_tests = [] {
     };
 };
 
+suite<"server/chunk-service-progressive"> chunk_service_progressive_tests = [] {
+    "server/chunk service adopts a finished tile within the tick budget"_test =
+        [] {
+            test_support::scratch_directory scratch;
+            const auto path{(scratch.path() / "world").string()};
+            expect(static_cast<bool>(world::create_world(path, 7, "probe")));
+            auto opened{sim::world::open(path)};
+            expect(static_cast<bool>(opened));
+            if (!opened) {
+                return;
+            }
+            auto &runtime{*opened};
+            const auto port{server::make_borrowed_world_port(runtime)};
+            recording_gateway gateway;
+            gateway.active = {1};
+            server::chunk_service service;
+            service.attach(gateway,
+                           server::chunk_packet_source{.world = port.get()});
+            auto *streamer{service.streamer()};
+            expect(streamer != nullptr);
+            if (streamer == nullptr) {
+                return;
+            }
+            auto log{std::make_shared<encode_log>()};
+            streamer->set_encoder(make_encoder(runtime, log));
+
+            // One generation tile answering in the same tick: 64 columns.
+            auto columns{
+                std::vector<std::pair<sim::chunk_pos, sim::storage_chunk>>{}};
+            for (std::int32_t x{0}; x < 8; ++x) {
+                for (std::int32_t z{0}; z < 8; ++z) {
+                    columns.emplace_back(sim::chunk_pos{x, z}, make_column());
+                }
+            }
+            service.queue_generated(std::move(columns));
+            session::play_session players{};
+            session::chunk_tracker views;
+            // The viewport covers the whole synthetic tile, so every adopted
+            // column is pinned and the load count measures adoption only.
+            static_cast<void>(views.update(1, 0, 0, 8));
+            const auto tick_start{refrain::core::now_ns()};
+            service.tick(*port, players, views, tick_start);
+            // A whole tile never lands in one tick: the first tick adopts the
+            // budget and leaves the rest queued.
+            expect(port->loaded_chunks() ==
+                   server::chunk_service::max_adopted_columns_per_tick);
+            expect(streamed(gateway, 1).size() <=
+                   server::chunk_service::max_adopted_columns_per_tick);
+            // ...but the first chunks of the tile already reach the client in
+            // that tick, which is the join latency the budget must keep.
+            expect(!streamed(gateway, 1).empty());
+
+            std::size_t previous{port->loaded_chunks()};
+            std::size_t adoption_ticks{0};
+            for (int tick{0}; tick < 32 && previous < 64U; ++tick) {
+                service.tick(*port, players, views, tick_start);
+                ++adoption_ticks;
+                const auto loaded{port->loaded_chunks()};
+                expect(loaded - previous <=
+                       server::chunk_service::max_adopted_columns_per_tick);
+                previous = loaded;
+            }
+            expect(port->loaded_chunks() == 64U);
+            // The whole tile is adopted in ceil(64 / budget) ticks: the
+            // progress is bounded per tick and still completes promptly.
+            const auto expected_ticks{
+                (64U + server::chunk_service::max_adopted_columns_per_tick -
+                 1U) /
+                server::chunk_service::max_adopted_columns_per_tick};
+            expect(adoption_ticks <= expected_ticks)
+                << "the tile needed " << adoption_ticks
+                << " ticks, expected at most " << expected_ticks;
+        };
+
+    "server/chunk service keeps a look-ahead column resident until the viewport reaches it"_test =
+        [] {
+            test_support::scratch_directory scratch;
+            const auto path{(scratch.path() / "world").string()};
+            expect(static_cast<bool>(world::create_world(path, 7, "probe")));
+            auto opened{sim::world::open(path)};
+            expect(static_cast<bool>(opened));
+            if (!opened) {
+                return;
+            }
+            auto &runtime{*opened};
+            const auto port{server::make_borrowed_world_port(runtime)};
+            recording_gateway gateway;
+            gateway.active = {1};
+            server::chunk_service service;
+            service.attach(gateway,
+                           server::chunk_packet_source{.world = port.get()});
+            auto *streamer{service.streamer()};
+            expect(streamer != nullptr);
+            if (streamer == nullptr) {
+                return;
+            }
+            auto log{std::make_shared<encode_log>()};
+            streamer->set_encoder(make_encoder(runtime, log));
+
+            session::play_session players{};
+            session::chunk_tracker views;
+            const auto tick_start{refrain::core::now_ns()};
+            const auto tick_once{
+                [&] { service.tick(*port, players, views, tick_start); }};
+            const auto move{[&views](std::int32_t center_x) {
+                std::this_thread::sleep_for(std::chrono::milliseconds{120});
+                static_cast<void>(views.update(1, center_x, 0, 1));
+            }};
+            static_cast<void>(views.update(1, 0, 0, 1));
+            tick_once();
+            move(1);
+            tick_once();
+            move(2);
+            tick_once();
+
+            // The look-ahead centre is (4, 0) and its band is pinned while it
+            // waits for the player.
+            const auto prefetch{streamer->prefetch_columns()};
+            expect(prefetch.size() == 6U);
+            const auto prefetched{std::find_if(prefetch.begin(), prefetch.end(),
+                                               [](const sim::chunk_pos &pos) {
+                                                   return pos.x == 4 &&
+                                                          pos.z == 0;
+                                               })};
+            expect(prefetched != prefetch.end());
+            if (prefetched == prefetch.end()) {
+                return;
+            }
+            expect(port->ticket_count(*prefetched) == 1U);
+
+            // The generator answers and the column is inserted outside the
+            // accepted viewport. The residency pass must not drop work the
+            // prediction is waiting on.
+            auto inserted{
+                runtime.insert_chunk(sim::chunk_pos{4, 0}, make_column())};
+            expect(static_cast<bool>(inserted));
+            streamer->chunk_ready(4, 0);
+            tick_once();
+            expect(runtime.find_chunk(sim::chunk_pos{4, 0}) != nullptr);
+            tick_once();
+            expect(runtime.find_chunk(sim::chunk_pos{4, 0}) != nullptr);
+
+            // A reversed estimate clears the band, so the column loses its
+            // ticket and the next sweep unloads it instead of pinning it for
+            // the rest of the session.
+            move(1);
+            tick_once();
+            expect(streamer->prefetch_columns().empty());
+            expect(port->ticket_count(sim::chunk_pos{4, 0}) == 0U);
+            expect(runtime.find_chunk(sim::chunk_pos{4, 0}) == nullptr);
+        };
+};
+
 } // namespace

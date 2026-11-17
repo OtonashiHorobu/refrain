@@ -22,6 +22,7 @@ using refrain::server::admission_reason;
 using refrain::server::admission_sample;
 using refrain::server::farthest_column;
 using refrain::server::rank_columns_by_distance;
+using refrain::server::rank_tiles_by_distance;
 using refrain::server::to_string;
 using refrain::world::chunk_pos;
 
@@ -247,6 +248,69 @@ suite<"server/chunk-admission"> admission_priority_tests = [] {
         expect(ordered[2] == chunk_pos{-3, 2});
         expect(ordered[3] == chunk_pos{7, -7});
     };
+};
+
+suite<"server/chunk-admission"> admission_tile_priority_tests = [] {
+    "server/admission ranks accepted tiles before look-ahead tiles"_test = [] {
+        // The player stands at chunk 0; the look-ahead is ten chunks east.
+        // Tile (8, 0) is near the look-ahead but far from the player, and
+        // tile (16, 0) is farther still. The accepted centre decides first:
+        // pre-generation is a hint, never a second viewport, so a tile the
+        // player can already ask for must not wait behind a predicted one.
+        const std::vector<chunk_pos> wanted{{16, 0}, {8, 0}};
+        const std::vector<chunk_pos> accepted{{0, 0}};
+        const std::vector<chunk_pos> lookahead{{10, 0}};
+        const auto ordered{
+            rank_tiles_by_distance(wanted, accepted, lookahead, 8)};
+        expect(ordered.size() == 2U);
+        expect(ordered[0] == chunk_pos{8, 0});
+        expect(ordered[1] == chunk_pos{16, 0});
+    };
+
+    "server/admission breaks an accepted tie with the look-ahead centre"_test =
+        [] {
+            // The accepted centre sits on the border of two tiles, so both
+            // have distance zero. The look-ahead centre is inside the eastern
+            // one, which must be dispatched first.
+            const std::vector<chunk_pos> wanted{{8, 0}, {16, 0}};
+            const std::vector<chunk_pos> accepted{{16, 0}};
+            const std::vector<chunk_pos> lookahead{{20, 0}};
+            const auto ordered{
+                rank_tiles_by_distance(wanted, accepted, lookahead, 8)};
+            expect(ordered.size() == 2U);
+            expect(ordered[0] == chunk_pos{16, 0});
+            expect(ordered[1] == chunk_pos{8, 0});
+        };
+
+    "server/admission keeps the corner order without a look-ahead centre"_test =
+        [] {
+            const std::vector<chunk_pos> wanted{{8, 0}, {0, 0}, {-8, 0}};
+            const std::vector<chunk_pos> accepted{{0, 0}};
+            const auto ordered{rank_tiles_by_distance(wanted, accepted, {}, 8)};
+            expect(ordered.size() == 3U);
+            // All three tiles are distance zero or one from the centre; the
+            // tie-break is the tile corner, as it was before prediction.
+            expect(ordered[0] == chunk_pos{0, 0});
+            expect(ordered[1] == chunk_pos{-8, 0});
+            expect(ordered[2] == chunk_pos{8, 0});
+        };
+
+    "server/admission names a look-ahead tile by its whole tile square"_test =
+        [] {
+            // A centre inside the tile makes the distance zero no matter where
+            // in the tile it stands, which is why the look-ahead is a whole
+            // tile hint rather than a column hint.
+            const std::vector<chunk_pos> wanted{{32, 32}};
+            const std::vector<chunk_pos> accepted{{0, 0}};
+            const std::vector<chunk_pos> lookahead{{36, 36}};
+            const auto ordered{
+                rank_tiles_by_distance(wanted, accepted, lookahead, 8)};
+            expect(ordered.size() == 1U);
+            expect(ordered[0] == chunk_pos{32, 32});
+            const auto far_ordered{
+                rank_tiles_by_distance(wanted, accepted, {}, 8)};
+            expect(far_ordered == ordered);
+        };
 };
 
 } // namespace
