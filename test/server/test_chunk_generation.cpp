@@ -15,6 +15,7 @@
 // one diagnostic when the checkout has no copy.
 
 #include <refrain/core/time.hpp>
+#include <refrain/server/chunk_generation.hpp>
 #include <refrain/sim/world.hpp>
 #include <refrain/world/create.hpp>
 #include <refrain/world/proto_bridge.hpp>
@@ -153,6 +154,36 @@ compare_across_edges(worldgen::chunk_generator &left,
     return value != nullptr && *value != '\0' && *value != '0';
 }
 
+/// Generates the same rectangle through the tile path at one and eight
+/// requested workers and returns the block differences, position by position.
+[[nodiscard]] auto compare_worker_counts(worldgen::chunk_generator &one,
+                                         worldgen::chunk_generator &many,
+                                         worldgen::jint edge,
+                                         worldgen::jint width,
+                                         worldgen::jint depth) -> std::size_t {
+    const auto origin = worldgen::chunk_pos{.x = 0, .z = 0};
+    auto first{one.generate_area_tiled(origin, width, depth, 1)};
+    auto second{many.generate_area_tiled(origin, width, depth, 8)};
+    expect(first.has_value());
+    expect(second.has_value());
+    if (!first || !second) {
+        return 0;
+    }
+    expect(first->size() == second->size());
+    expect(first->size() ==
+           static_cast<std::size_t>(width) * static_cast<std::size_t>(depth));
+    static_cast<void>(edge);
+    std::size_t differences{0};
+    for (std::size_t index = 0; index < first->size(); ++index) {
+        if ((*first)[index] == nullptr || (*second)[index] == nullptr) {
+            ++differences;
+            continue;
+        }
+        differences += block_differences(*(*first)[index], *(*second)[index]);
+    }
+    return differences;
+}
+
 } // namespace
 
 suite<"server/chunk-generation"> chunk_generation_tests = [] {
@@ -205,6 +236,27 @@ suite<"server/chunk-generation"> chunk_generation_tests = [] {
                 }
             }
         };
+
+    "server/chunk tile path is identical at one and eight workers"_test = [] {
+        if (!test_support::vanilla_data().available) {
+            return;
+        }
+        // The production path generates whole tiles. A tile never shares state
+        // with another tile, so the worker that happens to run one cannot
+        // change the chunks it serves. This is the worker-count independence
+        // the experimental per-chunk path does not have yet.
+        auto serial{create_generator(2)};
+        auto parallel{create_generator(2)};
+        expect(serial.has_value());
+        expect(parallel.has_value());
+        if (!serial || !parallel) {
+            return;
+        }
+        const auto differences{
+            compare_worker_counts(**serial, **parallel, 2, 4, 4)};
+        expect(differences == 0U) << "the tile path changed " << differences
+                                  << " block(s) between one and eight workers";
+    };
 
     "server/chunk tile edge changes natural-biome decoration at a tile corner"_test =
         [] {
@@ -431,5 +483,49 @@ suite<"server/chunk-generation"> chunk_generation_measurement = [] {
                          costs.size(),
                          total / static_cast<double>(costs.size()), p99, total);
         }
+    };
+};
+
+suite<"server/chunk-generation"> chunk_generation_gating_tests = [] {
+    "server/chunk generation defaults to the production tile path"_test = [] {
+        const refrain::server::chunk_generation::config settings{};
+        expect(!settings.experimental_chunk_pipeline)
+            << "the experimental per-chunk pipeline must stay off by default";
+        expect(settings.tile_size == 8);
+    };
+
+    "server/chunk generation selects the tile path unless the flag is set"_test =
+        [] {
+            // The runtime composition never sets the flag; starting a default
+            // configuration must therefore run the production tile path.
+            auto started{refrain::server::chunk_generation::start(
+                refrain::server::chunk_generation::config{
+                    .data_root = "/refrain/gating-probe",
+                    .worker_count = 1,
+                })};
+            expect(started.has_value());
+            if (!started) {
+                return;
+            }
+            expect(!(*started)->uses_chunk_pipeline());
+            expect((*started)->tile_size() == 8);
+            (*started)->stop();
+        };
+
+    "server/chunk generation runs the scheduler only when opted in"_test = [] {
+        auto started{refrain::server::chunk_generation::start(
+            refrain::server::chunk_generation::config{
+                .data_root = "/refrain/gating-probe",
+                .worker_count = 1,
+                .experimental_chunk_pipeline = true,
+            })};
+        expect(started.has_value()) << (started ? "" : started.error().message);
+        if (!started) {
+            return;
+        }
+        expect((*started)->uses_chunk_pipeline());
+        expect((*started)->tile_size() == 1)
+            << "a scheduler task covers one column, not a tile";
+        (*started)->stop();
     };
 };

@@ -121,6 +121,35 @@ farthest_tile(std::span<const refrain::world::chunk_pos> wanted,
     return victim;
 }
 
+[[nodiscard]] auto
+centre_distance(std::span<const refrain::world::chunk_pos> centres,
+                refrain::world::chunk_pos pos) -> std::int64_t;
+
+/// The column a full experimental queue evicts: the farthest from both centre
+/// lists, then the greatest position on a tie. `wanted` must not be empty.
+[[nodiscard]] auto
+farthest_wanted_column(std::span<const refrain::world::chunk_pos> wanted,
+                       std::span<const refrain::world::chunk_pos> accepted,
+                       std::span<const refrain::world::chunk_pos> lookahead)
+    -> refrain::world::chunk_pos {
+    auto victim{wanted.front()};
+    auto victim_distance{centre_distance(accepted, victim)};
+    auto victim_ahead{centre_distance(lookahead, victim)};
+    for (const auto &pos : wanted.subspan(1)) {
+        const auto distance{centre_distance(accepted, pos)};
+        const auto ahead{centre_distance(lookahead, pos)};
+        if (distance > victim_distance ||
+            (distance == victim_distance && ahead > victim_ahead) ||
+            (distance == victim_distance && ahead == victim_ahead &&
+             key_of(pos) > key_of(victim))) {
+            victim = pos;
+            victim_distance = distance;
+            victim_ahead = ahead;
+        }
+    }
+    return victim;
+}
+
 /// Chebyshev distance to the nearest centre; zero when there is no centre, so
 /// the position tie-break alone orders the queue.
 [[nodiscard]] auto
@@ -234,6 +263,8 @@ auto chunk_generation::start(config settings)
     settings.worker_count =
         std::clamp<std::size_t>(settings.worker_count, 1, max_workers);
     settings.tile_size = std::clamp<std::int32_t>(settings.tile_size, 1, 32);
+    settings.proto_cache_capacity =
+        std::clamp<std::size_t>(settings.proto_cache_capacity, 25, 4096);
     // Credits can never exceed the workers that can spend them, and the lower
     // bound is clamped first so a pinned level stays a valid range.
     settings.admission.min_credits = std::clamp<std::size_t>(
@@ -243,12 +274,35 @@ auto chunk_generation::start(config settings)
                    settings.admission.min_credits, settings.worker_count);
     auto service{std::unique_ptr<chunk_generation>{
         new chunk_generation(std::move(settings))}};
+    if (service->settings_.experimental_chunk_pipeline) {
+        // The experimental path drives the per-chunk status scheduler. It is
+        // created before the workers start and never selected by the server
+        // composition, which leaves `experimental_chunk_pipeline` false.
+        worldgen::chunk_generator_config generator{};
+        generator.data_root = service->settings_.data_root;
+        generator.templates_root = service->settings_.templates_root;
+        generator.seed = service->settings_.seed;
+        generator.kind = worldgen::dimension_kind::overworld;
+        generator.target = worldgen::generation_target::full;
+        generator.proto_cache_capacity = static_cast<worldgen::jint>(
+            service->settings_.proto_cache_capacity);
+        auto scheduler{
+            worldgen::chunk_scheduler::create(worldgen::chunk_scheduler::config{
+                .generator = std::move(generator),
+                .workers = service->settings_.worker_count,
+            })};
+        if (!scheduler) {
+            service->stop();
+            return std::unexpected{scheduler.error()};
+        }
+        service->scheduler_ = std::move(*scheduler);
+    }
     service->workers_.reserve(service->settings_.worker_count);
     try {
         for (std::size_t index{0}; index < service->settings_.worker_count;
              ++index) {
             service->workers_.emplace_back(
-                [pointer = service.get()] { pointer->run(); });
+                [pointer = service.get(), index] { pointer->run(index); });
         }
     } catch (const std::system_error &error) {
         // Starting a worker is the one seam that can still fail after the
@@ -259,18 +313,20 @@ auto chunk_generation::start(config settings)
             fmt::format("chunk generation could not start its workers: {}",
                         error.what()))};
     }
-    log_generation.info("started chunk generation with {} workers and credit "
-                        "{}",
-                        service->settings_.worker_count,
-                        service->admission_.credits());
+    log_generation.info(
+        "started chunk generation with {} workers, credit {} and the {} path",
+        service->settings_.worker_count, service->admission_.credits(),
+        service->settings_.experimental_chunk_pipeline ? "experimental chunk"
+                                                       : "tile");
     return service;
 }
 
 chunk_generation::~chunk_generation() { stop(); }
 
 auto chunk_generation::request(refrain::world::chunk_pos pos) -> bool {
-    const auto tile{tile_of(pos, settings_.tile_size)};
-    const auto key{key_of(tile)};
+    const bool pipeline{settings_.experimental_chunk_pipeline};
+    const auto unit{pipeline ? pos : tile_of(pos, settings_.tile_size)};
+    const auto key{key_of(unit)};
     const std::lock_guard lock{mutex_};
     if (stopping_ || active_.contains(key)) {
         return false;
@@ -281,7 +337,7 @@ auto chunk_generation::request(refrain::world::chunk_pos pos) -> bool {
     if (wanted_.size() <= settings_.max_pending) {
         return true;
     }
-    // The queue is bounded: evict the farthest tile rather than refuse the
+    // The queue is bounded: evict the farthest unit rather than refuse the
     // newest one, so stale work can never lock a walking player out of the
     // queue. The position breaks a distance tie, which keeps the choice
     // deterministic.
@@ -290,8 +346,10 @@ auto chunk_generation::request(refrain::world::chunk_pos pos) -> bool {
     for (const auto &entry : wanted_) {
         queued.push_back({.x = entry.first, .z = entry.second});
     }
-    const auto victim{farthest_tile(queued, centres_, lookahead_centres_,
-                                    settings_.tile_size)};
+    const auto victim{
+        pipeline ? farthest_wanted_column(queued, centres_, lookahead_centres_)
+                 : farthest_tile(queued, centres_, lookahead_centres_,
+                                 settings_.tile_size)};
     const bool admitted{key_of(victim) != key};
     wanted_.erase(key_of(victim));
     return admitted;
@@ -299,6 +357,10 @@ auto chunk_generation::request(refrain::world::chunk_pos pos) -> bool {
 
 void chunk_generation::forget(refrain::world::chunk_pos pos) {
     const std::lock_guard lock{mutex_};
+    if (settings_.experimental_chunk_pipeline) {
+        wanted_.erase(key_of(pos));
+        return;
+    }
     wanted_.erase(key_of(tile_of(pos, settings_.tile_size)));
 }
 
@@ -380,6 +442,41 @@ auto rank_columns_by_distance(
     return ordered;
 }
 
+auto rank_columns_by_distance(
+    std::span<const refrain::world::chunk_pos> wanted,
+    std::span<const refrain::world::chunk_pos> accepted,
+    std::span<const refrain::world::chunk_pos> lookahead)
+    -> std::vector<refrain::world::chunk_pos> {
+    struct ranked {
+        std::int64_t distance{0};
+        std::int64_t ahead{0};
+        std::int32_t x{0};
+        std::int32_t z{0};
+    };
+    std::vector<ranked> entries{};
+    entries.reserve(wanted.size());
+    for (const auto &pos : wanted) {
+        entries.push_back(ranked{
+            .distance = centre_distance(accepted, pos),
+            .ahead = centre_distance(lookahead, pos),
+            .x = pos.x,
+            .z = pos.z,
+        });
+    }
+    std::sort(entries.begin(), entries.end(),
+              [](const ranked &left, const ranked &right) {
+                  return std::tie(left.distance, left.ahead, left.x, left.z) <
+                         std::tie(right.distance, right.ahead, right.x,
+                                  right.z);
+              });
+    std::vector<refrain::world::chunk_pos> ordered{};
+    ordered.reserve(entries.size());
+    for (const auto &entry : entries) {
+        ordered.push_back({.x = entry.x, .z = entry.z});
+    }
+    return ordered;
+}
+
 auto farthest_column(std::span<const refrain::world::chunk_pos> wanted,
                      std::span<const refrain::world::chunk_pos> centres)
     -> refrain::world::chunk_pos {
@@ -430,6 +527,33 @@ auto chunk_generation::dispatch(std::uint64_t tick_elapsed_ns) -> std::size_t {
     candidates.reserve(wanted_.size());
     for (const auto &key : wanted_) {
         candidates.push_back({.x = key.first, .z = key.second});
+    }
+    if (settings_.experimental_chunk_pipeline) {
+        if (scheduler_ == nullptr) {
+            return 0;
+        }
+        const auto ordered{
+            rank_columns_by_distance(candidates, centres_, lookahead_centres_)};
+        std::size_t admitted{0};
+        for (const auto &pos : ordered) {
+            if (admitted >= available) {
+                break;
+            }
+            const auto key{key_of(pos)};
+            wanted_.erase(key);
+            if (!scheduler_->demand(
+                    worldgen::chunk_pos{.x = pos.x, .z = pos.z})) {
+                wanted_.insert(key);
+                continue;
+            }
+            active_.insert(key);
+            ++in_flight_;
+            ++admitted;
+        }
+        if (admitted > 0) {
+            wake_.notify_all();
+        }
+        return admitted;
     }
     const auto ordered{rank_tiles_by_distance(
         candidates, centres_, lookahead_centres_, settings_.tile_size)};
@@ -556,13 +680,20 @@ void chunk_generation::stop() {
         }
     }
     workers_.clear();
+    if (scheduler_ != nullptr) {
+        scheduler_->clear();
+    }
 }
 
-void chunk_generation::run() {
+void chunk_generation::run(std::size_t worker) {
     static_cast<void>(refrain::platform::set_current_thread_name("chunk-gen"));
     if (!settings_.worker_cpus.empty()) {
         static_cast<void>(refrain::platform::set_current_thread_affinity(
             settings_.worker_cpus));
+    }
+    if (scheduler_ != nullptr) {
+        run_pipeline(worker);
+        return;
     }
     // The generator is created on the worker's first task, not at startup:
     // a quiet server pays for the generator instances it actually uses, and
@@ -661,6 +792,84 @@ void chunk_generation::run() {
             finished_.push_back(std::move(result));
         }
     }
+}
+
+void chunk_generation::run_pipeline(std::size_t worker) {
+    for (;;) {
+        std::optional<worldgen::pipeline_job> job{};
+        {
+            std::unique_lock lock{mutex_};
+            wake_.wait(lock, [this, worker] {
+                return stopping_ ||
+                       (scheduler_ != nullptr && scheduler_->has_job(worker));
+            });
+            if (stopping_) {
+                return;
+            }
+            job = scheduler_->next_job(worker);
+        }
+        if (!job.has_value()) {
+            continue;
+        }
+        auto generated{scheduler_->run(*job)};
+        if (!generated) {
+            const auto message{generated.error().message};
+            scheduler_->complete(*job, &message);
+            log_generation.debug(
+                "failed to generate chunk ({}, {}) at the {} step: {}",
+                job->position.x, job->position.z,
+                worldgen::pipeline_step_name(job->step), message);
+            fail_task(refrain::world::chunk_pos{.x = job->position.x,
+                                                .z = job->position.z},
+                      message);
+            continue;
+        }
+        if (job->step != worldgen::pipeline_step::served) {
+            scheduler_->complete(*job, nullptr);
+            continue;
+        }
+        auto column{refrain::world::from_proto_chunk(
+            **generated, scheduler_->biome_names())};
+        if (!column) {
+            const auto message{fmt::format(
+                "column ({}, {}) conversion failed: {}", job->position.x,
+                job->position.z, column.error().message)};
+            scheduler_->complete(*job, &message);
+            log_generation.debug("failed to convert chunk ({}, {}): {}",
+                                 job->position.x, job->position.z,
+                                 column.error().message);
+            fail_task(refrain::world::chunk_pos{.x = job->position.x,
+                                                .z = job->position.z},
+                      message);
+            continue;
+        }
+        scheduler_->complete(*job, nullptr);
+        tile_result result{.origin =
+                               refrain::world::chunk_pos{.x = job->position.x,
+                                                         .z = job->position.z},
+                           .columns = {}};
+        result.columns.emplace_back(
+            refrain::world::chunk_pos{.x = job->position.x,
+                                      .z = job->position.z},
+            std::move(*column));
+        {
+            const std::lock_guard lock{mutex_};
+            if (stopping_) {
+                return;
+            }
+            finished_.push_back(std::move(result));
+        }
+    }
+}
+
+auto chunk_generation::cache_entries() const -> std::size_t {
+    const std::lock_guard lock{mutex_};
+    return scheduler_ != nullptr ? scheduler_->stats().cache_entries : 0;
+}
+
+auto chunk_generation::cache_evictions() const -> std::uint64_t {
+    const std::lock_guard lock{mutex_};
+    return scheduler_ != nullptr ? scheduler_->stats().cache_evictions : 0;
 }
 
 } // namespace refrain::server

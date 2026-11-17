@@ -2,10 +2,11 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 //
-// Full-chunk runtime benchmark: the production `chunk_generator` over a
-// rectangle of chunks, for the terrain and full targets and a fixed worker
-// count. Reports load time, throughput, per-chunk latency and peak resident
-// memory so a change can be compared against a recorded run.
+// Full-chunk runtime benchmark: `chunk_generator` over a rectangle of chunks,
+// for the terrain and full targets and a fixed worker count, plus the per-chunk
+// status scheduler the runtime uses. Reports load time, first-chunk and
+// full-rectangle latency, throughput and peak resident memory so a change can
+// be compared against a recorded run.
 //
 // The benchmark is data-driven: it needs the extracted datapack root in
 // `REFRAIN_VANILLA_WORLDGEN` and, for template-backed structures, the template
@@ -17,6 +18,8 @@
 //   REFRAIN_VANILLA_WORLDGEN=/data REFRAIN_VANILLA_STRUCTURES=/templates
 //   ./build/Release/bin/refrain-bench-runtime --targets terrain,full
 //       --chunks 16,32,64 --workers 1,2,4,8 --repeat 3
+//   ./build/Release/bin/refrain-bench-runtime --scheduler --chunks 16
+//       --workers 1,8 --repeat 5
 
 #include <refrain/worldgen/biome/climate.hpp>
 #include <refrain/worldgen/chunk_generator.hpp>
@@ -33,6 +36,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <map>
+#include <mutex>
 #include <optional>
 #include <ostream>
 #include <span>
@@ -71,6 +76,10 @@ struct options {
     /// Generate through the per-chunk status pipeline, which keeps a proto
     /// chunk cache between requests, instead of the single-chunk path.
     bool pipeline{false};
+    /// Drive the experimental per-chunk status scheduler: per-chunk terrain,
+    /// decorated and served jobs on a worker pool. The production runtime's
+    /// default is the tile path.
+    bool scheduler{false};
     /// Edge in chunks of one generated tile.
     jint tile_size{8};
 };
@@ -658,6 +667,182 @@ auto run_chunk_hash(const options &config, generation_target target,
     return true;
 }
 
+/// Runs one scheduler batch: every chunk of the rectangle is demanded in
+/// x-major order and the status jobs run on `workers` worker threads. Reports
+/// the first served chunk and the full rectangle latency, which is the join
+/// latency the per-chunk scheduler exists for. `hash` switches the run to the
+/// digest protocol instead of the timing one.
+auto run_scheduler_case(const options &config, jint chunks, std::size_t workers,
+                        bool hash, std::ostream *stream) -> bool {
+    const auto [width, depth] = rectangle_for(chunks);
+    const std::size_t worker_count = std::clamp<std::size_t>(workers, 1, 8);
+    auto created = chunk_scheduler::create(chunk_scheduler::config{
+        .generator =
+            chunk_generator_config{
+                .data_root = config.data_root,
+                .templates_root = config.templates_root,
+                .seed = config.seed,
+                .kind = config.kind,
+                .fixed_biome = config.biome,
+                .target = generation_target::full,
+                .structure_sets = {},
+                .reference_world = false,
+                .tile_size = config.tile_size,
+            },
+        .workers = worker_count,
+    });
+    if (!created) {
+        fmt::print(stderr,
+                   "bench-chunk-generator: scheduler create failed: "
+                   "{}\n",
+                   created.error().message);
+        return false;
+    }
+    auto scheduler = std::move(*created);
+    const auto positions =
+        make_positions(config.origin_x, config.origin_z, width, depth);
+    for (const auto &position : positions) {
+        scheduler->demand(position);
+    }
+    const auto begin = clock_type::now();
+    std::mutex result_mutex;
+    std::vector<double> completion_ms;
+    completion_ms.reserve(positions.size());
+    std::map<std::pair<jint, jint>, std::uint64_t> digests;
+    std::atomic<std::size_t> served{0};
+    std::atomic<bool> finished{false};
+    std::vector<std::jthread> threads;
+    threads.reserve(worker_count);
+    for (std::size_t worker = 0; worker < worker_count; ++worker) {
+        threads.emplace_back([&, worker] {
+            while (!finished.load(std::memory_order_acquire)) {
+                auto job{scheduler->next_job(worker)};
+                if (!job.has_value()) {
+                    std::this_thread::yield();
+                    continue;
+                }
+                auto generated{scheduler->run(*job)};
+                if (!generated) {
+                    const auto message{generated.error().message};
+                    scheduler->complete(*job, &message);
+                    continue;
+                }
+                scheduler->complete(*job, nullptr);
+                if (job->step != pipeline_step::served) {
+                    continue;
+                }
+                const auto elapsed{
+                    static_cast<double>(
+                        std::chrono::duration_cast<std::chrono::microseconds>(
+                            clock_type::now() - begin)
+                            .count()) /
+                    1000.0};
+                const auto digest{chunk_digest(**generated)};
+                {
+                    const std::lock_guard lock{result_mutex};
+                    completion_ms.push_back(elapsed);
+                    if (hash) {
+                        digests[{job->position.x, job->position.z}] = digest;
+                    }
+                }
+                if (served.fetch_add(1, std::memory_order_acq_rel) + 1 ==
+                    positions.size()) {
+                    finished.store(true, std::memory_order_release);
+                }
+            }
+        });
+    }
+    while (!finished.load(std::memory_order_acquire)) {
+        std::this_thread::sleep_for(std::chrono::milliseconds{1});
+    }
+    threads.clear();
+    if (completion_ms.size() != positions.size()) {
+        fmt::print(stderr,
+                   "bench-chunk-generator: scheduler served {} of {} "
+                   "chunk(s)\n",
+                   completion_ms.size(), positions.size());
+        return false;
+    }
+    if (hash) {
+        auto total = std::uint64_t{0xcbf29ce484222325ULL};
+        for (const auto &[position, digest] : digests) {
+            total = hash_integer(total, digest);
+            const auto line = fmt::format(
+                "CHUNK_HASH target=full seed={} pos={},{} digest={:016x}",
+                config.seed, position.first, position.second, digest);
+            fmt::print("{}\n", line);
+            if (stream != nullptr) {
+                *stream << line << '\n';
+            }
+        }
+        const auto line = fmt::format(
+            "CHUNK_HASH_TOTAL target=full seed={} chunks={} workers={} "
+            "scheduler=true digest={:016x}",
+            config.seed, positions.size(), worker_count, total);
+        fmt::print("{}\n", line);
+        if (stream != nullptr) {
+            *stream << line << '\n';
+        }
+        return true;
+    }
+    std::sort(completion_ms.begin(), completion_ms.end());
+    const auto percentile = [&completion_ms](double fraction) {
+        const auto index = static_cast<std::size_t>(
+            static_cast<double>(completion_ms.size() - 1) * fraction);
+        return completion_ms[index];
+    };
+    const auto line = fmt::format(
+        "RESULT scheduler=true target=full chunks={} tile=1 workers={} "
+        "first_chunk_ms={:.1f} full_ms={:.1f} chunks_per_s={:.3f} "
+        "p50_ms_per_chunk={:.1f} p95_ms_per_chunk={:.1f} rss_mib={:.1f} "
+        "peak_rss_mib={:.1f}",
+        positions.size(), worker_count, completion_ms.front(),
+        completion_ms.back(),
+        static_cast<double>(positions.size()) * 1000.0 / completion_ms.back(),
+        percentile(0.50), percentile(0.95),
+        static_cast<double>(read_rss_kib()) / 1024.0,
+        static_cast<double>(read_peak_rss_kib()) / 1024.0);
+    fmt::print("{}\n", line);
+    if (stream != nullptr) {
+        *stream << line << '\n';
+    }
+    return true;
+}
+
+/// Runs the scheduler timing scenario for every requested worker count and
+/// chunk count, repeating each measurement on a fresh scheduler.
+auto run_scheduler_scenarios(const options &config, std::ostream *stream)
+    -> bool {
+    for (const auto chunks : config.chunk_counts) {
+        if (chunks <= 0) {
+            continue;
+        }
+        for (const auto workers : config.worker_counts) {
+            bool failed{false};
+            for (jint repeat = 0; repeat < config.repeat; ++repeat) {
+                if (!run_scheduler_case(config, chunks, workers, false,
+                                        stream)) {
+                    failed = true;
+                    break;
+                }
+            }
+            if (failed) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+auto run_scheduler_hash(const options &config, std::ostream *stream) -> bool {
+    const auto chunks = config.chunk_counts.front();
+    if (chunks <= 0) {
+        return false;
+    }
+    return run_scheduler_case(config, chunks, config.worker_counts.front(),
+                              true, stream);
+}
+
 #if defined(REFRAIN_CLIMATE_TIE_STATS)
 auto format_target(const std::array<climate::coord, 7> &target) -> std::string {
     return fmt::format("{};{};{};{};{};{};{}", target[0], target[1], target[2],
@@ -887,9 +1072,11 @@ auto parse_options(int argc, char **argv) -> std::optional<options> {
                 "instead "
                 "of timing it\n"
                 "  --tiles                  generate whole tiles instead of "
-                "one chunk at a time\n"
+                "one chunk at a time (reference path)\n"
                 "  --tile-size <n>          tile edge in chunks (default 8; "
                 "implies --tiles)\n"
+                "  --scheduler              drive the experimental per-chunk "
+                "status scheduler (not the production path)\n"
                 "  --stages                 print the wall-clock time of each "
                 "generation stage per batch\n"
                 "  --climate-ties           count equidistant climate-search "
@@ -1004,6 +1191,8 @@ auto parse_options(int argc, char **argv) -> std::optional<options> {
             }
             config.tile_size = static_cast<jint>(parsed);
             config.tiled = true;
+        } else if (argument == "--scheduler") {
+            config.scheduler = true;
         } else if (argument == "--stages") {
             config.stages = true;
         } else if (argument == "--climate-ties") {
@@ -1059,6 +1248,27 @@ auto main(int argc, char **argv) -> int {
 
     if (config.climate_ties) {
         return run_climate_ties(config, stream) ? 0 : 1;
+    }
+
+    if (config.scheduler) {
+        // The scheduler always generates the full status; a terrain target
+        // has no per-chunk pipeline and is not a scheduler scenario.
+        if (config.chunk_hash) {
+            if (!run_scheduler_hash(config, stream)) {
+                return 1;
+            }
+        } else if (config.stages) {
+            fmt::print(stderr,
+                       "bench-chunk-generator: --stages is not available for "
+                       "the scheduler scenario\n");
+            return 1;
+        } else if (!run_scheduler_scenarios(config, stream)) {
+            return 1;
+        }
+        const auto rss = read_peak_rss_kib();
+        fmt::print("SUMMARY peak_rss_mib={:.1f}\n",
+                   static_cast<double>(rss) / 1024.0);
+        return 0;
     }
 
     if (config.chunk_hash) {

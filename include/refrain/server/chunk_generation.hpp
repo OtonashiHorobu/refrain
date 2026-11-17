@@ -24,6 +24,10 @@
 #include <utility>
 #include <vector>
 
+namespace refrain::worldgen {
+class chunk_scheduler;
+}
+
 namespace refrain::server {
 
 /// The three inputs the generation credit controller reads once per second.
@@ -62,6 +66,16 @@ struct admission_change {
 [[nodiscard]] auto
 rank_columns_by_distance(std::span<const refrain::world::chunk_pos> wanted,
                          std::span<const refrain::world::chunk_pos> centres)
+    -> std::vector<refrain::world::chunk_pos>;
+
+/// Same, with the look-ahead centres as the secondary priority: the accepted
+/// viewport ranks lexicographically before the prediction, so a look-ahead
+/// column can never starve a column the client is standing in. Used by the
+/// experimental per-chunk queue, which ranks columns rather than tiles.
+[[nodiscard]] auto
+rank_columns_by_distance(std::span<const refrain::world::chunk_pos> wanted,
+                         std::span<const refrain::world::chunk_pos> accepted,
+                         std::span<const refrain::world::chunk_pos> lookahead)
     -> std::vector<refrain::world::chunk_pos>;
 
 /// The column a full queue evicts: the farthest from the centres, greatest
@@ -136,11 +150,13 @@ class admission_controller {
     std::uint32_t good_samples_{0};
 };
 
-/// One generation task that did not produce its tile.
+/// One generation task that did not produce its columns.
 ///
-/// The tile is the admission and accounting unit, so a failure covers every
-/// column of the tile: the task produced no columns at all. The message says
-/// why the task failed and is meant for the operator log.
+/// The task is the admission and accounting unit: a tile on the production
+/// path and one column on the experimental per-chunk path. `tile_size()`
+/// returns the edge the failed task covers, which is one on the per-chunk
+/// path. The message says why the task failed and is meant for the operator
+/// log.
 struct generation_failure {
     refrain::world::chunk_pos tile{};
     std::string message{};
@@ -156,6 +172,14 @@ struct generation_failure {
 /// credits, tick headroom and the client backlog allow. The workers never
 /// touch the world, so the only shared state is the wanted set, the work
 /// queue, the counters and the result queue under one mutex.
+///
+/// The production path generates aligned tiles: a worker produces a whole
+/// `tile_size` square and the columns of one tile are adopted together. The
+/// experimental `experimental_chunk_pipeline` flag replaces the tile jobs with
+/// the per-chunk status scheduler, which serves a column as soon as its own
+/// three-by-three is decorated, at the cost of content that depends on how
+/// many workers share the sequence. The flag is off by default and the server
+/// composition never sets it.
 class chunk_generation {
   public:
     struct config {
@@ -193,6 +217,21 @@ class chunk_generation {
         /// of the served square rather than of the tile, not only a latency
         /// measurement.
         std::int32_t tile_size{8};
+        /// EXPERIMENTAL: serve columns through the per-chunk status scheduler
+        /// instead of the production tile path. Off by default and not wired
+        /// to any server option, so a production server never enables it.
+        ///
+        /// The scheduler keeps one proto chunk cache per worker. The chunks a
+        /// worker already served decide how much of a neighbourhood is
+        /// decorated when it serves the next one, so served content can depend
+        /// on the worker count: this path is not worker-count independent yet
+        /// and is not a production replacement. It exists so the status-job
+        /// pipeline, the first-chunk latency and the remaining determinism gap
+        /// can be measured before a shared proto cache lands.
+        bool experimental_chunk_pipeline{false};
+        /// Proto chunks each worker's generator keeps when
+        /// `experimental_chunk_pipeline` is on. Ignored by the tile path.
+        std::size_t proto_cache_capacity{256};
         /// Logical CPUs the generation workers pin to; empty leaves the OS
         /// default. Pinning away from the simulation and IO cores is a hint,
         /// never a requirement.
@@ -214,12 +253,14 @@ class chunk_generation {
                                                    std::uint32_t io_threads)
         -> std::size_t;
 
-    /// Queue the tile that contains one column. Returns false when the tile is
-    /// already wanted or in flight, the queue is full, or generation is
-    /// stopping; the column is still served when its tile completes.
+    /// Queue one column: through its tile on the production path, or as its
+    /// own scheduler chain on the experimental path. Returns false when the
+    /// unit is already wanted or in flight, the queue is full, or generation
+    /// is stopping; the column is still served when its unit completes.
     auto request(refrain::world::chunk_pos pos) -> bool;
 
-    /// Drop the tile that contains one column (the caller no longer needs it).
+    /// Drop the wanted unit that contains one column (the caller no longer
+    /// needs it).
     void forget(refrain::world::chunk_pos pos);
 
     /// Centres the dispatch ranks wanted tiles by, nearest first. The
@@ -241,10 +282,10 @@ class chunk_generation {
     /// per change and nothing otherwise.
     void update_admission(const admission_sample &sample);
 
-    /// Admit wanted tiles to the workers while credits and tick-budget
+    /// Admit wanted work to the workers while credits and tick-budget
     /// headroom allow, nearest first. `tick_elapsed_ns` is the work the
     /// current tick already did: once it passes the headroom the tick stops
-    /// admitting. Returns the number of tiles admitted.
+    /// admitting. Returns the number of tiles or columns admitted.
     auto dispatch(std::uint64_t tick_elapsed_ns) -> std::size_t;
 
     /// Take every column of every finished tile, ordered by position so the
@@ -266,10 +307,10 @@ class chunk_generation {
     [[nodiscard]] auto take_results(std::size_t max_columns) -> std::vector<
         std::pair<refrain::world::chunk_pos, refrain::world::chunk>>;
 
-    /// Take every tile whose task failed since the last call, ordered by the
-    /// tile position. A failure produces no columns; the caller forgets the
-    /// tile's columns so the streamer can request the position again instead of
-    /// waiting for an answer that will never arrive.
+    /// Take every task that failed since the last call, ordered by its minimum
+    /// corner. A failure produces no columns; the caller forgets the columns
+    /// the task covers so the streamer can request the position again instead
+    /// of waiting for an answer that will never arrive.
     [[nodiscard]] auto take_failures() -> std::vector<generation_failure>;
 
     /// Columns of finished tiles the service may have queued for adoption
@@ -280,11 +321,25 @@ class chunk_generation {
     /// released, so generation pauses instead of growing the queue.
     static constexpr std::size_t max_ready_columns{8 * 64};
 
-    /// Edge in chunks of the square one task produces. Failures name the
+    /// Edge in chunks of the square one task covers. Failures name the
     /// minimum corner of such a square, so a caller expands it by this edge.
+    /// The experimental per-chunk path reports an edge of one because every
+    /// task serves one column.
     [[nodiscard]] auto tile_size() const noexcept -> std::int32_t {
-        return settings_.tile_size;
+        return settings_.experimental_chunk_pipeline ? 1 : settings_.tile_size;
     }
+
+    /// Whether the experimental per-chunk scheduler is driving generation.
+    [[nodiscard]] auto uses_chunk_pipeline() const noexcept -> bool {
+        return settings_.experimental_chunk_pipeline;
+    }
+
+    /// Cached proto chunks across the scheduler workers; zero on the tile
+    /// path because that path has no proto chunk cache.
+    [[nodiscard]] auto cache_entries() const -> std::size_t;
+
+    /// Scheduler proto cache evictions; zero on the tile path.
+    [[nodiscard]] auto cache_evictions() const -> std::uint64_t;
 
     [[nodiscard]] auto credits() const -> std::size_t;
     [[nodiscard]] auto queue_depth() const -> std::size_t;
@@ -297,10 +352,16 @@ class chunk_generation {
   private:
     explicit chunk_generation(config settings);
 
-    void run();
+    /// One worker's run loop. The index selects the scheduler worker queue on
+    /// the experimental path and is unused by the tile path.
+    void run(std::size_t worker);
+
+    /// The experimental per-chunk scheduler loop: wait for a status job of
+    /// this worker, run it, convert a served column and report the outcome.
+    void run_pipeline(std::size_t worker);
 
     /// Clear the in-flight markers of `origin` and report the failure so the
-    /// caller can ask for the tile again. Runs on a worker thread.
+    /// caller can ask for the unit again. Runs on a worker thread.
     void fail_task(refrain::world::chunk_pos origin, std::string message);
 
     config settings_{};
@@ -329,6 +390,8 @@ class chunk_generation {
         ready_{};
     /// Tiles whose task failed since the last `take_failures()`.
     std::vector<generation_failure> failed_{};
+    /// Experimental per-chunk status scheduler; null on the production path.
+    std::unique_ptr<worldgen::chunk_scheduler> scheduler_{};
     std::size_t in_flight_{0};
     admission_controller admission_{};
     bool stopping_{false};

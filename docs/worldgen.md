@@ -368,8 +368,8 @@ the eight neighbours whose feature writes cross into it, and one further terrain
 ring, then returns a copy of the requested chunk at the configured target
 status. `generate_chunk_area` serves a rectangle in ascending x then z order.
 Both entry points are additive: `generate`, `generate_tile` and
-`generate_area_tiled` keep their own path, and the runtime does not use the
-pipeline.
+`generate_area_tiled` keep their own path. The production runtime uses the tile
+path; the per-chunk jobs reach it only through the opt-in scheduler below.
 
 The cache holds the chunks one worker touched, keyed by chunk position, and
 records two stages. A chunk at `terrain` has its biomes, fill, surface, carvers
@@ -410,21 +410,49 @@ and differ only in the status field, because the pipeline always produces the
 complete chunk; a `terrain` target uses the single-chunk path, which has no
 neighbour writes to settle.
 
-The batch entry point proves content equality, not scheduling. Every worker
-replays the same per-chunk requests up to its own slice on its own cache, so the
-served chunks equal the serial sequence for any worker count. The tile batch
-keeps serving production; the replay exists because no scheduler orders the
-status work by priority.
+`worldgen::chunk_scheduler` turns the pipeline into a status-job scheduler. It
+owns one `chunk_generator` per worker and queues three jobs per demanded chunk:
+`terrain` fills the dependency ring, `decorated` places the structure pieces and
+runs the feature step of the three-by-three, and `served` copies the chunk out.
+The jobs of one chunk stay on one worker, in that order, so a chunk is served as
+soon as its own dependencies are decorated instead of after a rectangle. The
+worker of a chunk is fixed when the chunk is demanded (round-robin in demand
+order), and nothing in the scheduler reads which worker finished a job first;
+the runtime adopts finished columns in ascending position order. The worker
+keeps its proto cache between jobs, so the terrain and neighbour writes around a
+served chunk are shared by later requests.
 
-The path has two observable limits. A cache that is reused across requests
-accumulates the decorations of every chunk processed before the request, so a
-chunk served as part of a large sequential area can differ from the same chunk
-served alone, where only its fixed three-by-three ring decorates. The content is
-therefore a function of the request sequence, and the scheduler that fixes that
-sequence comes with the per-chunk ticket rings. The configured tile edge no
-longer selects content on this path: `generate_chunk` and
-`generate_chunk_area` ignore `tile_size`, and the same request produces the same
-digest for tile edges two, four and eight.
+The production runtime keeps the tile path. `chunk_generation` can drive the
+status jobs instead when its `experimental_chunk_pipeline` config flag is set.
+The flag is off by default and the server composition never sets it, so the
+scheduler cannot become the default silently. The experimental path is measured
+by `refrain-bench-runtime --scheduler`, which reports first-chunk and
+full-rectangle latency and can hash the served set.
+
+The scheduler keeps one block-state table and one proto cache per worker,
+because a generator is not thread-safe and a chunk's state ids belong to its
+generator's table. The chunks a worker served earlier decide how much of a
+neighbourhood is already decorated when it serves the next one, so the served
+content is deterministic for a fixed worker count and demand sequence but not
+yet across worker counts: one and eight workers can decorate crossing feature
+writes in a different order. Production therefore stays on the tile path, whose
+tiles share no state and whose content is identical at one and eight workers. A
+proto cache over a block-state table shared by every worker is needed before the
+scheduler can replace the tile path.
+
+The batch entry point is a third, oracle-only form: every worker replays the
+same per-chunk requests up to its own slice on its own cache, so the served
+chunks equal the serial sequence for any worker count. The tile batch keeps
+serving production; the replay exists because the scheduler's parallel path is
+not worker-count independent yet.
+
+The configured tile edge does not select content on the per-chunk path:
+`generate_chunk`, `generate_chunk_area` and the scheduler ignore `tile_size`,
+and the same request produces the same digest for tile edges two, four and
+eight. The production tile path does use its edge for staging, and its content
+only equals the single-chunk reference when a fixed biome makes the ring order
+irrelevant; the natural-biome edge difference is pinned by a regression test as
+a known property of that staging.
 
 ## Density sampling
 

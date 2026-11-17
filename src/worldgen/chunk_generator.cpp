@@ -1881,6 +1881,7 @@ void chunk_generator::clear_proto_cache() noexcept {
     proto_cache_.clear();
     start_cache_.clear();
     start_cache_order_.clear();
+    pipeline_window_cache_.reset();
 }
 
 auto chunk_generator::cached_start_at(const chunk_pos &pos)
@@ -1929,6 +1930,24 @@ auto chunk_generator::start_window(const chunk_rectangle &box)
         }
     }
     return window;
+}
+
+auto chunk_generator::pipeline_window(const chunk_pos &pos)
+    -> result<const cached_start_window *> {
+    if (pipeline_window_cache_.has_value() &&
+        pipeline_window_cache_->first == pos) {
+        return &pipeline_window_cache_->second;
+    }
+    const chunk_rectangle decorated =
+        square_box(pos, pipeline_decoration_radius);
+    const chunk_rectangle start_box =
+        expand(decorated, pipeline_structure_radius);
+    auto window = start_window(start_box);
+    if (!window) {
+        return std::unexpected{window.error()};
+    }
+    pipeline_window_cache_.emplace(pos, std::move(*window));
+    return &pipeline_window_cache_->second;
 }
 
 auto chunk_generator::attach_cached(chunk_region &region,
@@ -2222,28 +2241,42 @@ auto chunk_generator::serve_cached(
     return served;
 }
 
-auto chunk_generator::generate_chunk(const chunk_pos &pos)
-    -> result<std::unique_ptr<proto_chunk>> {
+auto chunk_generator::advance_terrain(const chunk_pos &pos) -> result<void> {
     if (config_.target == generation_target::terrain) {
-        // A terrain target has no neighbour writes to settle, so the single
-        // chunk path already produces exactly the requested chunk.
-        return generate_impl(pos);
+        // A terrain target has no neighbour writes to settle, so the
+        // single-chunk path already produces exactly the requested chunk.
+        return std::unexpected{
+            fail(error_code::invalid_argument,
+                 "a terrain target has no per-chunk scheduler steps")};
     }
-    const chunk_rectangle decorated =
-        square_box(pos, pipeline_decoration_radius);
-    const chunk_rectangle terrain = square_box(pos, pipeline_terrain_radius);
-    const chunk_rectangle start_box =
-        expand(decorated, pipeline_structure_radius);
-    auto window = start_window(start_box);
+    auto window = pipeline_window(pos);
     if (!window) {
         return std::unexpected{window.error()};
     }
+    const chunk_rectangle terrain = square_box(pos, pipeline_terrain_radius);
+    return ensure_terrain(terrain, (*window)->starts);
+}
+
+auto chunk_generator::advance_decorated(const chunk_pos &pos) -> result<void> {
+    if (config_.target == generation_target::terrain) {
+        return std::unexpected{
+            fail(error_code::invalid_argument,
+                 "a terrain target has no per-chunk scheduler steps")};
+    }
+    auto window = pipeline_window(pos);
+    if (!window) {
+        return std::unexpected{window.error()};
+    }
+    const chunk_rectangle terrain = square_box(pos, pipeline_terrain_radius);
     const auto positions = square_positions(pos, pipeline_decoration_radius);
-    if (auto ensured = ensure_terrain(terrain, window->starts); !ensured) {
+    // The decorated step may run without the terrain step having run first: it
+    // fills the dependency ring itself, which is a cache lookup for the chunks
+    // the terrain step already produced.
+    if (auto ensured = ensure_terrain(terrain, (*window)->starts); !ensured) {
         return std::unexpected{ensured.error()};
     }
     if (auto placed =
-            ensure_structure_pieces(positions, terrain, window->starts);
+            ensure_structure_pieces(positions, terrain, (*window)->starts);
         !placed) {
         return std::unexpected{placed.error()};
     }
@@ -2261,11 +2294,37 @@ auto chunk_generator::generate_chunk(const chunk_pos &pos)
                                         dimension_->states());
         entry->shapes = true;
     }
-    if (auto decorated_ok = ensure_decorated(positions, terrain);
-        !decorated_ok) {
-        return std::unexpected{decorated_ok.error()};
+    return ensure_decorated(positions, terrain);
+}
+
+auto chunk_generator::take_served(const chunk_pos &pos)
+    -> result<std::unique_ptr<proto_chunk>> {
+    if (config_.target == generation_target::terrain) {
+        return std::unexpected{
+            fail(error_code::invalid_argument,
+                 "a terrain target has no per-chunk scheduler steps")};
     }
-    return serve_cached(pos, window->starts);
+    auto window = pipeline_window(pos);
+    if (!window) {
+        return std::unexpected{window.error()};
+    }
+    return serve_cached(pos, (*window)->starts);
+}
+
+auto chunk_generator::generate_chunk(const chunk_pos &pos)
+    -> result<std::unique_ptr<proto_chunk>> {
+    if (config_.target == generation_target::terrain) {
+        // A terrain target has no neighbour writes to settle, so the single
+        // chunk path already produces exactly the requested chunk.
+        return generate_impl(pos);
+    }
+    if (auto advanced = advance_terrain(pos); !advanced) {
+        return std::unexpected{advanced.error()};
+    }
+    if (auto decorated = advance_decorated(pos); !decorated) {
+        return std::unexpected{decorated.error()};
+    }
+    return take_served(pos);
 }
 
 auto chunk_generator::generate_chunk_area(chunk_pos origin, jint width,
@@ -2356,6 +2415,296 @@ auto chunk_generator::generate_chunk_area(chunk_pos origin, jint width,
         }
     }
     return chunks;
+}
+
+// ---------------------------------------------------------------------------
+// Per-chunk status scheduler
+// ---------------------------------------------------------------------------
+
+auto pipeline_step_name(pipeline_step step) -> std::string_view {
+    switch (step) {
+    case pipeline_step::terrain:
+        return "terrain";
+    case pipeline_step::decorated:
+        return "decorated";
+    case pipeline_step::served:
+        return "served";
+    }
+    return "terrain";
+}
+
+chunk_scheduler::chunk_scheduler(config settings)
+    : settings_{std::move(settings)} {
+    queues_.resize(settings_.workers);
+    workers_.resize(settings_.workers);
+    worker_entries_.resize(settings_.workers);
+    worker_evictions_.resize(settings_.workers);
+}
+
+auto chunk_scheduler::create(config settings)
+    -> result<std::unique_ptr<chunk_scheduler>> {
+    if (settings.generator.data_root.empty()) {
+        return std::unexpected{
+            fail(error_code::invalid_argument,
+                 "the per-chunk scheduler has no content data root")};
+    }
+    if (settings.workers == 0) {
+        settings.workers = 1;
+    }
+    settings.workers = std::clamp<std::size_t>(settings.workers, 1, 64);
+    settings.generator.proto_cache_capacity =
+        std::clamp<jint>(settings.generator.proto_cache_capacity, 25, 4096);
+    return std::unique_ptr<chunk_scheduler>{
+        new chunk_scheduler{std::move(settings)}};
+}
+
+auto chunk_scheduler::worker_generator(std::size_t worker)
+    -> result<chunk_generator *> {
+    if (worker >= workers_.size()) {
+        return std::unexpected{
+            fail(error_code::invalid_argument,
+                 "a scheduler job names a worker that does not exist")};
+    }
+    std::shared_ptr<const chunk_generator::shared_generator_data> shared;
+    {
+        const std::lock_guard lock{create_mutex_};
+        if (workers_[worker] != nullptr) {
+            return workers_[worker].get();
+        }
+        if (generator_error_.has_value()) {
+            return std::unexpected{
+                fail(error_code::unknown, *generator_error_)};
+        }
+        for (const auto &candidate : workers_) {
+            if (candidate != nullptr) {
+                shared = candidate->shared_;
+                break;
+            }
+        }
+        if (shared == nullptr) {
+            // The first generator loads the immutable datapack data and every
+            // later worker generator reuses it, so this creation runs under
+            // the lock: a second worker must not parse the datapack again
+            // while the first load is still publishing it.
+            auto created = chunk_generator::create(settings_.generator);
+            if (!created) {
+                generator_error_ = created.error().message;
+                return std::unexpected{created.error()};
+            }
+            biome_names_ = (*created)->biome_names();
+            workers_[worker] = std::move(*created);
+            return workers_[worker].get();
+        }
+    }
+    // A later worker generator only builds its mutable registries from the
+    // immutable shared data, so it can be created without the lock.
+    auto created =
+        chunk_generator::create_with_shared(settings_.generator, shared);
+    if (!created) {
+        const std::lock_guard lock{create_mutex_};
+        generator_error_ = created.error().message;
+        return std::unexpected{created.error()};
+    }
+    {
+        const std::lock_guard lock{create_mutex_};
+        biome_names_ = (*created)->biome_names();
+        workers_[worker] = std::move(*created);
+    }
+    return workers_[worker].get();
+}
+
+auto chunk_scheduler::demand(const chunk_pos &pos) -> bool {
+    const std::lock_guard lock{mutex_};
+    if (chains_.contains(pos)) {
+        return false;
+    }
+    // A chunk that failed earlier may be demanded again; the new chain is
+    // not a continuation of the failed one.
+    failed_.erase(pos);
+    chains_.emplace(pos, chain_state{});
+    // One chunk's three status jobs share a worker: the generator's block
+    // state table and proto cache are thread-private, so a chunk never moves
+    // between them. Round-robin in demand order is the scheduling decision;
+    // it never depends on which worker finished earlier.
+    const std::size_t worker = next_worker_ % queues_.size();
+    ++next_worker_;
+    auto &queue = queues_[worker];
+    queue.push_back(pipeline_job{
+        .step = pipeline_step::terrain, .position = pos, .worker = worker});
+    queue.push_back(pipeline_job{
+        .step = pipeline_step::decorated, .position = pos, .worker = worker});
+    queue.push_back(pipeline_job{
+        .step = pipeline_step::served, .position = pos, .worker = worker});
+    ++demanded_;
+    return true;
+}
+
+auto chunk_scheduler::has_job(std::size_t worker) const -> bool {
+    const std::lock_guard lock{mutex_};
+    return worker < queues_.size() && !queues_[worker].empty();
+}
+
+auto chunk_scheduler::next_job(std::size_t worker)
+    -> std::optional<pipeline_job> {
+    const std::lock_guard lock{mutex_};
+    if (worker >= queues_.size()) {
+        return std::nullopt;
+    }
+    auto &queue = queues_[worker];
+    while (!queue.empty()) {
+        auto job = queue.front();
+        queue.pop_front();
+        // A chunk that failed at an earlier status does not run its later
+        // statuses: the world never sees a partially generated chunk.
+        if (failed_.contains(job.position)) {
+            continue;
+        }
+        return job;
+    }
+    return std::nullopt;
+}
+
+auto chunk_scheduler::run(const pipeline_job &job)
+    -> result<std::unique_ptr<proto_chunk>> {
+    auto generator = worker_generator(job.worker);
+    if (!generator) {
+        return std::unexpected{generator.error()};
+    }
+    const auto record_cache = [this, &job, generator] {
+        const auto cache = (*generator)->cache_stats();
+        const std::lock_guard lock{mutex_};
+        worker_entries_[job.worker] = cache.entries;
+        worker_evictions_[job.worker] = cache.evictions;
+    };
+    switch (job.step) {
+    case pipeline_step::terrain: {
+        if (auto advanced = (*generator)->advance_terrain(job.position);
+            !advanced) {
+            return std::unexpected{advanced.error()};
+        }
+        record_cache();
+        return std::unique_ptr<proto_chunk>{};
+    }
+    case pipeline_step::decorated: {
+        if (auto advanced = (*generator)->advance_decorated(job.position);
+            !advanced) {
+            return std::unexpected{advanced.error()};
+        }
+        record_cache();
+        return std::unique_ptr<proto_chunk>{};
+    }
+    case pipeline_step::served: {
+        auto served = (*generator)->take_served(job.position);
+        record_cache();
+        return served;
+    }
+    }
+    return std::unexpected{
+        fail(error_code::invalid_argument, "unknown per-chunk pipeline step")};
+}
+
+void chunk_scheduler::complete(const pipeline_job &job,
+                               const std::string *error_message) {
+    const std::lock_guard lock{mutex_};
+    const auto found = chains_.find(job.position);
+    if (found == chains_.end()) {
+        return;
+    }
+    if (error_message != nullptr) {
+        if (failed_.insert(job.position).second) {
+            failures_.push_back(pipeline_failure{.position = job.position,
+                                                 .message = *error_message});
+            ++failed_count_;
+        }
+        // Drop the rest of the failed chunk's queue so a later demand starts
+        // a fresh chain instead of running the skipped statuses of this one.
+        if (job.worker < queues_.size()) {
+            auto &queue = queues_[job.worker];
+            std::erase_if(queue, [&job](const pipeline_job &queued) {
+                return queued.position == job.position;
+            });
+        }
+        chains_.erase(found);
+        return;
+    }
+    if (found->second.remaining > 0) {
+        --found->second.remaining;
+    }
+    if (found->second.remaining == 0) {
+        ++served_;
+        chains_.erase(found);
+    }
+}
+
+auto chunk_scheduler::take_failures() -> std::vector<pipeline_failure> {
+    std::vector<pipeline_failure> failures;
+    {
+        const std::lock_guard lock{mutex_};
+        failures = std::exchange(failures_, {});
+    }
+    // Position order, so a caller's log and retry order never depends on the
+    // order the workers failed in.
+    std::sort(failures.begin(), failures.end(),
+              [](const pipeline_failure &left, const pipeline_failure &right) {
+                  return std::pair{left.position.x, left.position.z} <
+                         std::pair{right.position.x, right.position.z};
+              });
+    return failures;
+}
+
+auto chunk_scheduler::biome_names() const -> const std::vector<std::string> & {
+    const std::lock_guard lock{create_mutex_};
+    return biome_names_;
+}
+
+auto chunk_scheduler::pending() const -> std::size_t {
+    const std::lock_guard lock{mutex_};
+    return chains_.size();
+}
+
+auto chunk_scheduler::stats() const -> chunk_scheduler_stats {
+    chunk_scheduler_stats result;
+    const std::lock_guard lock{mutex_};
+    result.demanded = demanded_;
+    result.served = served_;
+    result.failed = failed_count_;
+    result.pending = chains_.size();
+    for (std::size_t worker = 0; worker < worker_entries_.size(); ++worker) {
+        result.cache_entries += worker_entries_[worker];
+        result.cache_evictions += worker_evictions_[worker];
+    }
+    return result;
+}
+
+void chunk_scheduler::clear() {
+    {
+        const std::lock_guard lock{mutex_};
+        for (auto &queue : queues_) {
+            queue.clear();
+        }
+        chains_.clear();
+        failed_.clear();
+        failures_.clear();
+        next_worker_ = 0;
+        demanded_ = 0;
+        served_ = 0;
+        failed_count_ = 0;
+    }
+    {
+        const std::lock_guard lock{create_mutex_};
+        for (auto &worker : workers_) {
+            if (worker != nullptr) {
+                worker->clear_proto_cache();
+            }
+        }
+    }
+    {
+        const std::lock_guard lock{mutex_};
+        std::fill(worker_entries_.begin(), worker_entries_.end(),
+                  std::size_t{0});
+        std::fill(worker_evictions_.begin(), worker_evictions_.end(),
+                  std::uint64_t{0});
+    }
 }
 
 } // namespace refrain::worldgen
