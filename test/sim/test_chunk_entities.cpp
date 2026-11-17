@@ -147,7 +147,7 @@ suite<"sim/chunk-entities"> chunk_entity_tests = [] {
             // The generated entities join the normal entity table.
             expect(opened->entities().size() == 2U);
             for (const auto &entity : entities) {
-                expect(opened->entity(entity.id) != nullptr);
+                expect(opened->entity(entity.id).has_value());
             }
 
             // A generated entity stays where the structure placed it instead
@@ -170,7 +170,7 @@ suite<"sim/chunk-entities"> chunk_entity_tests = [] {
             expect(static_cast<bool>(opened->unload_chunk(entity_column)));
             expect(opened->entities().empty());
             for (const auto id : old_ids) {
-                expect(opened->entity(id) == nullptr);
+                expect(!opened->entity(id).has_value());
             }
             auto reloaded{opened->ensure_chunk(entity_column)};
             expect(static_cast<bool>(reloaded));

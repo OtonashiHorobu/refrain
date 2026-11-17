@@ -569,6 +569,54 @@ suite<"server/chunk-streamer"> chunk_streamer_tests = [] {
         expect(gateway.batches.size() == 1U);
         expect(gateway.raw.empty());
     };
+
+    "chunk entities are announced in ascending entity id order"_test = [] {
+        entity_type_tables tables{};
+        expect(tables.tables.has_value());
+        if (!tables.tables) {
+            return;
+        }
+        recording_gateway gateway;
+        gateway.active = {13};
+        auto state{std::make_shared<fake_encoder>()};
+        server::chunk_packet_source source{};
+        source.tables = &*tables.tables;
+        server::chunk_streamer streamer{gateway, source};
+        streamer.set_encoder(make_encoder(state));
+        // The simulation hands the column's entities over in ascending logical
+        // id order; the streamer must keep that order on the wire.
+        streamer.set_entity_source(
+            [](sim::chunk_pos pos) -> std::vector<sim::chunk_entity> {
+                if (pos.x != 0 || pos.z != 0) {
+                    return {};
+                }
+                return {
+                    make_chunk_entity(5, "minecraft:shulker", 0.5, 65.0, 0.5,
+                                      0.0F, entity_components(std::nullopt)),
+                    make_chunk_entity(7, "minecraft:item_frame", 1.5, 66.0, 1.5,
+                                      90.0F, entity_components(std::int8_t{3})),
+                    make_chunk_entity(9, "minecraft:shulker", 2.5, 67.0, 2.5,
+                                      180.0F, entity_components(std::nullopt)),
+                };
+            });
+        session::chunk_tracker views;
+        static_cast<void>(views.update(13, 0, 0, 0));
+        streamer.tick(views);
+
+        std::vector<std::int32_t> announced{};
+        for (const auto &body : gateway.raw) {
+            if (raw_packet_id(body.body) !=
+                std::optional<std::uint32_t>{play_cb::add_entity::packet_id}) {
+                continue;
+            }
+            refrain::net::reader in{body.body};
+            expect(in.read_varint().has_value());
+            play_cb::add_entity packet{};
+            expect(static_cast<bool>(play_cb::decode_add_entity(in, packet)));
+            announced.push_back(packet.id);
+        }
+        expect(announced == std::vector<std::int32_t>{5, 7, 9});
+    };
 };
 
 suite<"server/chunk-streamer-prefetch"> chunk_streamer_prefetch_tests = [] {

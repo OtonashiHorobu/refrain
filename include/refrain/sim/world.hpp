@@ -7,6 +7,7 @@
 #include <refrain/contracts/services/sim.hpp>
 #include <refrain/core/error.hpp>
 #include <refrain/core/event.hpp>
+#include <refrain/sim/ecs.hpp>
 
 #include <functional>
 #include <refrain/data/checksum.hpp>
@@ -23,6 +24,7 @@
 #include <cstdint>
 #include <deque>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <shared_mutex>
@@ -104,29 +106,6 @@ class block_registry {
         ids_{};
     std::deque<std::string> keys_{};
     mutable std::shared_mutex mutex_{};
-};
-
-/// Minimal entity: type key plus position/velocity. It is deliberately
-/// not a LivingEntity model; the sim needs a deterministic entity tick and
-/// state hash, not AI/pathfinding.
-struct entity_state {
-    entity_id id{0};
-    std::string type{};
-    double x{0.0};
-    double y{0.0};
-    double z{0.0};
-    double vx{0.0};
-    double vy{0.0};
-    double vz{0.0};
-    /// Body rotation in degrees, as the column record stores it.
-    float yaw{0.0F};
-    float pitch{0.0F};
-    bool on_ground{false};
-    /// True for an entity a loaded column carries. The build has no entity AI
-    /// or living-entity physics, so a generated entity stays where the
-    /// structure placed it instead of falling; it is spawned when its column
-    /// loads and removed when the column unloads.
-    bool pinned{false};
 };
 
 /// One entity a loaded column carries, with the runtime id it was spawned
@@ -242,6 +221,14 @@ struct resident_column {
 /// columns at the same ticks. Callers must iterate resident columns through
 /// `chunk_positions()`, whose order is the position order, and never through a
 /// container whose iteration order is insertion or hash order.
+///
+/// Runtime entities live in an EnTT registry inside the sim and are read
+/// through `entities()`, whose order is the ascending logical entity id.
+/// Logical ids are allocated in spawn order, start at one and are never reused;
+/// they are the only entity identifier that leaves the simulation, while the
+/// registry handle stays private. A spawn appends to the view, a despawn
+/// removes its entry, and adopting or reloading a column rebuilds and sorts the
+/// view from the spawned records.
 ///
 /// One applied block mutation, as observed by a batch hook.
 struct block_change {
@@ -629,7 +616,8 @@ class world {
                                    std::uint32_t amount = 1) -> damage_result;
 
     /// Entities one loaded column carries, in the column's canonical entity
-    /// order with the runtime ids they were spawned under. Empty when the
+    /// order with the runtime ids they were spawned under. The ids ascend,
+    /// because a column load allocates them in record order. Empty when the
     /// column is not loaded or carries none.
     [[nodiscard]] auto chunk_entities(const chunk_pos &pos) const
         -> std::vector<chunk_entity>;
@@ -640,31 +628,39 @@ class world {
     [[nodiscard]] auto spawn_entity(std::string_view type, double x, double y,
                                     double z) -> result<entity_id>;
 
-    /// Remove one entity; false when the id is unknown.
+    /// Remove one entity; false when the id is unknown. A generated entity is
+    /// also taken out of the column record that owns it, so a later unload does
+    /// not spawn it again.
     [[nodiscard]] auto remove_entity(entity_id id) -> bool;
 
-    /// Entity lookup/iteration for console, scripts and the state hash.
-    [[nodiscard]] auto entities() const noexcept
-        -> const std::map<entity_id, entity_state> & {
-        return entities_;
-    }
-    [[nodiscard]] auto entity(entity_id id) noexcept -> entity_state *;
-    [[nodiscard]] auto entity(entity_id id) const noexcept
-        -> const entity_state *;
+    /// The entity store read view: every live runtime entity in ascending
+    /// logical id order. This is the only supported way to read or iterate the
+    /// entity set; the state hash, the save path and the clientbound entity
+    /// stream all see this order. The view borrows this world and is invalid
+    /// once the world is destroyed.
+    [[nodiscard]] auto entities() const noexcept -> entity_view;
 
-    /// Apply one deterministic gravity/floor tick to every entity (called by
-    /// `tick()` before the tick counter advances).
+    /// Projection of one live entity, or nullopt when the id is unknown. The
+    /// value is a snapshot of the component state at the call.
+    [[nodiscard]] auto entity(entity_id id) const
+        -> std::optional<entity_state>;
+
+    /// Apply one deterministic gravity/floor tick to every entity, in
+    /// ascending logical id order (called by `tick()` before the tick counter
+    /// advances).
     void tick_entities() noexcept;
 
     /// Deterministic BLAKE3 over the loaded chunks (sorted by position), every
-    /// section's block ids, every player record in ascending entity id order
-    /// and the tick counter. The player record fields hashed are the entity id,
-    /// position/velocity, rotation, ground flag, game mode, health, hunger,
-    /// saturation, exhaustion, air, experience, death flag, fall distance,
-    /// movement input, flight flag, age and inventory; identity fields
-    /// (connection, profile uuid, name, world) are not simulation state. Replay
-    /// compares this value across runs and thread counts; the canonical byte
-    /// order is part of the test contract, not a saved format.
+    /// section's block ids, every player record in ascending entity id order,
+    /// every runtime entity in ascending logical id order and the tick counter.
+    /// The player record fields hashed are the entity id, position/velocity,
+    /// rotation, ground flag, game mode, health, hunger, saturation,
+    /// exhaustion, air, experience, death flag, fall distance, movement input,
+    /// flight flag, age and inventory; identity fields (connection, profile
+    /// uuid, name, world) are not simulation state. The entity fields hashed
+    /// are the logical id, type, position/velocity, rotation and ground flag.
+    /// Replay compares this value across runs and thread counts; the canonical
+    /// byte order is part of the test contract, not a saved format.
     [[nodiscard]] auto state_hash() const -> data::digest32;
     [[nodiscard]] auto loaded_chunks() const noexcept -> std::size_t {
         return chunks_.size();
@@ -833,7 +829,10 @@ class world {
     /// computed from is alive.
     block_light_table light_table_{};
     zstd_policy zstd_policy_{};
-    std::map<entity_id, entity_state> entities_{};
+    /// The entity store: an EnTT registry plus the ascending logical-id order
+    /// that is the only iteration entry. Held behind a pointer so the storage
+    /// headers stay out of this public header.
+    std::unique_ptr<detail::entity_store> entities_{};
     spawn_point spawn_{};
     std::uint32_t difficulty_{2};
     bool hardcore_{false};

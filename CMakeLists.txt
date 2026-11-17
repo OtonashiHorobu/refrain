@@ -172,6 +172,10 @@ set(OpenSSL_DIR "${CMAKE_BINARY_DIR}/generators" CACHE PATH "" FORCE)
 find_package(OpenSSL CONFIG REQUIRED)
 find_package(CURL REQUIRED)
 find_package(asio CONFIG REQUIRED)
+# EnTT backs the simulation entity storage; the reflection facade also uses it
+# as a metadata backend. The simulation always needs it, so the package is
+# found unconditionally even when the reflection glue is disabled.
+find_package(EnTT CONFIG REQUIRED)
 # Optional Linux io_uring backend for Asio's file classes. liburing is
 # Linux-only, so the option is forced OFF by the Conan toolchain elsewhere;
 # sockets/timers then stay on Asio's epoll reactor and block-level reads use a
@@ -198,7 +202,6 @@ endif()
 if(REFRAIN_USE_REFLECTION)
     find_package(refl-cpp CONFIG REQUIRED)
     find_package(magic_enum CONFIG REQUIRED)
-    find_package(EnTT CONFIG REQUIRED)
 
     # Reflection backend facade (include/refrain/reflect.hpp). Business code
     # only includes the facade; the backend libraries are consumed as imported
@@ -523,7 +526,8 @@ file(GLOB_RECURSE REFRAIN_SIM_SOURCES CONFIGURE_DEPENDS
      "${PROJECT_SOURCE_DIR}/src/sim/*.cpp")
 refrain_add_library(refrain-sim ${REFRAIN_SIM_SOURCES})
 target_link_libraries(refrain-sim PUBLIC refrain-kernel refrain-world
-                                       refrain-data refrain-contracts)
+                                       refrain-data refrain-contracts
+                                       PRIVATE EnTT::EnTT)
 add_library(Refrain::Sim ALIAS refrain-sim)
 
 # --- protocol codecs: versioned connection framing --------------------------

@@ -99,12 +99,15 @@ class RefrainConan(ConanFile):
             # In-repo recipe: upstream v1.10.0 (ConanCenter lags).
             self.requires("benchmark/1.10.0")
 
+        # EnTT is the simulation's entity storage. The reflection glue also uses
+        # it as a metadata backend, so it is a hard requirement: the reflection
+        # option only selects refl-cpp and magic_enum.
+        self.requires("entt/4.0.0")
         # --- annotation-based static reflection is glue only; wire/save/ABI
         # formats are owned by RSC/RIDL/RCD schema codegen.
         if self.options.use_reflection:
             self.requires("refl-cpp/0.12.4")
             self.requires("magic_enum/0.9.8")
-            self.requires("entt/4.0.0")
         # --- JSON layer (data packs / admin / config; never wire). simdjson
         # owns both directions: DOM/ondemand parsing + builder-based
         # serialization. TOML uses glaze's generic map-root DOM (see above).

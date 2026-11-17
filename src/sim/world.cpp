@@ -4,6 +4,8 @@
 
 #include <refrain/sim/world.hpp>
 
+#include "entity_store.hpp"
+
 #include <refrain/data/checksum.hpp>
 #include <refrain/world/model.hpp>
 #include <refrain/world/saved_data.hpp>
@@ -18,6 +20,8 @@
 #include <cstdint>
 #include <map>
 #include <mutex>
+#include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -126,10 +130,13 @@ auto block_registry::size() const -> std::size_t {
     return keys_.size();
 }
 
-world::world(store_type store) : store_{std::move(store)}, light_{*this} {}
+world::world(store_type store)
+    : store_{std::move(store)},
+      entities_{std::make_unique<detail::entity_store>()}, light_{*this} {}
 
 world::world(store_type &store, borrowed_tag)
-    : store_{}, borrowed_{&store}, light_{*this} {}
+    : store_{}, borrowed_{&store},
+      entities_{std::make_unique<detail::entity_store>()}, light_{*this} {}
 
 world::world(world &&other) noexcept
     : store_{std::move(other.store_)}, borrowed_{other.borrowed_},
@@ -295,25 +302,21 @@ auto world::spawn_column_entities(chunk &column) -> status {
             despawn_column_entities(column);
             return std::unexpected{std::move(id.error())};
         }
-        entities_.emplace(*id, entity_state{
-                                   .id = *id,
-                                   .type = record.id,
-                                   .x = record.x,
-                                   .y = record.y,
-                                   .z = record.z,
-                                   .yaw = record.yaw,
-                                   .pitch = record.pitch,
-                                   .pinned = true,
-                               });
+        static_cast<void>(entities_->create(*id, record.id, record.x, record.y,
+                                            record.z, record.yaw, record.pitch,
+                                            true, column.pos));
         column.entity_ids.push_back(*id);
     }
+    // A load hands over a whole column at once. The ids were allocated in
+    // record order, so the view is sorted by construction; rebuilding it here
+    // keeps the order derived from the loaded ids instead of from the
+    // registry's internal creation history.
+    entities_->rebuild_order();
     return status_ok();
 }
 
 void world::despawn_column_entities(chunk &column) noexcept {
-    for (const auto id : column.entity_ids) {
-        entities_.erase(id);
-    }
+    entities_->destroy(std::span<const entity_id>{column.entity_ids});
     column.entity_ids.clear();
 }
 
@@ -1345,63 +1348,72 @@ auto world::spawn_entity(std::string_view type, double x, double y, double z)
     if (!id) {
         return std::unexpected{std::move(id.error())};
     }
-    entities_.emplace(
-        *id, entity_state{
-                 .id = *id, .type = std::string{type}, .x = x, .y = y, .z = z});
+    static_cast<void>(
+        entities_->create(*id, std::string{type}, x, y, z, 0.0F, 0.0F, false));
     return *id;
 }
 
 auto world::remove_entity(entity_id id) -> bool {
-    if (entities_.erase(id) == 0U) {
+    const auto handle{entities_->find(id)};
+    if (handle == entt::null) {
         return false;
     }
-    // A generated entity is owned by its column: removing it from the entity
-    // table also takes it out of the column record, so a later unload writes a
-    // record that does not spawn it again and no client is announced a stale
-    // id.
-    for (auto &[pos, column] : chunks_) {
-        static_cast<void>(pos);
-        const auto found{
-            std::find(column.entity_ids.begin(), column.entity_ids.end(), id)};
-        if (found == column.entity_ids.end()) {
-            continue;
+    // A generated entity is owned by its column: removing it from the store
+    // also takes it out of the column record, so a later unload writes a record
+    // that does not spawn it again and no client is announced a stale id.
+    const auto *origin{
+        entities_->registry().try_get<detail::component::column_origin>(
+            handle)};
+    if (origin != nullptr) {
+        if (auto *column{find_chunk(origin->pos)}; column != nullptr) {
+            const auto found{std::find(column->entity_ids.begin(),
+                                       column->entity_ids.end(), id)};
+            if (found != column->entity_ids.end()) {
+                const auto index{static_cast<std::size_t>(
+                    std::distance(column->entity_ids.begin(), found))};
+                column->entity_ids.erase(found);
+                if (index < column->storage.entities.size()) {
+                    column->storage.entities.erase(
+                        column->storage.entities.begin() +
+                        static_cast<std::ptrdiff_t>(index));
+                }
+                column->dirty = true;
+            }
         }
-        const auto index{static_cast<std::size_t>(
-            std::distance(column.entity_ids.begin(), found))};
-        column.entity_ids.erase(found);
-        if (index < column.storage.entities.size()) {
-            column.storage.entities.erase(column.storage.entities.begin() +
-                                          static_cast<std::ptrdiff_t>(index));
-        }
-        column.dirty = true;
-        break;
     }
-    return true;
+    return entities_->destroy(id);
 }
 
-auto world::entity(entity_id id) noexcept -> entity_state * {
-    const auto found{entities_.find(id)};
-    return found == entities_.end() ? nullptr : &found->second;
+auto world::entities() const noexcept -> entity_view {
+    return entity_view{entities_.get()};
 }
 
-auto world::entity(entity_id id) const noexcept -> const entity_state * {
-    const auto found{entities_.find(id)};
-    return found == entities_.end() ? nullptr : &found->second;
+auto world::entity(entity_id id) const -> std::optional<entity_state> {
+    return entities_->projection(id);
 }
 
 void world::tick_entities() noexcept {
     constexpr double gravity{0.08};
     constexpr double vertical_drag{0.98};
     constexpr double horizontal_drag{0.91};
-    for (auto &[id, value] : entities_) {
-        static_cast<void>(id);
-        if (value.pinned) {
+    auto &entity_registry{entities_->registry()};
+    // The two component pools are fetched once per tick: the per-entity step
+    // then only pays the sparse-set index, not a component-id lookup.
+    const auto &pinned_entities{
+        entity_registry.storage<detail::component::pinned>()};
+    auto &transforms{entity_registry.storage<detail::component::transform>()};
+    // The ascending order is the simulation contract: the state hash and the
+    // clientbound stream depend on it, and an entity's step reads only its own
+    // state and the world blocks, so the order does not couple the entities.
+    for (const auto handle : entities_->order()) {
+        if (pinned_entities.contains(handle)) {
             // A generated entity is held where its structure placed it: this
             // build has no entity AI or living-entity physics, so applying the
             // point-entity gravity would only drag a shulker or an item frame
             // off its structure.
             continue;
         }
+        auto &value{transforms.get(handle)};
         value.vy = (value.vy - gravity) * vertical_drag;
         value.vx *= horizontal_drag;
         value.vz *= horizontal_drag;
@@ -2047,11 +2059,20 @@ auto world::state_hash() const -> data::digest32 {
             }
         }
     }
-    append_u64(static_cast<std::uint64_t>(entities_.size()));
-    for (const auto &[id, value] : entities_) {
-        append_u64(id);
-        append_u32(static_cast<std::uint32_t>(value.type.size()));
-        for (const char character : value.type) {
+    // Every runtime entity in ascending logical id order. The registry's own
+    // creation order never reaches the hash.
+    const auto &entity_registry{entities_->registry()};
+    append_u64(static_cast<std::uint64_t>(entities_->size()));
+    for (const auto handle : entities_->order()) {
+        const auto &identity{
+            entity_registry.get<detail::component::identity>(handle)};
+        const auto &value{
+            entity_registry.get<detail::component::transform>(handle)};
+        const auto &body_rotation{
+            entity_registry.get<detail::component::rotation>(handle)};
+        append_u64(identity.id);
+        append_u32(static_cast<std::uint32_t>(identity.type.size()));
+        for (const char character : identity.type) {
             bytes.push_back(static_cast<std::byte>(character));
         }
         append_double(value.x);
@@ -2060,8 +2081,8 @@ auto world::state_hash() const -> data::digest32 {
         append_double(value.vx);
         append_double(value.vy);
         append_double(value.vz);
-        append_u32(std::bit_cast<std::uint32_t>(value.yaw));
-        append_u32(std::bit_cast<std::uint32_t>(value.pitch));
+        append_u32(std::bit_cast<std::uint32_t>(body_rotation.yaw));
+        append_u32(std::bit_cast<std::uint32_t>(body_rotation.pitch));
         append_u32(value.on_ground ? 1U : 0U);
     }
     append_u64(static_cast<std::uint64_t>(chunks_.size()));

@@ -467,9 +467,9 @@ namespace world = refrain::world;
             for (int tick{0}; tick < 200; ++tick) {
                 runtime->tick();
             }
-            const auto *pig{runtime->entity(*spawned)};
-            expect(pig != nullptr);
-            if (pig != nullptr) {
+            const auto pig{runtime->entity(*spawned)};
+            expect(pig.has_value());
+            if (pig.has_value()) {
                 expect(pig->y >= 15.999 && pig->y <= 16.001) << pig->y;
                 expect(pig->on_ground);
                 expect(pig->x == 0.5);
