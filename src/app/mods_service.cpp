@@ -267,10 +267,9 @@ auto run_mods_check(const mods_check_options &options) -> int {
                   << "without --strict (mods may be installed incrementally)\n";
     }
     // A resolved provider whose mod does not declare the matching
-    // `[provides]` contract is a planned (metadata-only) provider. Warn on
-    // stdout without failing: first-party providers add their code and
-    // declarations over time (--strict keeps its manifest-only meaning).
-    std::size_t planned_provider_warnings{0};
+    // `[provides]` contract still binds. Warn on stdout without failing:
+    // --strict keeps its manifest-only meaning.
+    std::size_t provider_warnings{0};
     const auto check_provider = [&](std::string_view service,
                                     std::string_view reference) {
         const auto at{reference.find('@')};
@@ -284,9 +283,9 @@ auto run_mods_check(const mods_check_options &options) -> int {
         }
         std::cout << fmt::format(
             "warning: provider '{}' -> '{}' does not declare [provides] "
-            "'refrain:{}' (planned; provider code is not implemented yet)\n",
+            "'refrain:{}'\n",
             service, reference, service);
-        ++planned_provider_warnings;
+        ++provider_warnings;
     };
     for (const auto &provider : plan->providers) {
         if (!provider.provider.empty()) {
@@ -301,9 +300,9 @@ auto run_mods_check(const mods_check_options &options) -> int {
     }
     std::cout << "mods check: OK (" << plan->spec.mods.size()
               << " declared by gamepack " << plan->spec.id;
-    if (planned_provider_warnings != 0) {
-        std::cout << ", " << planned_provider_warnings
-                  << " planned provider warning(s)";
+    if (provider_warnings != 0) {
+        std::cout << ", " << provider_warnings
+                  << " undeclared provider warning(s)";
     }
     std::cout << ")\n";
     return 0;
