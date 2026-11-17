@@ -5,12 +5,18 @@
 #pragma once
 
 #include <refrain/core/error.hpp>
+#include <refrain/core/version.hpp>
 #include <refrain/mod/static_mod.hpp>
 #include <refrain/platform/dynamic_library.hpp>
 
+#include <cstddef>
+#include <functional>
+#include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace refrain::app {
 
@@ -45,13 +51,45 @@ struct loaded_dynamic_module {
 [[nodiscard]] auto load_dynamic_module(std::string_view path)
     -> result<loaded_dynamic_module>;
 
+/// Loaded modules, owner of the mappings their factories live in.
+using loaded_dynamic_modules =
+    std::vector<std::unique_ptr<loaded_dynamic_module>>;
+
+/// Opens one module file. Production uses `load_dynamic_module()`; a caller
+/// that already has the module descriptors (a test, an embedder) can
+/// substitute a loader and drive the registration without shared objects.
+using dynamic_module_loader =
+    std::function<result<loaded_dynamic_module>(std::string_view path)>;
+
+/// Two-phase registration of an explicit module list, in the order given.
+///
+/// Phase one opens and validates every record and rejects a duplicate id in
+/// the list or an id the registry already holds. Phase two registers the
+/// complete set. A failure in phase one leaves `registry` untouched and
+/// `loaded` empty: the modules are closed and no factory that pointed into
+/// them was ever added. That is the invariant a partial load must not break,
+/// because the owning libraries cannot be unloaded while a registry entry
+/// still names their factory.
+///
+/// `loaded` owns the modules after the call and must stay alive for as long
+/// as the registry entries are: it is the mapping the factories live in. A
+/// phase-two failure can only come from an internal invariant violation; the
+/// entries already added cannot be removed, so the corresponding modules stay
+/// in `loaded` and the caller keeps them mapped instead of unloading them.
+[[nodiscard]] auto load_dynamic_module_list(
+    mod::static_mod_registry &registry,
+    std::span<const version::dynamic_module_record> records,
+    std::string_view directory, const dynamic_module_loader &load,
+    loaded_dynamic_modules &loaded) -> status;
+
 /// Load every dynamic module this binary was built with and register its
 /// factory in the process-wide static mod registry. Must run before the first
 /// composition load (the registry is frozen by the host at that point).
 ///
 /// Idempotent. A missing module file, a descriptor that does not match the
 /// build profile or a registration conflict is an error that names the module
-/// and the profile.
+/// and the profile, and leaves the registry without any entry from a module
+/// file the call could not keep mapped.
 [[nodiscard]] auto register_dynamic_modules() -> status;
 
 /// Directory the loader expects the modules in: `<executable dir>/modules`.

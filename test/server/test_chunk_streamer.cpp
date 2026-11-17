@@ -2,12 +2,20 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 
+#include <refrain/core/error.hpp>
 #include <refrain/data/nbt.hpp>
 #include <refrain/data/vanilla.hpp>
 #include <refrain/protocol/current.hpp>
+#include <refrain/server/chunk_packet.hpp>
 #include <refrain/server/chunk_streamer.hpp>
+#include <refrain/server/world_port.hpp>
+#include <refrain/sim/world.hpp>
+#include <refrain/world/model.hpp>
+#include <refrain/world/store.hpp>
 
 #include <refrain/session/chunk_tracker.hpp>
+
+#include "support/scratch_directory.hpp"
 
 #include <boost/ut.hpp>
 
@@ -16,6 +24,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <memory>
 #include <optional>
 #include <set>
@@ -309,6 +319,273 @@ make_chunk_entity(refrain::sim::entity_id id, std::string type, double x,
         return std::nullopt;
     }
     return *id;
+}
+
+// --- world-backed cache revalidation fixtures ------------------------------
+
+namespace world = refrain::world;
+namespace storage = refrain::storage;
+namespace test_support = refrain::test_support;
+
+constexpr std::size_t world_section_entries{4096};
+constexpr std::size_t wire_section_count{24};
+
+/// One storage chunk with a single stone section, enough for the packet
+/// encoder and for a block edit to change the column revision.
+[[nodiscard]] auto flat_chunk() -> storage::chunk {
+    storage::chunk chunk{};
+    chunk.format_version = world::chunk_format_version;
+    chunk.status = storage::chunk_status::full;
+    chunk.y_pos = -4;
+    storage::section_record section{};
+    section.y = -4;
+    section.kind = storage::section_kind::single_value;
+    section.bits_per_entry = 0;
+    section.block_count = static_cast<std::uint16_t>(world_section_entries);
+    section.palette.push_back(storage::palette_entry{
+        .key = "minecraft:stone",
+        .count = static_cast<std::uint16_t>(world_section_entries),
+        .state = 0,
+    });
+    section.biome_kind = storage::section_kind::single_value;
+    section.biome_bits_per_entry = 0;
+    section.biome_palette.push_back("minecraft:plains");
+    chunk.sections.push_back(std::move(section));
+    return chunk;
+}
+
+/// Block tables with two distinct vanilla state ids so a decoded packet shows
+/// which block the encoder read.
+[[nodiscard]] auto two_block_tables()
+    -> std::optional<refrain::data::vanilla_tables> {
+    refrain::data::vanilla_spec spec{};
+    spec.data_version = 5023;
+    for (const auto &[name, vanilla_id] :
+         std::array<std::pair<std::string_view, std::uint32_t>, 2>{
+             {std::pair{"minecraft:stone", 1U},
+              std::pair{"minecraft:gold_block", 2U}}}) {
+        refrain::data::block_spec block{};
+        block.name = std::string{name};
+        block.states.push_back(refrain::data::state_spec{
+            .vanilla_id = static_cast<std::uint16_t>(vanilla_id),
+            .values = {},
+            .is_default = true,
+        });
+        spec.blocks.push_back(std::move(block));
+    }
+    auto bytes{refrain::data::build_vanilla_tables(spec)};
+    if (!bytes) {
+        return std::nullopt;
+    }
+    auto tables{refrain::data::vanilla_tables::open(*bytes, false)};
+    if (!tables) {
+        return std::nullopt;
+    }
+    return std::optional{std::move(*tables)};
+}
+
+/// Open a synthetic world holding `flat_chunk()` at (0, 0).
+[[nodiscard]] auto open_flat_world(const std::filesystem::path &directory)
+    -> std::optional<sim::world> {
+    auto store{world::world_store::create(directory.string())};
+    if (!store) {
+        return std::nullopt;
+    }
+    if (!store->write_chunk(world::chunk_pos{0, 0}, flat_chunk()) ||
+        !store->commit()) {
+        return std::nullopt;
+    }
+    auto opened{sim::world::open(directory.string())};
+    if (!opened) {
+        return std::nullopt;
+    }
+    return std::optional{std::move(*opened)};
+}
+
+/// Column coordinates one chunk packet body was encoded for.
+[[nodiscard]] auto packet_position(std::span<const std::byte> body)
+    -> std::optional<coordinate> {
+    refrain::net::reader in{body};
+    const auto id{in.read_varint()};
+    if (!id || *id != 46U) {
+        return std::nullopt;
+    }
+    const auto x{in.read_i32()};
+    const auto z{in.read_i32()};
+    if (!x || !z) {
+        return std::nullopt;
+    }
+    return coordinate{*x, *z};
+}
+
+/// The most recent chunk packet body one connection received for a column.
+[[nodiscard]] auto latest_column_body(const recording_gateway &gateway,
+                                      std::uint64_t connection,
+                                      coordinate target)
+    -> std::optional<std::vector<std::byte>> {
+    for (auto batch = gateway.batches.rbegin(); batch != gateway.batches.rend();
+         ++batch) {
+        if (batch->connection != connection) {
+            continue;
+        }
+        for (const auto &body : batch->packets) {
+            if (packet_position(body) == target) {
+                return body;
+            }
+        }
+    }
+    return std::nullopt;
+}
+
+/// One decoded section of a `level_chunk_with_light` body.
+struct decoded_section {
+    std::uint8_t bits{0};
+    std::vector<std::uint32_t> palette{};
+    std::vector<std::uint64_t> words{};
+};
+
+/// Decode section `section_index` of a chunk packet body. The test only needs
+/// the block palette and the packed indices of one section.
+[[nodiscard]] auto decode_column_section(std::span<const std::byte> body,
+                                         std::size_t section_index)
+    -> std::optional<decoded_section> {
+    refrain::net::reader in{body};
+    const auto packet_id{in.read_varint()};
+    if (!packet_id || *packet_id != 46U || !in.read_i32() || !in.read_i32()) {
+        return std::nullopt;
+    }
+    const auto heightmaps{in.read_varint()};
+    if (!heightmaps) {
+        return std::nullopt;
+    }
+    for (std::uint32_t entry{0}; entry < *heightmaps; ++entry) {
+        const auto type{in.read_varint()};
+        const auto words{in.read_varint()};
+        if (!type || !words) {
+            return std::nullopt;
+        }
+        for (std::uint32_t word{0}; word < *words; ++word) {
+            if (!in.read_i64()) {
+                return std::nullopt;
+            }
+        }
+    }
+    const auto section_bytes{in.read_varint()};
+    if (!section_bytes) {
+        return std::nullopt;
+    }
+    const auto payload{in.read_bytes(*section_bytes)};
+    if (!payload) {
+        return std::nullopt;
+    }
+    refrain::net::reader sections{*payload};
+    for (std::size_t index{0}; index < wire_section_count; ++index) {
+        const auto non_empty{sections.read_u16()};
+        const auto fluids{sections.read_u16()};
+        const auto bits{sections.read_u8()};
+        if (!non_empty || !fluids || !bits) {
+            return std::nullopt;
+        }
+        decoded_section decoded{};
+        decoded.bits = *bits;
+        if (*bits == 0) {
+            const auto entry{sections.read_varint()};
+            if (!entry) {
+                return std::nullopt;
+            }
+            decoded.palette.push_back(*entry);
+        } else if (*bits <= 8) {
+            const auto count{sections.read_varint()};
+            if (!count) {
+                return std::nullopt;
+            }
+            for (std::uint32_t entry{0}; entry < *count; ++entry) {
+                const auto id{sections.read_varint()};
+                if (!id) {
+                    return std::nullopt;
+                }
+                decoded.palette.push_back(*id);
+            }
+        }
+        if (*bits > 0) {
+            const auto per_word{64U / *bits};
+            const auto words{(world_section_entries + per_word - 1) / per_word};
+            decoded.words.reserve(words);
+            for (std::uint32_t word{0}; word < words; ++word) {
+                const auto value{sections.read_i64()};
+                if (!value) {
+                    return std::nullopt;
+                }
+                decoded.words.push_back(static_cast<std::uint64_t>(*value));
+            }
+        }
+        // Biome palette: single value when bits is zero, else a packed list.
+        const auto biome_bits{sections.read_u8()};
+        if (!biome_bits) {
+            return std::nullopt;
+        }
+        if (*biome_bits == 0) {
+            if (!sections.read_varint()) {
+                return std::nullopt;
+            }
+        } else {
+            if (*biome_bits <= 3) {
+                const auto count{sections.read_varint()};
+                if (!count) {
+                    return std::nullopt;
+                }
+                for (std::uint32_t entry{0}; entry < *count; ++entry) {
+                    if (!sections.read_varint()) {
+                        return std::nullopt;
+                    }
+                }
+            }
+            constexpr std::size_t biome_entries{64};
+            const auto per_word{64U / *biome_bits};
+            const auto words{(biome_entries + per_word - 1) / per_word};
+            for (std::uint32_t word{0}; word < words; ++word) {
+                if (!sections.read_i64()) {
+                    return std::nullopt;
+                }
+            }
+        }
+        if (index == section_index) {
+            return decoded;
+        }
+    }
+    return std::nullopt;
+}
+
+/// Block state id the decoded section holds at a local block index.
+[[nodiscard]] auto section_state(const decoded_section &section,
+                                 std::size_t index)
+    -> std::optional<std::uint32_t> {
+    if (section.bits == 0) {
+        if (section.palette.empty()) {
+            return std::nullopt;
+        }
+        return section.palette.front();
+    }
+    const auto per_word{64U / section.bits};
+    if (section.words.size() * per_word <= index) {
+        return std::nullopt;
+    }
+    const auto value{(section.words[index / per_word] >>
+                      ((index % per_word) * section.bits)) &
+                     ((std::uint64_t{1} << section.bits) - 1U)};
+    if (section.bits <= 8) {
+        if (value >= section.palette.size()) {
+            return std::nullopt;
+        }
+        return section.palette[static_cast<std::size_t>(value)];
+    }
+    return static_cast<std::uint32_t>(value);
+}
+
+/// Wire section index of absolute section Y in the default range.
+[[nodiscard]] constexpr auto wire_section(std::int32_t section_y)
+    -> std::size_t {
+    return static_cast<std::size_t>(section_y + 4);
 }
 
 suite<"server/chunk-streamer"> chunk_streamer_tests = [] {
@@ -767,6 +1044,115 @@ suite<"server/chunk-streamer-prefetch"> chunk_streamer_prefetch_tests = [] {
         step(1);
         expect(requested.empty());
         expect(streamer.prefetch_columns().empty());
+    };
+};
+
+suite<"server/chunk-streamer-cache-revision"> chunk_cache_revision_tests = [] {
+    "an edited column is re-encoded when the player returns"_test = [] {
+        const test_support::scratch_directory directory{};
+        auto runtime{open_flat_world(directory.path())};
+        expect(runtime.has_value());
+        auto tables{two_block_tables()};
+        expect(tables.has_value());
+        if (!runtime || !tables) {
+            return;
+        }
+        auto port{server::make_borrowed_world_port(*runtime)};
+        const server::chunk_packet_source source{
+            .world = port.get(),
+            .tables = &*tables,
+            .registries = nullptr,
+        };
+        recording_gateway gateway;
+        gateway.active = {1};
+        server::chunk_streamer streamer{gateway, source};
+        session::chunk_tracker views;
+        static_cast<void>(views.update(1, 0, 0, 0));
+        streamer.tick(views);
+        const auto first{latest_column_body(gateway, 1, {0, 0})};
+        expect(first.has_value());
+        if (first) {
+            const auto before{decode_column_section(*first, wire_section(0))};
+            expect(before.has_value());
+            if (before) {
+                expect(section_state(*before, 0) ==
+                       std::optional<std::uint32_t>{0});
+            }
+        }
+        expect(streamer.cache_misses() == 1U);
+        expect(streamer.cache_hits() == 0U);
+
+        const auto gold{runtime->registry().intern("minecraft:gold_block")};
+        const auto edited{
+            runtime->set_block(sim::block_pos{.x = 0, .y = 0, .z = 0}, gold)};
+        expect(static_cast<bool>(edited));
+
+        // Walking away forgets the column; coming back asks for it again.
+        static_cast<void>(views.update(1, 20, 20, 0));
+        streamer.tick(views);
+        static_cast<void>(views.update(1, 0, 0, 0));
+        streamer.tick(views);
+
+        const auto returned{latest_column_body(gateway, 1, {0, 0})};
+        expect(returned.has_value());
+        if (returned) {
+            const auto after{decode_column_section(*returned, wire_section(0))};
+            expect(after.has_value());
+            if (after) {
+                // The pre-edit body would still hold air here; the edit has to
+                // be visible, not a cached copy of the old column.
+                expect(section_state(*after, 0) ==
+                       std::optional<std::uint32_t>{2});
+            }
+        }
+        // The stale entry is a miss, never a hit.
+        expect(streamer.cache_misses() == 2U);
+        expect(streamer.cache_hits() == 0U);
+    };
+
+    "an edited column is re-encoded for a joining connection"_test = [] {
+        const test_support::scratch_directory directory{};
+        auto runtime{open_flat_world(directory.path())};
+        expect(runtime.has_value());
+        auto tables{two_block_tables()};
+        expect(tables.has_value());
+        if (!runtime || !tables) {
+            return;
+        }
+        auto port{server::make_borrowed_world_port(*runtime)};
+        const server::chunk_packet_source source{
+            .world = port.get(),
+            .tables = &*tables,
+            .registries = nullptr,
+        };
+        recording_gateway gateway;
+        gateway.active = {1};
+        server::chunk_streamer streamer{gateway, source};
+        session::chunk_tracker views;
+        static_cast<void>(views.update(1, 0, 0, 0));
+        streamer.tick(views);
+        expect(latest_column_body(gateway, 1, {0, 0}).has_value());
+
+        const auto gold{runtime->registry().intern("minecraft:gold_block")};
+        expect(static_cast<bool>(
+            runtime->set_block(sim::block_pos{.x = 0, .y = 0, .z = 0}, gold)));
+
+        // A second player joins after the edit: the cached body belongs to the
+        // pre-edit world and must not be reused.
+        gateway.active = {1, 2};
+        static_cast<void>(views.update(2, 0, 0, 0));
+        streamer.tick(views);
+
+        const auto joined{latest_column_body(gateway, 2, {0, 0})};
+        expect(joined.has_value());
+        if (joined) {
+            const auto section{decode_column_section(*joined, wire_section(0))};
+            expect(section.has_value());
+            if (section) {
+                expect(section_state(*section, 0) ==
+                       std::optional<std::uint32_t>{2});
+            }
+        }
     };
 };
 

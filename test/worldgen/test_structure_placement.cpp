@@ -236,32 +236,47 @@ suite<"worldgen/structure-set-applicability">
                            .empty());
             };
 
-        "the applicable sets keep the data set order"_test = [&] {
-            structure::structure_data_set data;
-            data.structures.emplace("test:a",
-                                    structure("test:a", "minecraft:plains"));
-            data.sets.emplace(
-                "test:first",
-                set("test:first", {{.structure = "test:a", .weight = 1}}));
-            data.sets.emplace(
-                "test:second",
-                set("test:second", {{.structure = "test:a", .weight = 1}}));
-            data.sets.emplace(
-                "test:third",
-                set("test:third", {{.structure = "test:a", .weight = 1}}));
+        "the applicable sets are ordered by id, not by insertion"_test = [&] {
+            // The placement stage walks this order to decide which structure
+            // sets consume randomness first, so two data sets that hold the
+            // same documents must answer with the same order regardless of
+            // the order the loader inserted them in.
+            const auto build = [&](std::span<const std::string_view> order) {
+                structure::structure_data_set data;
+                data.structures.emplace(
+                    "test:a", structure("test:a", "minecraft:plains"));
+                for (const auto id : order) {
+                    data.sets.emplace(
+                        std::string{id},
+                        set(id, {{.structure = "test:a", .weight = 1}}));
+                }
+                return data;
+            };
+            const std::array<std::string_view, 3> ascending{
+                "test:first", "test:second", "test:third"};
+            const std::array<std::string_view, 3> descending{
+                "test:third", "test:second", "test:first"};
+            auto forward{build(ascending)};
+            auto reverse{build(descending)};
             const std::vector<std::string> possible{"minecraft:plains"};
-            const auto applicable =
-                structure::applicable_structure_sets(data, possible);
-            std::vector<std::string> expected;
-            for (const auto &entry : data.sets) {
-                expected.push_back(entry.second.id);
+            const auto collect =
+                [&possible](const structure::structure_data_set &data) {
+                    std::vector<std::string> ids;
+                    for (const auto *entry :
+                         structure::applicable_structure_sets(data, possible)) {
+                        ids.push_back(entry->id);
+                    }
+                    return ids;
+                };
+            const std::vector<std::string> expected{"test:first", "test:second",
+                                                    "test:third"};
+            expect(collect(forward) == expected);
+            expect(collect(reverse) == expected);
+            std::vector<std::string> container_ids;
+            for (const auto &entry : reverse.sets) {
+                container_ids.push_back(entry.second.id);
             }
-            expect(applicable.size() == expected.size());
-            for (std::size_t index = 0;
-                 index < std::min(applicable.size(), expected.size());
-                 ++index) {
-                expect(applicable[index]->id == expected[index]);
-            }
+            expect(container_ids == expected);
         };
 
         "the starts stage evaluates the listed sets only"_test = [&] {

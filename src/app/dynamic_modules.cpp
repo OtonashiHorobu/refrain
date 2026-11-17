@@ -14,6 +14,8 @@
 #include <filesystem>
 #include <memory>
 #include <mutex>
+#include <set>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -118,6 +120,75 @@ auto load_dynamic_module(std::string_view path)
     return loaded;
 }
 
+auto load_dynamic_module_list(
+    mod::static_mod_registry &registry,
+    std::span<const version::dynamic_module_record> records,
+    std::string_view directory, const dynamic_module_loader &load,
+    loaded_dynamic_modules &loaded) -> status {
+    loaded.clear();
+    if (!load) {
+        return std::unexpected{make_error(error_code::invalid_argument,
+                                          "no dynamic module loader")};
+    }
+    if (registry.is_frozen()) {
+        return std::unexpected{make_error(
+            error_code::permission_denied,
+            fmt::format("cannot register dynamic modules for profile '{}' "
+                        "after the static mod registry was frozen",
+                        version::mod_profile))};
+    }
+    // Phase one: open, validate and duplicate-check every module without
+    // touching the registry. A failure here closes the modules that were
+    // opened, and no factory has been registered, so no entry can point into
+    // an unmapped library.
+    std::set<std::string, std::less<>> ids{};
+    loaded.reserve(records.size());
+    for (const auto &record : records) {
+        const fs::path path{fs::path{directory} / record.filename};
+        auto module{load(path.string())};
+        if (!module) {
+            loaded.clear();
+            return std::unexpected{std::move(module.error())};
+        }
+        if (module->id != record.id) {
+            const auto declared{module->id};
+            loaded.clear();
+            return std::unexpected{make_error(
+                error_code::mod_error,
+                fmt::format("dynamic module '{}' declares mod '{}' but the "
+                            "build profile '{}' expects '{}'",
+                            path.string(), declared, version::mod_profile,
+                            record.id))};
+        }
+        if (!ids.insert(module->id).second ||
+            registry.find(module->id) != nullptr) {
+            const auto duplicate{module->id};
+            loaded.clear();
+            return std::unexpected{make_error(
+                error_code::already_exists,
+                fmt::format("dynamic mod '{}' is registered more than once",
+                            duplicate))};
+        }
+        loaded.push_back(
+            std::make_unique<loaded_dynamic_module>(std::move(*module)));
+    }
+    // Phase two: every module is loaded and every id is unique, so the
+    // complete set is registered. A failure here is an internal invariant
+    // violation; the caller keeps `loaded` mapped instead of unloading a
+    // library an entry may already name.
+    for (const auto &module : loaded) {
+        auto added{registry.add(
+            mod::static_mod_descriptor{.id = module->descriptor.id,
+                                       .version = module->descriptor.version,
+                                       .abi = module->descriptor.abi,
+                                       .factory = module->descriptor.factory})};
+        if (!added) {
+            return std::unexpected{std::move(added.error())};
+        }
+    }
+    return status_ok();
+}
+
 auto register_dynamic_modules() -> status {
     auto &shared{state()};
     const std::lock_guard lock{shared.mutex};
@@ -133,45 +204,16 @@ auto register_dynamic_modules() -> status {
         return std::unexpected{std::move(directory.error())};
     }
     auto &registry{mod::static_mod_registry::global()};
-    if (registry.is_frozen()) {
-        return std::unexpected{make_error(
-            error_code::permission_denied,
-            fmt::format("cannot register dynamic modules for profile '{}' "
-                        "after the static mod registry was frozen",
-                        version::mod_profile))};
-    }
-    std::vector<std::unique_ptr<loaded_dynamic_module>> loaded{};
-    loaded.reserve(version::dynamic_modules().size());
-    for (const auto &record : version::dynamic_modules()) {
-        const fs::path path{fs::path{*directory} / record.filename};
-        auto module{load_dynamic_module(path.string())};
-        if (!module) {
-            return std::unexpected{std::move(module.error())};
-        }
-        if (module->id != record.id) {
-            return std::unexpected{make_error(
-                error_code::mod_error,
-                fmt::format("dynamic module '{}' declares mod '{}' but the "
-                            "build profile '{}' expects '{}'",
-                            path.string(), module->id, version::mod_profile,
-                            record.id))};
-        }
-        if (registry.find(module->id) != nullptr) {
-            return std::unexpected{make_error(
-                error_code::already_exists,
-                fmt::format("dynamic mod '{}' is registered more than once",
-                            module->id))};
-        }
-        auto added{registry.add(
-            mod::static_mod_descriptor{.id = module->descriptor.id,
-                                       .version = module->descriptor.version,
-                                       .abi = module->descriptor.abi,
-                                       .factory = module->descriptor.factory})};
-        if (!added) {
-            return std::unexpected{std::move(added.error())};
-        }
-        loaded.push_back(
-            std::make_unique<loaded_dynamic_module>(std::move(*module)));
+    loaded_dynamic_modules loaded{};
+    auto registered{
+        load_dynamic_module_list(registry, version::dynamic_modules(),
+                                 *directory, &load_dynamic_module, loaded)};
+    if (!registered) {
+        // Keep anything phase two managed to register mapped: unloading it
+        // would leave the registry holding a factory pointer into a closed
+        // library, which is worse than an incomplete registration.
+        shared.modules = std::move(loaded);
+        return registered;
     }
     shared.modules = std::move(loaded);
     shared.registered = true;

@@ -264,6 +264,49 @@ void chunk_streamer::evict_least_recently_used() {
     cache_.erase(victim);
 }
 
+auto chunk_streamer::cache_entry_stale(const cache_entry &entry, std::int32_t x,
+                                       std::int32_t z) const -> bool {
+    if (!entry.world_backed) {
+        // The encoder that produced this body does not read the world, so
+        // there is no column state to compare against.
+        return false;
+    }
+    if (source_.world == nullptr) {
+        // The body was world-backed when it was encoded, but the stream has no
+        // world to attest it now; re-encoding is the only safe answer.
+        return true;
+    }
+    const refrain::sim::chunk_pos pos{.x = x, .z = z};
+    if (!source_.world->column_loaded(pos)) {
+        // The column left memory after the body was encoded. A reload restarts
+        // the runtime revision, so the revision comparison below would accept
+        // the old body even when the store now carries a newer edit.
+        return true;
+    }
+    const auto loaded{source_.world->chunk_load(pos)};
+    if (!loaded) {
+        return true;
+    }
+    return (*loaded)->revision != entry.revision;
+}
+
+auto chunk_streamer::make_cache_entry(std::vector<std::byte> body,
+                                      std::int32_t x, std::int32_t z)
+    -> cache_entry {
+    cache_entry entry{.body = std::move(body), .last_use = ++clock_};
+    if (source_.world == nullptr) {
+        return entry;
+    }
+    const auto loaded{
+        source_.world->chunk_load(refrain::sim::chunk_pos{.x = x, .z = z})};
+    if (!loaded) {
+        return entry;
+    }
+    entry.world_backed = true;
+    entry.revision = (*loaded)->revision;
+    return entry;
+}
+
 void chunk_streamer::chunk_ready(std::int32_t x, std::int32_t z) {
     for (auto &[id, stream] : streams_) {
         static_cast<void>(id);
@@ -528,6 +571,13 @@ auto chunk_streamer::drain(std::uint64_t connection, stream_state &stream,
         const auto [x, z]{stream.pending.front()};
         const auto cache_key{std::pair{x, z}};
         auto cached{cache_.find(cache_key)};
+        if (cached != cache_.end() && cache_entry_stale(cached->second, x, z)) {
+            // The body was encoded before an edit or from a column that has
+            // since left memory. Drop it and encode the current column; the
+            // stale body must never reach the client.
+            cache_.erase(cached);
+            cached = cache_.end();
+        }
         if (cached == cache_.end()) {
             auto encoded{encode(refrain::sim::chunk_pos{x, z})};
             if (!encoded) {
@@ -557,10 +607,7 @@ auto chunk_streamer::drain(std::uint64_t connection, stream_state &stream,
             }
             cached = cache_
                          .emplace(cache_key,
-                                  cache_entry{
-                                      .body = std::move(*encoded),
-                                      .last_use = ++clock_,
-                                  })
+                                  make_cache_entry(std::move(*encoded), x, z))
                          .first;
         } else {
             ++cache_hits_;

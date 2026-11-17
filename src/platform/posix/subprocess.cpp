@@ -9,16 +9,20 @@
 #include <fmt/format.h>
 
 #include <cerrno>
-#include <csignal>
 #include <cstring>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <utility>
 #include <vector>
 
+#include <spawn.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
+
+// The spawn call hands the child environment to the new image.
+extern char **environ;
 
 namespace refrain::platform {
 namespace {
@@ -29,6 +33,47 @@ namespace {
                       fmt::format("{}: {}", what, code.message()));
 }
 
+/// A `posix_spawn` error is the error number itself, not `errno`.
+[[nodiscard]] auto spawn_failure(int code, std::string_view what) -> error {
+    const std::error_code failure{code, std::generic_category()};
+    return make_error(error_code::io_error,
+                      fmt::format("{}: {}", what, failure.message()));
+}
+
+/// Parent-side pipe ends. The destructor closes whatever is still open, so an
+/// early return cannot leak a descriptor.
+class input_pipe {
+  public:
+    input_pipe() = default;
+    ~input_pipe() { close(); }
+
+    input_pipe(const input_pipe &) = delete;
+    auto operator=(const input_pipe &) -> input_pipe & = delete;
+
+    [[nodiscard]] auto open() -> bool { return ::pipe(fds_) == 0; }
+
+    [[nodiscard]] auto read_fd() const noexcept -> int { return fds_[0]; }
+    [[nodiscard]] auto write_fd() const noexcept -> int { return fds_[1]; }
+
+    void close_read() noexcept { close_one(fds_[0]); }
+    void close_write() noexcept { close_one(fds_[1]); }
+
+    void close() noexcept {
+        close_read();
+        close_write();
+    }
+
+  private:
+    static void close_one(int &fd) noexcept {
+        if (fd >= 0) {
+            ::close(fd);
+            fd = -1;
+        }
+    }
+
+    int fds_[2]{-1, -1};
+};
+
 } // namespace
 
 auto run_process(const subprocess_options &options)
@@ -37,42 +82,89 @@ auto run_process(const subprocess_options &options)
         return std::unexpected{
             make_error(error_code::invalid_argument, "program is empty")};
     }
-    int input_pipe[2]{-1, -1};
-    if (::pipe(input_pipe) != 0) {
+    input_pipe input{};
+    if (!input.open()) {
         return std::unexpected{io_failure("cannot create the stdin pipe")};
     }
-    const pid_t pid{::fork()};
-    if (pid < 0) {
-        ::close(input_pipe[0]);
-        ::close(input_pipe[1]);
-        return std::unexpected{io_failure("cannot fork")};
+
+    // Everything the child needs is built here, in the parent: the argument
+    // vector and the file actions. The spawn then only performs the calls the
+    // child half of a multithreaded process is allowed to make, so no
+    // allocation or stdio state is touched after the fork.
+    std::vector<char *> argv{};
+    argv.reserve(options.arguments.size() + 2);
+    argv.push_back(const_cast<char *>(options.program.c_str()));
+    for (const auto &argument : options.arguments) {
+        argv.push_back(const_cast<char *>(argument.c_str()));
     }
-    if (pid == 0) {
-        // Child: wire stdin, change directory, exec. Only async-signal-safe
-        // calls from here on; exec failure is reported as exit code 127.
-        if (::dup2(input_pipe[0], STDIN_FILENO) < 0) {
-            ::_exit(127);
-        }
-        ::close(input_pipe[0]);
-        ::close(input_pipe[1]);
-        if (!options.working_directory.empty() &&
-            ::chdir(options.working_directory.c_str()) != 0) {
-            ::_exit(127);
-        }
-        std::vector<char *> argv;
-        argv.reserve(options.arguments.size() + 2);
-        argv.push_back(const_cast<char *>(options.program.c_str()));
-        for (const auto &argument : options.arguments) {
-            argv.push_back(const_cast<char *>(argument.c_str()));
-        }
-        argv.push_back(nullptr);
-        ::execvp(options.program.c_str(), argv.data());
-        ::_exit(127);
+    argv.push_back(nullptr);
+
+    posix_spawn_file_actions_t actions{};
+    if (const int created{::posix_spawn_file_actions_init(&actions)};
+        created != 0) {
+        return std::unexpected{
+            spawn_failure(created, "cannot initialise the spawn file actions")};
     }
-    ::close(input_pipe[0]);
+    struct actions_guard {
+        posix_spawn_file_actions_t *value;
+        ~actions_guard() { ::posix_spawn_file_actions_destroy(value); }
+    } release_actions{&actions};
+
+    if (const int wired{::posix_spawn_file_actions_adddup2(
+            &actions, input.read_fd(), STDIN_FILENO)};
+        wired != 0) {
+        return std::unexpected{
+            spawn_failure(wired, "cannot wire the stdin pipe")};
+    }
+    // The child must not inherit either end of the pipe: the dup'd descriptor
+    // is the child's stdin, and the write end would keep it open forever.
+    if (const int closed{
+            ::posix_spawn_file_actions_addclose(&actions, input.read_fd())};
+        closed != 0) {
+        return std::unexpected{
+            spawn_failure(closed, "cannot close the stdin pipe")};
+    }
+    if (const int closed{
+            ::posix_spawn_file_actions_addclose(&actions, input.write_fd())};
+        closed != 0) {
+        return std::unexpected{
+            spawn_failure(closed, "cannot close the stdin pipe")};
+    }
+    if (!options.working_directory.empty()) {
+#if defined(__GLIBC__) || defined(__APPLE__)
+        const int changed{::posix_spawn_file_actions_addchdir_np(
+            &actions, options.working_directory.c_str())};
+        if (changed != 0) {
+            return std::unexpected{spawn_failure(
+                changed, fmt::format("cannot use working directory '{}'",
+                                     options.working_directory))};
+        }
+#else
+        return std::unexpected{make_error(
+            error_code::unsupported,
+            fmt::format("cannot start '{}' in '{}': the platform has no "
+                        "spawn file action to change the working directory",
+                        options.program, options.working_directory))};
+#endif
+    }
+
+    pid_t pid{0};
+    const int spawned{::posix_spawnp(&pid, options.program.c_str(), &actions,
+                                     nullptr, argv.data(), environ)};
+    // The file actions have been consumed: the parent's read end is no longer
+    // needed, and the child owns its stdin through the dup.
+    input.close_read();
+    if (spawned != 0) {
+        return std::unexpected{spawn_failure(
+            spawned, fmt::format("cannot start '{}'", options.program))};
+    }
+
+    // Feed the child's stdin, then close it so a child that reads until EOF
+    // terminates. A failure here is not fatal: the child reports what it made
+    // of a short input.
     std::size_t written{0};
     while (written < options.stdin_text.size()) {
-        const auto result{::write(input_pipe[1],
+        const auto result{::write(input.write_fd(),
                                   options.stdin_text.data() + written,
                                   options.stdin_text.size() - written)};
         if (result < 0) {
@@ -83,7 +175,8 @@ auto run_process(const subprocess_options &options)
         }
         written += static_cast<std::size_t>(result);
     }
-    ::close(input_pipe[1]);
+    input.close();
+
     int status{0};
     pid_t waited{-1};
     do {

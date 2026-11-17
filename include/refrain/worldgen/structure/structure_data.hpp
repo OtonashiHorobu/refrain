@@ -44,7 +44,11 @@ struct structure_document {
 
 struct structure_data_set {
     std::unordered_map<std::string, structure_document> structures{};
-    std::unordered_map<std::string, structure_set> sets{};
+    /// Ordered by id. Placement iterates the sets to decide the order starts
+    /// are generated and randomness is consumed, so the container has to
+    /// define that order itself; a hash map would make it depend on insertion
+    /// order and the standard library implementation.
+    std::map<std::string, structure_set, std::less<>> sets{};
     std::unordered_map<std::string, std::vector<std::string>> biome_tags{};
     /// `worldgen/template_pool` documents, keyed by `namespace:path`.
     std::map<std::string, jigsaw_template_pool, std::less<>> template_pools{};
@@ -60,8 +64,8 @@ struct structure_data_set {
                                          std::string_view biome) const -> bool;
 };
 
-/// The sets whose structures can appear with one of `possible_biomes`, in the
-/// order the data set lists them. A structure set is only usable when at
+/// The sets whose structures can appear with one of `possible_biomes`, in
+/// ascending id order. A structure set is only usable when at
 /// least one of its entries names a biome a dimension's source can produce,
 /// which is the filter the reference applies when it loads a generator. It
 /// changes no generated start: a start whose biome list excludes every
