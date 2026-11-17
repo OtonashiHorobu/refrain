@@ -9,6 +9,7 @@
 #include <fmt/format.h>
 
 #include <cerrno>
+#include <csignal>
 #include <cstring>
 #include <string>
 #include <string_view>
@@ -16,6 +17,7 @@
 #include <utility>
 #include <vector>
 
+#include <pthread.h>
 #include <spawn.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -39,6 +41,46 @@ namespace {
     return make_error(error_code::io_error,
                       fmt::format("{}: {}", what, failure.message()));
 }
+
+/// Block `SIGPIPE` for the writing thread for the lifetime of the guard.
+///
+/// A child that exits before reading its stdin closes the read end; the next
+/// parent `write()` then raises `SIGPIPE`, whose default action terminates the
+/// whole process instead of returning `EPIPE`. Blocking the signal in this
+/// thread turns the write into an ordinary `EPIPE`; the signal left pending is
+/// consumed before the previous mask is restored, because restoring it first
+/// would deliver the signal and kill the process anyway. The mask is
+/// thread-scoped, so a concurrent write on another thread keeps the default
+/// disposition.
+class sigpipe_guard {
+  public:
+    sigpipe_guard() noexcept {
+        sigemptyset(&blocked_);
+        sigaddset(&blocked_, SIGPIPE);
+        active_ = ::pthread_sigmask(SIG_BLOCK, &blocked_, &previous_) == 0;
+    }
+
+    ~sigpipe_guard() {
+        if (!active_) {
+            return;
+        }
+        sigset_t pending{};
+        if (::sigpending(&pending) == 0 &&
+            ::sigismember(&pending, SIGPIPE) == 1) {
+            int received{0};
+            static_cast<void>(::sigwait(&blocked_, &received));
+        }
+        static_cast<void>(::pthread_sigmask(SIG_SETMASK, &previous_, nullptr));
+    }
+
+    sigpipe_guard(const sigpipe_guard &) = delete;
+    auto operator=(const sigpipe_guard &) -> sigpipe_guard & = delete;
+
+  private:
+    sigset_t blocked_{};
+    sigset_t previous_{};
+    bool active_{false};
+};
 
 /// Parent-side pipe ends. The destructor closes whatever is still open, so an
 /// early return cannot leak a descriptor.
@@ -161,19 +203,24 @@ auto run_process(const subprocess_options &options)
 
     // Feed the child's stdin, then close it so a child that reads until EOF
     // terminates. A failure here is not fatal: the child reports what it made
-    // of a short input.
+    // of a short input. The write can hit a child that already exited (a
+    // command that never reads its stdin); the guard keeps that from becoming
+    // a process-wide `SIGPIPE` death.
     std::size_t written{0};
-    while (written < options.stdin_text.size()) {
-        const auto result{::write(input.write_fd(),
-                                  options.stdin_text.data() + written,
-                                  options.stdin_text.size() - written)};
-        if (result < 0) {
-            if (errno == EINTR) {
-                continue;
+    {
+        const sigpipe_guard guard{};
+        while (written < options.stdin_text.size()) {
+            const auto result{::write(input.write_fd(),
+                                      options.stdin_text.data() + written,
+                                      options.stdin_text.size() - written)};
+            if (result < 0) {
+                if (errno == EINTR) {
+                    continue;
+                }
+                break;
             }
-            break;
+            written += static_cast<std::size_t>(result);
         }
-        written += static_cast<std::size_t>(result);
     }
     input.close();
 
