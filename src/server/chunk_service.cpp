@@ -174,25 +174,20 @@ void chunk_service::broadcast_updates(world_port &world) {
     const auto chunk_of_block = [](std::int32_t block) -> std::int32_t {
         return block >= 0 ? block / 16 : (block - 15) / 16;
     };
-    const auto send_to_viewers = [this](std::int32_t x, std::int32_t z,
-                                        std::span<const std::byte> body) {
-        if (body.empty()) {
-            return;
-        }
-        const auto targets{streamer_->connections_with_chunk(x, z)};
-        if (!targets.empty()) {
-            gateway_->send_raw_many(targets, body);
-        }
-    };
     for (const auto &change : edits) {
+        const auto x{chunk_of_block(change.pos.x)};
+        const auto z{chunk_of_block(change.pos.z)};
+        const auto targets{streamer_->connections_with_chunk(x, z)};
+        if (targets.empty()) {
+            continue;
+        }
         auto body{encode_block_update(source_, change)};
         if (!body) {
             log_chunk_gen.debug("failed to encode a block update: {}",
                                 body.error().message);
             continue;
         }
-        send_to_viewers(chunk_of_block(change.pos.x),
-                        chunk_of_block(change.pos.z), *body);
+        gateway_->send_raw_many(targets, *body);
     }
     // One light_update per column carries every changed light section of that
     // column; the section order is the order the engine drained them.
@@ -201,6 +196,10 @@ void chunk_service::broadcast_updates(world_port &world) {
         by_column[change.pos].push_back(change.section_y);
     }
     for (const auto &[pos, sections] : by_column) {
+        const auto targets{streamer_->connections_with_chunk(pos.x, pos.z)};
+        if (targets.empty()) {
+            continue;
+        }
         auto body{encode_light_update(source_, pos, sections)};
         if (!body) {
             log_chunk_gen.debug(
@@ -208,7 +207,7 @@ void chunk_service::broadcast_updates(world_port &world) {
                 pos.z, body.error().message);
             continue;
         }
-        send_to_viewers(pos.x, pos.z, *body);
+        gateway_->send_raw_many(targets, *body);
     }
 }
 
