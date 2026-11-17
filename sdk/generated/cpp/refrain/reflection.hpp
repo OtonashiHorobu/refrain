@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 9bfa84cb449b5a93
+// Schema hash: 22ed9cba76524a0f
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
@@ -2949,6 +2949,42 @@ template <> struct custom_traits<::refrain::services::net_translator::translatio
     static constexpr auto fields = std::make_tuple(
         refrain::reflect::custom_field{"packet_id", &::refrain::services::net_translator::translation_result::packet_id},
         refrain::reflect::custom_field{"payload", &::refrain::services::net_translator::translation_result::payload});
+};
+
+/// Generated RIDL struct 'refrain::services::permissions::permission_context_entry'.
+template <> struct custom_traits<::refrain::services::permissions::permission_context_entry> {
+    static constexpr std::string_view type_name = "refrain::services::permissions::permission_context_entry";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"key", &::refrain::services::permissions::permission_context_entry::key},
+        refrain::reflect::custom_field{"value", &::refrain::services::permissions::permission_context_entry::value});
+};
+
+/// Generated RIDL struct 'refrain::services::permissions::permission_context'.
+template <> struct custom_traits<::refrain::services::permissions::permission_context> {
+    static constexpr std::string_view type_name = "refrain::services::permissions::permission_context";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"world", &::refrain::services::permissions::permission_context::world},
+        refrain::reflect::custom_field{"gamemode", &::refrain::services::permissions::permission_context::gamemode},
+        refrain::reflect::custom_field{"extra", &::refrain::services::permissions::permission_context::extra});
+};
+
+/// Generated RIDL struct 'refrain::services::permissions::subject_ref'.
+template <> struct custom_traits<::refrain::services::permissions::subject_ref> {
+    static constexpr std::string_view type_name = "refrain::services::permissions::subject_ref";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"kind", &::refrain::services::permissions::subject_ref::kind},
+        refrain::reflect::custom_field{"id", &::refrain::services::permissions::subject_ref::id},
+        refrain::reflect::custom_field{"profile_name", &::refrain::services::permissions::subject_ref::profile_name});
+};
+
+/// Generated RIDL struct 'refrain::services::permissions::permission_query'.
+template <> struct custom_traits<::refrain::services::permissions::permission_query> {
+    static constexpr std::string_view type_name = "refrain::services::permissions::permission_query";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"subject", &::refrain::services::permissions::permission_query::subject},
+        refrain::reflect::custom_field{"node", &::refrain::services::permissions::permission_query::node},
+        refrain::reflect::custom_field{"context", &::refrain::services::permissions::permission_query::context},
+        refrain::reflect::custom_field{"op_level", &::refrain::services::permissions::permission_query::op_level});
 };
 
 /// Generated RIDL struct 'refrain::services::runtime::runtime_config'.

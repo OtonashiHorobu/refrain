@@ -362,6 +362,88 @@ Lifecycle providers are notification-only.
 unbundled example. It is intentionally outside `mods/` and is not selected by
 the default gamepack; copy it into an instance mods root and bind it explicitly
 when testing.
+### Permission nodes and queries
+
+`refrain:permissions` is a `chain` service provided by the built-in
+`refrain.permissions` mod. A query names a subject, a node and an optional
+context and is answered with `allowed`, `denied` or `not_handled`; a chain
+wrapper answers `not_handled` for nodes it does not own and the built-in
+default resolver answers the rest. The default gamepack binds the built-in mod
+as the chain `base`.
+
+Nodes are dot-separated lowercase paths. A first-party feature declares its
+nodes under `refrain.<area>` (for example `refrain.command.teleport` or
+`refrain.mods.admin`); a third-party mod uses its own reverse-domain root, for
+example `com.example.mymod.home`. At least two segments are required. A
+configured rule may end in `.*` to cover a namespace and may start with `!` to
+deny, and a deny wins over every grant:
+
+```toml
+# config/permissions.toml
+[defaults]
+default = "deny"        # or "op": an operator at [op].min_level holds every node
+
+[op]
+min_level = 1
+nodes = ["refrain.mods.admin"]
+
+[grants]
+"player:069a79f4-44e9-4726-a5be-fca90e38aaf5" = ["refrain.command.*", "!refrain.command.stop"]
+"player:Notch" = ["@moderators"]
+"plugin:com.example.mymod" = ["refrain.world.edit"]
+
+[groups]
+moderators = ["refrain.permissions.admin"]
+```
+
+Rules resolve in this order: the console holds every node; a matching deny
+denies; a matching grant allows; an operator's `[op].nodes` set allows;
+`[defaults].default` decides. A grant joins a group with `@name`; groups are
+single-level in v1. Without a mounted `permissions` configuration namespace the
+resolver serves the built-in policy: the console holds every node and every
+other subject is denied, so a composition that adds the service before the
+operator writes a policy fails closed instead of granting players access.
+
+A mod declares its nodes by using them: there is no registration call, only the
+namespace convention above. To query from mod code, look the provider up
+through the sealed host table and bind the consumer helper (header-only, no
+engine symbol):
+
+```cpp
+#include <refrain/contracts/host/core.hpp>
+#include <refrain/permissions/client.hpp>
+
+// `context` is the `refrain_mod_context` passed to on_load; `host_core` stays
+// valid for the process lifetime.
+const refrain::host::core::provider host{*context->host_core,
+                                         context->host_core_self};
+const auto service = host.query_service("refrain:permissions", "");
+if (service) {
+    const auto client = refrain::permissions::client::bind(service->vtable,
+                                                           service->self);
+    const auto who = refrain::permissions::subject::player(profile_uuid,
+                                                           profile_name,
+                                                           op_level);
+    if (client.has(who, "com.example.mymod.home")) {
+        // allowed, or the service has no opinion: the caller decides its own
+        // fallback for not_handled
+    }
+    if (client.query(who, "refrain.mods.admin") ==
+        refrain::permissions::permission_result::denied) {
+        // explicitly denied
+    }
+}
+```
+
+`has()` reads `not_handled` as "maybe"; a caller that must separate "no
+opinion" from "allowed" uses `query()` directly. Queries are read-only and may
+run on any thread, so a consumer keeps the provider table for one composition
+epoch and re-queries after a hot epoch. `revision()` is a monotonic policy
+counter: a command tree or suggestion cache compares it and rebuilds when it
+changed. `reload()` re-reads the configuration file and publishes a new
+snapshot; it runs on the main thread and fails with the parser's diagnostic
+without touching the published policy.
+
 ## External native entry
 
 A native mod exports `refrain_mod_main` (or the symbol named by

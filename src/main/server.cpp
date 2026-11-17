@@ -227,7 +227,7 @@ struct default_config_file {
 /// runtime already falls back to, so writing the files changes no behaviour;
 /// it makes the defaults visible, editable and documented where the operator
 /// looks for them. The keys match what the runtime reads.
-constexpr std::array<default_config_file, 7> k_default_config_files{{
+constexpr std::array<default_config_file, 8> k_default_config_files{{
     {.name = "refrain.toml",
      .text = "# Refrain host configuration.\n"
              "\n"
@@ -302,6 +302,36 @@ constexpr std::array<default_config_file, 7> k_default_config_files{{
              "# Player uuids allowed to run /mods; an empty list allows no\n"
              "# player (the server console is always allowed).\n"
              "operators = []\n"},
+    {.name = "permissions.toml",
+     .text =
+         "# Refrain permission policy served by the built-in permission\n"
+         "# service. The server console always holds every node.\n"
+         "#\n"
+         "# A node is a dot-separated lowercase path, for example\n"
+         "# 'refrain.command.teleport'. A rule may end in '.*' to cover a\n"
+         "# namespace and may start with '!' to deny; a deny wins over a\n"
+         "# grant. Subjects are 'player:<uuid>' (a profile name is\n"
+         "# accepted as a fallback), 'entity:<uuid>' and 'plugin:<mod id>';\n"
+         "# a grant may list '@<group>' to join a group from [groups].\n"
+         "#\n"
+         "# Resolved order: console, matching deny, matching grant,\n"
+         "# [op].nodes, then [defaults].default.\n"
+         "\n"
+         "[defaults]\n"
+         "# Answer for a node no rule matched: \"deny\" or \"op\".\n"
+         "# \"op\" also treats a player at or above op.min_level as\n"
+         "# holding every node.\n"
+         "default = \"deny\"\n"
+         "\n"
+         "[op]\n"
+         "# Vanilla operator ladder level that counts as an operator.\n"
+         "min_level = 1\n"
+         "# Nodes every operator holds; \"*\" is every node.\n"
+         "nodes = [\"*\"]\n"
+         "\n"
+         "[grants]\n"
+         "\n"
+         "[groups]\n"},
     {.name = "storage.toml",
      .text = "# Refrain world storage configuration.\n"
              "\n"
@@ -1158,7 +1188,8 @@ int main(int argc, char **argv) {
             !status) {
             return report_error(status.error());
         }
-        for (const auto *name : {"runtime", "network", "world", "storage"}) {
+        for (const auto *name :
+             {"runtime", "network", "world", "storage", "permissions"}) {
             if (auto status{mount_namespace(
                     name, root / (std::string{name} + ".toml"))};
                 !status) {

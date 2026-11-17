@@ -1,6 +1,6 @@
 gamepack refrain.vanilla@26.3.0 (side=server, abi=1, auto_scan=false)
 display name: Refrain vanilla (server)
-mods: 12 (load order)
+mods: 13 (load order)
    1. refrain.content.vanilla@1.0.0
    2. refrain.data.vanilla@1.0.0 requires [refrain.content.vanilla@^1.0.0]
    3. refrain.world.vanilla@1.0.0
@@ -11,12 +11,14 @@ mods: 12 (load order)
    8. refrain.proto.vanilla@1.0.0
    9. refrain.transport.asio.tcp@1.0.0
   10. refrain.session.vanilla@1.0.0
-  11. refrain.admin.vanilla@1.0.0
-  12. refrain.server.vanilla@1.0.0
-providers: 11
+  11. refrain.permissions@1.0.0
+  12. refrain.admin.vanilla@1.0.0
+  13. refrain.server.vanilla@1.0.0
+providers: 12
   admin           -> refrain.admin.vanilla@1.0.0
   data            -> refrain.data.vanilla@1.0.0
   net_session     -> refrain.session.vanilla@1.0.0
+  permissions     [chain] base -> refrain.permissions@1.0.0
   protocol        [instanced:java_777] (default) -> refrain.proto.vanilla@1.0.0
   runtime         -> refrain.server.vanilla@1.0.0
   sim             -> refrain.sim.vanilla@1.0.0

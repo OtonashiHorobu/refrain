@@ -242,6 +242,13 @@ class store {
     [[nodiscard]] auto module(std::string_view name) const -> result<view>;
     [[nodiscard]] auto names() const -> std::vector<std::string>;
 
+    /// File the namespace was mounted from, as a copy.
+    ///
+    /// A consumer that watches the file for edits stores this once at setup:
+    /// the store is not thread-safe, and a later `mount()` may move the mount
+    /// table, so the string cannot be borrowed from it.
+    [[nodiscard]] auto path(std::string_view name) const -> result<std::string>;
+
     [[nodiscard]] auto set_bool(std::string_view name, std::string_view key,
                                 bool value, layer target = layer::user)
         -> status;

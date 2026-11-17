@@ -502,6 +502,21 @@ refrain_add_library(refrain-command ${REFRAIN_COMMAND_SOURCES})
 target_link_libraries(refrain-command PUBLIC refrain-kernel PRIVATE fmt::fmt)
 add_library(Refrain::Command ALIAS refrain-command)
 
+# --- permissions: default resolver policy and consumer helper --------------
+# The built-in `refrain.permissions` mod serves the `refrain:permissions` chain
+# contract. Its node grammar and configuration-driven policy are an ordinary
+# library so the mod, the tests and in-tree consumers share one implementation;
+# the ABI adapter itself lives with the mod. This target is not a dependency of
+# the core modules: a composition that omits the mod simply has no permission
+# service.
+file(GLOB REFRAIN_PERMISSIONS_SOURCES CONFIGURE_DEPENDS
+     "${PROJECT_SOURCE_DIR}/src/permissions/*.cpp")
+refrain_add_library(refrain-permissions ${REFRAIN_PERMISSIONS_SOURCES})
+target_link_libraries(refrain-permissions PUBLIC refrain-kernel
+                                              refrain-contracts
+                                       PRIVATE fmt::fmt)
+add_library(Refrain::Permissions ALIAS refrain-permissions)
+
 # --- simulation runtime: block registry, loaded chunks, tickets -------------
 # New src/sim files are picked up without editing this file.
 file(GLOB_RECURSE REFRAIN_SIM_SOURCES CONFIGURE_DEPENDS
@@ -636,6 +651,7 @@ target_link_libraries(refrain-first-party-mods PUBLIC refrain-kernel
                                                     refrain-sim
                                                     refrain-app
                                                     refrain-server-runtime
+                                                    refrain-permissions
                                                     refrain-protocol)
 refrain_apply_warnings(refrain-first-party-mods)
 add_library(Refrain::FirstPartyMods ALIAS refrain-first-party-mods)
@@ -858,7 +874,7 @@ if(REFRAIN_BUILD_TESTS)
                                               refrain-schema refrain-contracts
                                               refrain-archive refrain-data
                                               refrain-world refrain-sim
-                                              refrain-command
+                                              refrain-command refrain-permissions
                                               refrain-net refrain-protocol
                                               refrain-session refrain-worldgen
                                               refrain-builtin

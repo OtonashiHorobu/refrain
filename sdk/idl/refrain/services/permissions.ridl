@@ -1,0 +1,138 @@
+// SPDX-License-Identifier: MIT
+//
+// SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
+//
+// Permission service. A query asks whether one subject holds one node and is
+// answered with three states: `allowed`, `denied` or `not_handled`. A provider
+// that owns only some nodes answers `not_handled` for the rest, so a chain of
+// providers can extend the built-in resolver without replacing it. The base
+// provider of the chain is the configuration-driven default resolver; wrapper
+// providers add their own nodes in front of it.
+//
+// Queries are read-only and answer from an immutable policy snapshot, so they
+// are callable from any thread. `revision` is a monotonic change counter: a
+// consumer that caches decisions for a command tree or a suggestion list
+// compares it and rebuilds when it changed. `reload` re-reads the provider
+// configuration and publishes a new snapshot; it bumps `revision` on success
+// and must run on the main thread because it reads the configuration store.
+//
+// Node grammar, subject identity and the default policy are documented in the
+// modding guide; the contract only carries values.
+
+module refrain::services::permissions;
+version 1.0.0;
+
+import refrain::core;
+
+/// Kinds a query subject can have. `console` is the server console,
+/// `player` a connected player, `entity` a non-player entity and `plugin` a
+/// mod calling on behalf of itself.
+enum subject_kind : u32 {
+    console = 0,
+    player = 1,
+    entity = 2,
+    plugin = 3,
+}
+
+/// One key/value pair of the extensible query context.
+struct permission_context_entry {
+    /// Context key, for example `dimension_type`.
+    string key;
+    /// Context value for the key.
+    string value;
+}
+
+/// Context a rule may match. The default resolver answers globally, so v1
+/// carries the context without matching rules against it; wrapper providers
+/// and later rule sets can use it without a contract change.
+struct permission_context {
+    /// Level/dimension id, for example `minecraft:overworld`.
+    string world;
+    /// Game mode name, for example `survival`.
+    string gamemode;
+    /// Additional keys a provider understands. Duplicate keys are rejected by
+    /// consumers that match context.
+    slice<permission_context_entry> extra;
+}
+
+/// Who a query is about. `console` leaves both strings empty. A `player`
+/// carries its canonical profile uuid in `id` and its profile name in
+/// `profile_name`; an `entity` carries its uuid in `id`; a `plugin` carries
+/// its mod id in `id`.
+struct subject_ref {
+    subject_kind kind;
+    string id;
+    string profile_name;
+}
+
+/// Answer of one query. `denied` always wins over a grant; `not_handled` means
+/// the provider holds no rule for the node and the chain must continue.
+enum permission_result : u32 {
+    allowed = 0,
+    denied = 1,
+    not_handled = 2,
+}
+
+/// One permission question.
+struct permission_query {
+    subject_ref subject;
+    /// Dot-separated node, for example `refrain.command.teleport`. A node is
+    /// concrete: it has no `!` prefix and no `*` wildcard, which are rule
+    /// syntax only.
+    string node;
+    permission_context context;
+    /// Vanilla permission ladder of the subject (0..4) when the caller knows
+    /// it, zero otherwise. Only a player subject uses it: the operator rule of
+    /// the default resolver matches on this value.
+    u32 op_level;
+}
+
+/// Errors of the resolver operations that can fail. Zero is success, so the
+/// enum starts at one.
+enum permission_error : u32 {
+    invalid_argument = 1,
+    parse_error = 2,
+    not_initialized = 3,
+    unavailable = 4,
+}
+
+service permissions : 1.0.0 {
+    side = server;
+    thread = any;
+    composition = chain;
+    provides = [ "refrain:permissions" ];
+    requires = [ "refrain:core>=1.0.0" ];
+    capabilities = [ "default-resolver", "config-policy", "revision" ];
+
+    /// Answer one query from the provider's current policy snapshot. Read-only
+    /// and safe to call from any thread. A malformed query (wrong struct size,
+    /// unknown subject kind, invalid node) is answered `denied`: the resolver
+    /// fails closed instead of granting on input it cannot evaluate.
+    #[thread(any)]
+    fn query(in permission_query query) -> permission_result;
+
+    /// Answer the way the base resolver would on its own, ignoring wrapper
+    /// grants. The chain falls back to this answer when every link answers
+    /// `not_handled`; the base provider answers both calls from the same
+    /// policy.
+    #[thread(any)]
+    fn default_result(in permission_query query) -> permission_result;
+
+    /// Convenience predicate: true unless the query is denied, so `allowed`
+    /// and `not_handled` both read as "maybe" for a caller that layers its own
+    /// fallback.
+    #[thread(any)]
+    fn has(in permission_query query) -> bool;
+
+    /// Monotonic change counter of the published policy snapshot. It advances
+    /// when the configuration is reloaded successfully; a consumer compares it
+    /// against the value its cache was built with.
+    #[thread(any)]
+    fn revision() -> u64;
+
+    /// Re-read the provider configuration, publish it and return the new
+    /// revision. On failure the current snapshot and revision stay in effect
+    /// and the error names the offending file or key.
+    #[thread(main)] #[can_fail]
+    fn reload() -> result<u64, permission_error>;
+}

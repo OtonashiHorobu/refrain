@@ -489,6 +489,24 @@ name = "x"
         }
     };
 
+    "config/store reports the mounted file path"_test = [] {
+        config::store store;
+        const auto path{std::string{REFRAIN_SOURCE_DIR} +
+                        "/test/fixtures/gamepack/data-only.toml"};
+        expect(static_cast<bool>(store.mount({.name = "game", .path = path})));
+        const auto mounted{store.path("game")};
+        expect(static_cast<bool>(mounted));
+        if (mounted) {
+            expect(*mounted == path);
+            expect(store.path("game").value() == path);
+        }
+        const auto missing{store.path("missing")};
+        expect(!missing);
+        if (!missing) {
+            expect(missing.error().code == refrain::error_code::not_found);
+        }
+    };
+
     "config/default origin is memory"_test = [] {
         const auto parsed{document::parse_text("x = 1")};
         expect(static_cast<bool>(parsed));
