@@ -109,6 +109,21 @@ constexpr std::array<light_face, 6> step_face{{
     return static_cast<light_face>(static_cast<std::uint8_t>(face) ^ 1U);
 }
 
+/// The four horizontal side offsets of a cell, in the order west, east, north,
+/// south.
+constexpr std::array<std::pair<std::int32_t, std::int32_t>, 4> side_offsets{{
+    {-1, 0},
+    {1, 0},
+    {0, -1},
+    {0, 1},
+}};
+
+/// Direction of the step that enters a cell from the matching `side_offsets`
+/// neighbour: the west neighbour steps east (+x, face 0), the east neighbour
+/// steps west (face 1), the north neighbour steps south (+z, face 4) and the
+/// south neighbour steps north (face 5).
+constexpr std::array<std::size_t, 4> side_directions{{0, 1, 4, 5}};
+
 /// Bounds indices of the two axes perpendicular to one face: (u, v) into
 /// `{min_x, min_y, min_z, max_x, max_y, max_z}`.
 constexpr std::array<std::pair<std::size_t, std::size_t>, 6> face_axes{{
@@ -700,13 +715,8 @@ struct light_engine::impl {
                              block_node(column, local_x, lowest, local_z),
                              max_light_level);
         }
-        constexpr std::array<std::pair<std::int32_t, std::int32_t>, 4> offsets{{
-            {-1, 0},
-            {1, 0},
-            {0, -1},
-            {0, 1},
-        }};
-        for (const auto &[dx, dz] : offsets) {
+        for (std::size_t side{0}; side < side_offsets.size(); ++side) {
+            const auto [dx, dz]{side_offsets[side]};
             const auto neighbour_x{local_x + dx};
             const auto neighbour_z{local_z + dz};
             if (neighbour_x < 0 || neighbour_x >= section_edge ||
@@ -721,6 +731,18 @@ struct light_engine::impl {
             for (auto y{std::max(floor_y - 1, bottom)};
                  y >= std::max(neighbour_floor, bottom); --y) {
                 const auto node{block_node(column, local_x, y, local_z)};
+                const auto source{
+                    block_node(column, neighbour_x, y, neighbour_z)};
+                // Every other propagation step tests the two face shapes
+                // before it moves light across an edge; this seeding writes
+                // the receiving cell directly, so it must run the same test.
+                // The source cell is a sky source: its floor is below this
+                // level.
+                if (shape_occludes(block_state_at(source.x, source.y, source.z),
+                                   block_state_at(node.x, node.y, node.z),
+                                   side_directions[side])) {
+                    continue;
+                }
                 const auto candidate{static_cast<std::int32_t>(
                     max_light_level - opacity(node.x, node.y, node.z))};
                 if (candidate > 0) {
@@ -808,10 +830,6 @@ struct light_engine::impl {
                     {.x = inside[2].x, .y = inside[2].y, .z = inside[2].z - 1},
                     {.x = inside[3].x, .y = inside[3].y, .z = inside[3].z + 1},
                 }};
-                // Direction from the outside cell into the column: +x, -x, +z,
-                // -z for the four borders.
-                constexpr std::array<std::size_t, 4> border_directions{
-                    {0, 1, 4, 5}};
                 for (std::size_t side{0}; side < inside.size(); ++side) {
                     if (find_column(section_coord(outside[side].x),
                                     section_coord(outside[side].z)) ==
@@ -827,7 +845,7 @@ struct light_engine::impl {
                                            outside[side].z),
                             block_state_at(inside[side].x, inside[side].y,
                                            inside[side].z),
-                            border_directions[side])) {
+                            side_directions[side])) {
                         continue;
                     }
                     const auto &node{inside[side]};

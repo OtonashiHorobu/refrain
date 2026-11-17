@@ -220,18 +220,44 @@ void write_columns(
     add("minecraft:oak_leaves", 0, 1);
     add("minecraft:water", 0, 1);
 
-    // A bottom slab: not solid enough to be opaque, with a full bottom face
-    // shape. The reference shape has an empty top face (the open upper half),
-    // so the slab cell itself still sees the sky while the edge below it is
-    // closed.
-    sim::block_light_shape slab{};
-    sim::block_light_box full{};
-    full.bounds = {0.0, 0.0, 0.0, 1.0, 1.0, 1.0};
-    slab.faces[static_cast<std::size_t>(sim::light_face::down)].push_back(full);
-    const auto *slab_shape = table.append_shape(std::move(slab));
+    // Slabs are not solid enough to be opaque. The reference block light
+    // report gives a bottom slab a full down face, an empty up face and
+    // lower-half side faces; a top slab mirrors it. The side faces matter:
+    // two slabs of opposite halves left and right of the same cell edge cover
+    // it together, so no light may step across that edge.
+    const auto slab_box = [](double low, double high) {
+        sim::block_light_box box{};
+        box.bounds = {0.0, low, 0.0, 1.0, high, 1.0};
+        return box;
+    };
+    const auto full = slab_box(0.0, 1.0);
+    const auto lower_half = slab_box(0.0, 0.5);
+    const auto upper_half = slab_box(0.5, 1.0);
+    sim::block_light_shape bottom_slab{};
+    bottom_slab.faces[static_cast<std::size_t>(sim::light_face::down)]
+        .push_back(full);
+    sim::block_light_shape top_slab{};
+    top_slab.faces[static_cast<std::size_t>(sim::light_face::up)].push_back(
+        full);
+    constexpr std::array<sim::light_face, 4> sides{{
+        sim::light_face::north,
+        sim::light_face::south,
+        sim::light_face::west,
+        sim::light_face::east,
+    }};
+    for (const auto side : sides) {
+        bottom_slab.faces[static_cast<std::size_t>(side)].push_back(lower_half);
+        top_slab.faces[static_cast<std::size_t>(side)].push_back(upper_half);
+    }
+    const auto *bottom_slab_shape = table.append_shape(std::move(bottom_slab));
+    const auto *top_slab_shape = table.append_shape(std::move(top_slab));
     table.insert("minecraft:smooth_stone_slab[type=bottom,waterlogged=false]",
+                 sim::block_light_property{.emission = 0,
+                                           .dampening = 0,
+                                           .shape = bottom_slab_shape});
+    table.insert("minecraft:smooth_stone_slab[type=top,waterlogged=false]",
                  sim::block_light_property{
-                     .emission = 0, .dampening = 0, .shape = slab_shape});
+                     .emission = 0, .dampening = 0, .shape = top_slab_shape});
     add("minecraft:smooth_stone_slab[type=double,waterlogged=false]", 0, 15);
     return table;
 }
@@ -695,6 +721,125 @@ suite<"sim/light"> light_tests = [] {
         expect(eq(static_cast<int>(block_light(*world, 8, 67, 8)), 11));
     };
 
+    "a top slab beside a bottom slab stays dark on every light path"_test = [] {
+        // Column A: a top slab at y=65 under a stone roof at y=66. The slab
+        // cell is below A's sky floor, so it only receives light from the side.
+        // Column N: stone at y=64 and a bottom slab at y=65 with open air
+        // above, so N's slab cell is a level-15 sky source. When both cells
+        // share a chunk, the initial pass seeds A's slab cell from N's source
+        // cell directly. The two slab side faces cover the shared edge, so no
+        // sky light may step across it: A's slab cell and the cell below it
+        // stay dark.
+        //
+        // The surrounding cells are solid stone from y=64 to y=66, so the slab
+        // pair is the only path a level can take into A's cell.
+        constexpr std::string_view top_slab{
+            "minecraft:smooth_stone_slab[type=top,waterlogged=false]"};
+        constexpr std::string_view bottom_slab{
+            "minecraft:smooth_stone_slab[type=bottom,waterlogged=false]"};
+        const auto fill_wall = [](std::vector<block_override> &overrides,
+                                  std::int32_t chunk_x, std::int32_t chunk_z) {
+            for (auto z{0}; z < 16; ++z) {
+                for (auto x{0}; x < 16; ++x) {
+                    for (auto y{64}; y <= 66; ++y) {
+                        overrides.push_back(
+                            stone_at(chunk_x * 16 + x, y, chunk_z * 16 + z));
+                    }
+                }
+            }
+        };
+        const auto add_slab_pair = [&top_slab, &bottom_slab](
+                                       std::vector<block_override> &overrides,
+                                       std::int32_t slab_x,
+                                       std::int32_t neighbour_x,
+                                       std::int32_t z) {
+            // A: air below the slab, the slab itself, the stone roof above.
+            overrides.push_back(air_at(slab_x, 64, z));
+            overrides.push_back(
+                block_override{.x = slab_x, .y = 65, .z = z, .key = top_slab});
+            overrides.push_back(stone_at(slab_x, 66, z));
+            // N: stone below the slab, the slab itself, open air above.
+            overrides.push_back(stone_at(neighbour_x, 64, z));
+            overrides.push_back(block_override{
+                .x = neighbour_x, .y = 65, .z = z, .key = bottom_slab});
+            overrides.push_back(air_at(neighbour_x, 66, z));
+        };
+        const auto cell_sky = [](const sim::world &world, std::int32_t x,
+                                 std::int32_t z) {
+            return std::pair{static_cast<int>(sky(world, x, 65, z)),
+                             static_cast<int>(sky(world, x, 64, z))};
+        };
+
+        // Same chunk: the two cells are (8,8) and (9,8) of chunk (0,0).
+        world_fixture fixture{};
+        std::vector<std::pair<world::chunk_pos, storage::chunk>> columns{};
+        std::vector<block_override> overrides{};
+        fill_wall(overrides, 0, 0);
+        add_slab_pair(overrides, 8, 9, 8);
+        columns.emplace_back(world::chunk_pos{0, 0}, make_column(overrides));
+        write_columns(fixture, columns);
+        auto world{open_world(fixture)};
+        expect(world.has_value());
+        if (!world) {
+            return;
+        }
+        expect(world->ensure_chunk(world::chunk_pos{0, 0}).has_value());
+        // N's slab cell is the column's lowest sky source; A's slab cell is
+        // below the roof and dark.
+        expect(eq(static_cast<int>(sky(*world, 9, 65, 8)), 15));
+        const auto same_chunk{cell_sky(*world, 8, 8)};
+        expect(same_chunk == std::pair{0, 0})
+            << ("same-chunk seeding crossed the slab faces: " +
+                std::to_string(same_chunk.first) + "/" +
+                std::to_string(same_chunk.second));
+        // The incremental path must agree with the initial pass: opening the
+        // edge lets the light in, closing it again puts the cells back to dark.
+        const auto air{world->registry().intern("minecraft:air")};
+        const auto top_slab_id{world->registry().intern(std::string{top_slab})};
+        expect(world->set_block(sim::block_pos{8, 65, 8}, air).has_value());
+        expect(cell_sky(*world, 8, 8) == std::pair{14, 13});
+        expect(world->set_block(sim::block_pos{8, 65, 8}, top_slab_id)
+                   .has_value());
+        expect(cell_sky(*world, 8, 8) == std::pair{0, 0})
+            << "incremental relight disagrees with the initial pass";
+
+        // Cross border: the same pair split between chunk (0,0) (slab cell at
+        // local x=15) and chunk (1,0) (source cell at local x=0). The initial
+        // pass of one chunk cannot see the other column's floor, so the step
+        // goes through the shape-checked border path instead.
+        world_fixture cross_fixture{};
+        std::vector<std::pair<world::chunk_pos, storage::chunk>>
+            cross_columns{};
+        std::vector<block_override> left_overrides{};
+        fill_wall(left_overrides, 0, 0);
+        add_slab_pair(left_overrides, 15, 16, 8);
+        std::vector<block_override> right_overrides{};
+        fill_wall(right_overrides, 1, 0);
+        cross_columns.emplace_back(world::chunk_pos{0, 0},
+                                   make_column(left_overrides));
+        cross_columns.emplace_back(world::chunk_pos{1, 0},
+                                   make_column(right_overrides));
+        write_columns(cross_fixture, cross_columns);
+        for (const bool source_first : {false, true}) {
+            auto cross_world{open_world(cross_fixture)};
+            expect(cross_world.has_value());
+            if (!cross_world) {
+                return;
+            }
+            const auto slab_chunk{world::chunk_pos{0, 0}};
+            const auto source_chunk{world::chunk_pos{1, 0}};
+            const auto first{source_first ? source_chunk : slab_chunk};
+            const auto second{source_first ? slab_chunk : source_chunk};
+            expect(cross_world->ensure_chunk(first).has_value());
+            expect(cross_world->ensure_chunk(second).has_value());
+            const auto cross{cell_sky(*cross_world, 15, 8)};
+            expect(cross == std::pair{0, 0})
+                << ("cross-border light crossed the slab faces: " +
+                    std::to_string(cross.first) + "/" +
+                    std::to_string(cross.second));
+        }
+    };
+
     "a state the table does not carry is opaque and emits nothing"_test = [] {
         world_fixture fixture{};
         std::vector<block_override> overrides{};
@@ -709,7 +854,7 @@ suite<"sim/light"> light_tests = [] {
             return;
         }
         expect(world->ensure_chunk(world::chunk_pos{0, 0}).has_value());
-        expect(eq(static_cast<int>(world->block_light().size()), 10));
+        expect(eq(static_cast<int>(world->block_light().size()), 11));
         // The fallback is opaque: the cell above the unknown block is still a
         // sky source, but no sky light passes into the block, and the state
         // emits nothing.
