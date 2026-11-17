@@ -2,7 +2,7 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 
-// Player projection read cost (Google Benchmark 1.9.5).
+// Player projection read cost (Google Benchmark 1.10.0).
 //
 // The runtime reads the whole player table once per tick through the world
 // port: `player_count()` plus one indexed `player_at()` per record. This
