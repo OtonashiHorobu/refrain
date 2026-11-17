@@ -33,6 +33,16 @@ constexpr std::size_t max_batch_packets{8};
 
 namespace play_cb = refrain::protocol::current::play::clientbound;
 
+/// True when `(x, z)` is inside the square of `radius` around a centre.
+[[nodiscard]] auto inside_view(std::int32_t x, std::int32_t z,
+                               std::int32_t center_x, std::int32_t center_z,
+                               std::int32_t radius) -> bool {
+    return std::abs(x - center_x) <= radius && std::abs(z - center_z) <= radius;
+}
+
+/// A column position as the streamer's sets key it.
+using column_key = std::pair<std::int32_t, std::int32_t>;
+
 /// The static entity-type registry of the protocol. Unlike the registries the
 /// server sends during configuration, entity type ids are built into the
 /// client, so they come from the tracked vanilla tables.
@@ -261,10 +271,13 @@ void chunk_streamer::chunk_ready(std::int32_t x, std::int32_t z) {
         // column, including the ones whose viewport no longer contains it.
         // Clearing the marker here is what lets a player who walked away and
         // came back stream the column from the world instead of waiting for
-        // an answer that already arrived.
+        // an answer that already arrived. A look-ahead column keeps its
+        // prefetch entry, because the entry is the residency claim while the
+        // column waits outside the viewport, but it is no longer requested.
         stream.requested.erase({x, z});
         stream.attempts.erase({x, z});
         stream.abandoned.erase({x, z});
+        stream.prefetch_asked.erase({x, z});
         const auto dx{x - stream.center_x};
         const auto dz{z - stream.center_z};
         if (std::max(std::abs(dx), std::abs(dz)) > stream.radius) {
@@ -332,6 +345,158 @@ auto chunk_streamer::viewports() const -> std::vector<viewport> {
                   return left.connection < right.connection;
               });
     return views;
+}
+
+void chunk_streamer::update_prefetch(
+    std::uint64_t connection, stream_state &stream,
+    const refrain::session::chunk_tracker &views) {
+    const auto estimate{views.lookahead(connection)};
+    // The band is only a claim on generation and residency: the packet queue
+    // is rebuilt from the accepted viewport alone, so an entry here can never
+    // reach the client.
+    if (!estimate.active) {
+        stream.prefetch.clear();
+        stream.prefetch_asked.clear();
+        stream.prefetch_radius = -1;
+        return;
+    }
+    const auto same_band{stream.prefetch_center_x == estimate.chunk_x &&
+                         stream.prefetch_center_z == estimate.chunk_z &&
+                         stream.prefetch_radius == stream.radius};
+    if (!same_band) {
+        stream.prefetch.clear();
+        const auto radius{stream.radius};
+        const auto add = [&stream, radius](std::int32_t x, std::int32_t z) {
+            if (inside_view(x, z, stream.center_x, stream.center_z, radius)) {
+                return;
+            }
+            stream.prefetch.insert({x, z});
+        };
+        // The predicted square minus the accepted square, walked as two
+        // side bands. Its size is at most twice the predicted edge, so a
+        // look-ahead cannot turn into a second viewport.
+        for (std::int32_t x{estimate.chunk_x - radius};
+             x <= estimate.chunk_x + radius; ++x) {
+            if (x >= stream.center_x - radius &&
+                x <= stream.center_x + radius) {
+                continue;
+            }
+            for (std::int32_t z{estimate.chunk_z - radius};
+                 z <= estimate.chunk_z + radius; ++z) {
+                add(x, z);
+            }
+        }
+        for (std::int32_t z{estimate.chunk_z - radius};
+             z <= estimate.chunk_z + radius; ++z) {
+            if (z >= stream.center_z - radius &&
+                z <= stream.center_z + radius) {
+                continue;
+            }
+            for (std::int32_t x{stream.center_x - radius};
+                 x <= stream.center_x + radius; ++x) {
+                add(x, z);
+            }
+        }
+        // Bound what one connection may claim, nearest to the predicted
+        // centre first, then by position so the set is deterministic.
+        if (stream.prefetch.size() > max_prefetch_columns) {
+            std::vector<column_key> ordered{stream.prefetch.begin(),
+                                            stream.prefetch.end()};
+            const auto distance = [&estimate](const column_key &column) {
+                return std::max(std::abs(column.first - estimate.chunk_x),
+                                std::abs(column.second - estimate.chunk_z));
+            };
+            std::sort(
+                ordered.begin(), ordered.end(),
+                [&distance](const column_key &left, const column_key &right) {
+                    if (distance(left) != distance(right)) {
+                        return distance(left) < distance(right);
+                    }
+                    return std::tie(left.first, left.second) <
+                           std::tie(right.first, right.second);
+                });
+            ordered.resize(max_prefetch_columns);
+            stream.prefetch =
+                std::set<column_key>{ordered.begin(), ordered.end()};
+        }
+        stream.prefetch_center_x = estimate.chunk_x;
+        stream.prefetch_center_z = estimate.chunk_z;
+        stream.prefetch_radius = stream.radius;
+        // Asked entries outside the new band are dropped: the generator was
+        // asked once and the answer stays in the world, but a column the
+        // estimate no longer wants must not keep a residency claim.
+        for (auto entry = stream.prefetch_asked.begin();
+             entry != stream.prefetch_asked.end();) {
+            if (stream.prefetch.contains(*entry)) {
+                ++entry;
+            } else {
+                entry = stream.prefetch_asked.erase(entry);
+            }
+        }
+    }
+    if (!requester_) {
+        return;
+    }
+    if (stream.prefetch_asked.size() >= stream.prefetch.size()) {
+        return;
+    }
+    std::size_t requested{0};
+    for (const auto &column : stream.prefetch) {
+        if (requested >= max_prefetch_requests_per_tick) {
+            break;
+        }
+        if (stream.prefetch_asked.contains(column)) {
+            continue;
+        }
+        ++requested;
+        const auto position{
+            refrain::sim::chunk_pos{.x = column.first, .z = column.second}};
+        if (source_.world != nullptr &&
+            source_.world->column_loaded(position)) {
+            // The world already holds the column; it only needs the residency
+            // claim, and asking the generator again would regenerate it.
+            stream.prefetch_asked.insert(column);
+            continue;
+        }
+        // A refused request means the tile is already wanted or in flight, or
+        // the generation queue is full. Either way the column is marked asked:
+        // the answer arrives on its own when the tile was in flight, and a
+        // queue-full refusal is retried when the band is rebuilt, not once per
+        // tick for as long as the estimate lasts.
+        static_cast<void>(requester_(column.first, column.second));
+        stream.prefetch_asked.insert(column);
+    }
+}
+
+auto chunk_streamer::prefetch_columns() const
+    -> std::vector<refrain::sim::chunk_pos> {
+    std::vector<std::uint64_t> connections{};
+    connections.reserve(streams_.size());
+    for (const auto &[connection, stream] : streams_) {
+        static_cast<void>(stream);
+        connections.push_back(connection);
+    }
+    // Hash-map order is not an order: a capped set has to be chosen from a
+    // state-derived sequence, and the connection id is the only stable key.
+    std::sort(connections.begin(), connections.end());
+    std::vector<refrain::sim::chunk_pos> columns{};
+    for (const auto connection : connections) {
+        const auto found{streams_.find(connection)};
+        if (found == streams_.end()) {
+            continue;
+        }
+        for (const auto &column : found->second.prefetch) {
+            if (columns.size() >= max_total_prefetch_columns) {
+                break;
+            }
+            columns.push_back(
+                refrain::sim::chunk_pos{.x = column.first, .z = column.second});
+        }
+        if (columns.size() >= max_total_prefetch_columns) {
+            break;
+        }
+    }
+    return columns;
 }
 
 auto chunk_streamer::drain(std::uint64_t connection, stream_state &stream,
@@ -524,6 +689,13 @@ void chunk_streamer::tick(refrain::session::chunk_tracker &views) {
         }
         stream.center_dirty = stream.center_dirty || center_changed;
         stream.reported = false;
+    }
+    // Recompute every moving connection's look-ahead band. This runs on the
+    // accepted centres the tracker recorded from validated movement, never on
+    // a client-reported velocity, and it only asks for generation: the drain
+    // below still sends exactly the accepted viewports.
+    for (auto &[connection, stream] : streams_) {
+        update_prefetch(connection, stream, views);
     }
     if (!streams_.empty()) {
         // The reusable bodies are the ones the largest viewport holds, so the

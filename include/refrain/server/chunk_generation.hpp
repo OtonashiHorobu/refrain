@@ -12,6 +12,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -70,6 +71,22 @@ rank_columns_by_distance(std::span<const refrain::world::chunk_pos> wanted,
 farthest_column(std::span<const refrain::world::chunk_pos> wanted,
                 std::span<const refrain::world::chunk_pos> centres)
     -> refrain::world::chunk_pos;
+
+/// Orders `wanted` tiles by how soon a player at one of `accepted` centres
+/// needs them, then by how soon a player heading for one of `lookahead`
+/// centres needs them, then by the tile corner.
+///
+/// The two centre lists are ranked lexicographically, not merged: a tile the
+/// accepted viewport already needs beats every tile only the look-ahead needs,
+/// so a prediction can never starve the viewport the client is standing in.
+/// The look-ahead list is a secondary key only, which is what makes movement
+/// prediction a priority hint instead of a second viewport.
+[[nodiscard]] auto
+rank_tiles_by_distance(std::span<const refrain::world::chunk_pos> wanted,
+                       std::span<const refrain::world::chunk_pos> accepted,
+                       std::span<const refrain::world::chunk_pos> lookahead,
+                       std::int32_t tile_size)
+    -> std::vector<refrain::world::chunk_pos>;
 
 /// Tuning for the credit controller.
 struct admission_limits {
@@ -159,6 +176,22 @@ class chunk_generation {
         /// chunks is served, so cross-border feature writes land in the
         /// chunks a client receives. The tile is also the unit the priority
         /// queue and the admission credits count.
+        ///
+        /// A smaller tile shortens the wait for the first chunks of a join
+        /// but costs fill and decoration work per served chunk: the fill and
+        /// decoration ring is `(edge + 2) ^ 2 / edge ^ 2` times the served
+        /// area, and the structure-start scan reaches eight chunks past it.
+        /// Measured per served chunk on the development host, edge eight costs
+        /// about 0.53 of the edge-four cost and 0.24 of the edge-two cost.
+        ///
+        /// The production default stays eight for a second reason: with the
+        /// dimension's own biomes the served content is not edge neutral,
+        /// because a ring chunk's feature placement reads the terrain outside
+        /// the tile and a smaller edge brings a smaller decorated ring. Only a
+        /// fixed biome makes both edges produce the same chunk. Changing the
+        /// default therefore needs a generator change that decorates the ring
+        /// of the served square rather than of the tile, not only a latency
+        /// measurement.
         std::int32_t tile_size{8};
         /// Logical CPUs the generation workers pin to; empty leaves the OS
         /// default. Pinning away from the simulation and IO cores is a hint,
@@ -191,8 +224,18 @@ class chunk_generation {
 
     /// Centres the dispatch ranks wanted tiles by, nearest first. The
     /// simulation thread refreshes them from the player positions each tick.
+    ///
+    /// The second list is the look-ahead centre of every moving player: it is
+    /// a lower priority than the accepted positions, so a prediction can
+    /// never starve the viewport the client is in. A call with one list
+    /// clears the look-ahead centres.
     void
     set_priority_centres(std::span<const refrain::world::chunk_pos> centres);
+
+    /// Same, with the look-ahead centres as the secondary priority.
+    void
+    set_priority_centres(std::span<const refrain::world::chunk_pos> centres,
+                         std::span<const refrain::world::chunk_pos> lookahead);
 
     /// Run the credit controller for one second of samples. Logs one info line
     /// per change and nothing otherwise.
@@ -210,11 +253,32 @@ class chunk_generation {
     [[nodiscard]] auto take_results() -> std::vector<
         std::pair<refrain::world::chunk_pos, refrain::world::chunk>>;
 
+    /// Same, but at most `max_columns` columns; the rest stay queued, ordered
+    /// by position, for the next call. A limit of zero takes nothing.
+    ///
+    /// The caller uses this to spread one finished tile over several ticks: a
+    /// tile delivers up to `tile_size * tile_size` columns at once and every
+    /// adoption runs the column decode, the entity spawn and the initial
+    /// light, which is the tick spike a joining client pays for. The queue is
+    /// bounded by the task credits plus the columns already finished, so a
+    /// slow adopter applies backpressure to admission instead of growing
+    /// memory.
+    [[nodiscard]] auto take_results(std::size_t max_columns) -> std::vector<
+        std::pair<refrain::world::chunk_pos, refrain::world::chunk>>;
+
     /// Take every tile whose task failed since the last call, ordered by the
     /// tile position. A failure produces no columns; the caller forgets the
     /// tile's columns so the streamer can request the position again instead of
     /// waiting for an answer that will never arrive.
     [[nodiscard]] auto take_failures() -> std::vector<generation_failure>;
+
+    /// Columns of finished tiles the service may have queued for adoption
+    /// before admission stops flattening more. The service adopts a few per
+    /// tick, so without this bound a fast generator and a slow adopter could
+    /// hold every column a whole credit window produced in memory. At the
+    /// bound the finished tiles stay in flight: their admission credit is not
+    /// released, so generation pauses instead of growing the queue.
+    static constexpr std::size_t max_ready_columns{8 * 64};
 
     /// Edge in chunks of the square one task produces. Failures name the
     /// minimum corner of such a square, so a caller expands it by this edge.
@@ -256,8 +320,13 @@ class chunk_generation {
     /// minimum corner; a tile is never admitted twice.
     std::set<std::pair<std::int32_t, std::int32_t>> active_{};
     std::vector<refrain::world::chunk_pos> centres_{};
+    std::vector<refrain::world::chunk_pos> lookahead_centres_{};
     std::deque<refrain::world::chunk_pos> work_{};
     std::vector<tile_result> finished_{};
+    /// Columns of finished tiles, ordered by position, that `take_results`
+    /// has not handed out yet.
+    std::map<std::pair<std::int32_t, std::int32_t>, refrain::world::chunk>
+        ready_{};
     /// Tiles whose task failed since the last `take_failures()`.
     std::vector<generation_failure> failed_{};
     std::size_t in_flight_{0};

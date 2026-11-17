@@ -113,19 +113,19 @@ void chunk_service::tick(world_port &world,
                          refrain::session::chunk_tracker &views,
                          std::uint64_t tick_start_ns) {
     if (generation_) {
-        for (auto &[pos, column] : generation_->take_results()) {
-            auto inserted{world.chunk_insert(pos, std::move(column))};
-            if (!inserted) {
-                log_chunk_gen.debug("failed to insert chunk ({}, {}): {}",
-                                    pos.x, pos.z, inserted.error().message);
-                continue;
-            }
-            if (streamer_) {
-                streamer_->chunk_ready(pos.x, pos.z);
-            }
+        // One finished tile is up to 64 columns. Take only what this tick's
+        // adoption budget can absorb so the columns already finished stay
+        // queued, ordered by position, instead of arriving as one spike.
+        const auto room{max_adopted_columns_per_tick > pending_adoption_.size()
+                            ? max_adopted_columns_per_tick -
+                                  pending_adoption_.size()
+                            : std::size_t{0}};
+        if (room > 0) {
+            queue_generated(generation_->take_results(room));
         }
         apply_generation_failures();
     }
+    adopt_generated(world);
     if (streamer_) {
         streamer_->tick(views);
     }
@@ -136,14 +136,26 @@ void chunk_service::tick(world_port &world,
     // Distance priority: the nearest player column wins the credits, so a
     // walking player's viewport fills before terrain nobody is looking at.
     // Only connected players have a viewport, which is what the session's
-    // records are; the console player has none and needs no priority.
+    // records are; the console player has none and needs no priority. The
+    // look-ahead centre of a moving player is a lower priority than every
+    // accepted position, so a prediction cannot starve the viewport the
+    // client is standing in.
     std::vector<refrain::world::chunk_pos> centres{};
+    std::vector<refrain::world::chunk_pos> lookahead{};
     centres.reserve(players.size());
-    players.for_each([&centres](const refrain::session::player &player) {
+    lookahead.reserve(players.size());
+    players.for_each([this, &views, &centres,
+                      &lookahead](const refrain::session::player &player) {
         centres.push_back(
             refrain::world::chunk_pos{chunk_of(player.x), chunk_of(player.z)});
+        const auto estimate{views.lookahead(player.connection)};
+        if (!estimate.active) {
+            return;
+        }
+        lookahead.push_back(
+            refrain::world::chunk_pos{estimate.chunk_x, estimate.chunk_z});
     });
-    generation_->set_priority_centres(centres);
+    generation_->set_priority_centres(centres, lookahead);
     // Hard pause: a client backlog above the bound means the stream cannot
     // drain what is already queued, so generating more would only grow it.
     if (gateway_ != nullptr &&
@@ -200,6 +212,48 @@ void chunk_service::broadcast_updates(world_port &world) {
     }
 }
 
+void chunk_service::queue_generated(
+    std::vector<std::pair<refrain::sim::chunk_pos, refrain::sim::storage_chunk>>
+        columns) {
+    for (auto &[pos, column] : columns) {
+        pending_adoption_.insert_or_assign(pos, std::move(column));
+    }
+}
+
+auto chunk_service::adopt_generated(world_port &world) -> std::size_t {
+    std::size_t adopted{0};
+    // The budget bounds attempts, not only successful inserts: a batch of
+    // columns the world rejects must not turn into an unbounded loop.
+    for (std::size_t attempted{0};
+         attempted < max_adopted_columns_per_tick && !pending_adoption_.empty();
+         ++attempted) {
+        auto first{pending_adoption_.begin()};
+        const auto pos{first->first};
+        auto inserted{world.chunk_insert(pos, std::move(first->second))};
+        pending_adoption_.erase(first);
+        if (!inserted) {
+            // A column that is already loaded is still an answer: it may have
+            // arrived through another path, for instance a spawn fill, while
+            // the task was in flight. The streamer must learn it is ready, or
+            // it would wait for an answer that already came.
+            if (inserted.error().code == error_code::already_exists) {
+                if (streamer_) {
+                    streamer_->chunk_ready(pos.x, pos.z);
+                }
+                continue;
+            }
+            log_chunk_gen.debug("failed to insert chunk ({}, {}): {}", pos.x,
+                                pos.z, inserted.error().message);
+            continue;
+        }
+        ++adopted;
+        if (streamer_) {
+            streamer_->chunk_ready(pos.x, pos.z);
+        }
+    }
+    return adopted;
+}
+
 void chunk_service::apply_generation_failures() {
     if (!generation_) {
         return;
@@ -244,9 +298,17 @@ void chunk_service::enforce_residency(world_port &world) {
     // still exact, so a still camera costs nothing beyond the sweep below.
     auto views{streamer_ ? streamer_->viewports()
                          : std::vector<chunk_streamer::viewport>{}};
-    if (views != viewports_) {
+    auto prefetch{streamer_ ? streamer_->prefetch_columns()
+                            : std::vector<sim::chunk_pos>{}};
+    if (views != viewports_ || prefetch != prefetch_columns_) {
         viewports_ = std::move(views);
-        // The resident set the viewports ask for: the union of their squares.
+        prefetch_columns_ = std::move(prefetch);
+        // The resident set the viewports ask for: the union of their squares,
+        // plus the look-ahead band of every moving player. The band is small
+        // and short lived (the streamer drops it on a turn or a stop), so it
+        // cannot grow the resident set beyond one extra edge; it exists so a
+        // generated look-ahead column is not written to the store and read
+        // back before the player reaches it.
         std::set<sim::chunk_pos, chunk_order> wanted{};
         for (const auto &view : viewports_) {
             for (std::int32_t dz{-view.radius}; dz <= view.radius; ++dz) {
@@ -255,6 +317,9 @@ void chunk_service::enforce_residency(world_port &world) {
                         sim::chunk_pos{view.chunk_x + dx, view.chunk_z + dz});
                 }
             }
+        }
+        for (const auto &pos : prefetch_columns_) {
+            wanted.insert(pos);
         }
         // Release first, then pin: a column that left one viewport but is
         // inside another keeps exactly one ticket, and every step walks a

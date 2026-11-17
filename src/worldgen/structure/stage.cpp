@@ -554,10 +554,7 @@ auto generate_structure_starts(const chunk_pos &chunk,
     if (context.data == nullptr) {
         return starts;
     }
-    for (const auto &[set_id, set] : context.data->sets) {
-        if (context.set_filter && !context.set_filter(set_id)) {
-            continue;
-        }
+    const auto consider = [&](const structure_set &set) {
         bool set_candidate = false;
         if (set.random_spread.has_value()) {
             set_candidate = set.random_spread->is_structure_chunk(
@@ -568,7 +565,7 @@ auto generate_structure_starts(const chunk_pos &chunk,
             set_candidate = std::ranges::contains(positions, chunk);
         }
         if (!set_candidate) {
-            continue;
+            return;
         }
         for (const auto &candidate : set.weighted_order(context.seed, chunk)) {
             const auto found =
@@ -580,6 +577,24 @@ auto generate_structure_starts(const chunk_pos &chunk,
                 starts.push_back(std::move(*start));
                 break;
             }
+        }
+    };
+    if (!context.sets.empty()) {
+        for (const structure_set *set : context.sets) {
+            if (set == nullptr) {
+                continue;
+            }
+            if (context.set_filter && !context.set_filter(set->id)) {
+                continue;
+            }
+            consider(*set);
+        }
+    } else {
+        for (const auto &[set_id, set] : context.data->sets) {
+            if (context.set_filter && !context.set_filter(set_id)) {
+                continue;
+            }
+            consider(set);
         }
     }
     return starts;

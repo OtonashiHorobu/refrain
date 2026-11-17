@@ -148,6 +148,157 @@ suite<"worldgen/structure-set"> structure_set_tests = [] {
     };
 };
 
+suite<"worldgen/structure-set-applicability">
+    structure_set_applicability_tests = [] {
+        const auto structure = [](std::string_view id, std::string_view biome) {
+            return structure::structure_document{
+                .id = std::string{id},
+                .type = "minecraft:desert_pyramid",
+                .step = "surface_structures",
+                .biome_ids = {std::string{biome}},
+            };
+        };
+        const auto set =
+            [](std::string_view id,
+               std::vector<structure::weighted_structure> entries) {
+                return structure::structure_set{
+                    .id = std::string{id},
+                    .structures = std::move(entries),
+                    .random_spread =
+                        random_spread_placement{
+                            .spacing = 1,
+                            .separation = 0,
+                            .salt = 0,
+                            .spread = spread_type::linear,
+                            .frequency = 1.0F,
+                        },
+                };
+            };
+
+        "a set is dropped when none of its structures names a possible biome"_test =
+            [&] {
+                structure::structure_data_set data;
+                data.structures.emplace(
+                    "test:plains",
+                    structure("test:plains", "minecraft:plains"));
+                data.structures.emplace(
+                    "test:nether",
+                    structure("test:nether", "minecraft:nether_wastes"));
+                data.sets.emplace(
+                    "test:plains_set",
+                    set("test:plains_set",
+                        {{.structure = "test:plains", .weight = 1}}));
+                data.sets.emplace(
+                    "test:nether_set",
+                    set("test:nether_set",
+                        {{.structure = "test:nether", .weight = 1}}));
+                const std::vector<std::string> possible{"minecraft:plains"};
+                const auto applicable =
+                    structure::applicable_structure_sets(data, possible);
+                expect(applicable.size() == 1U);
+                if (!applicable.empty()) {
+                    expect(applicable.front()->id == "test:plains_set");
+                }
+            };
+
+        "a set stays whole when one of its entries is possible"_test = [&] {
+            structure::structure_data_set data;
+            data.structures.emplace(
+                "test:nether",
+                structure("test:nether", "minecraft:nether_wastes"));
+            data.structures.emplace(
+                "test:plains", structure("test:plains", "minecraft:plains"));
+            data.sets.emplace(
+                "test:mixed",
+                set("test:mixed", {{.structure = "test:nether", .weight = 2},
+                                   {.structure = "test:plains", .weight = 1}}));
+            const std::vector<std::string> possible{"minecraft:plains",
+                                                    "minecraft:desert"};
+            const auto applicable =
+                structure::applicable_structure_sets(data, possible);
+            expect(applicable.size() == 1U);
+            if (!applicable.empty()) {
+                // The weighted draw must still see the entry the dimension
+                // cannot place: it consumes a draw and falls through.
+                expect(applicable.front()->structures.size() == 2U);
+            }
+        };
+
+        "a set naming a structure document that is missing is dropped"_test =
+            [&] {
+                structure::structure_data_set data;
+                data.sets.emplace(
+                    "test:missing",
+                    set("test:missing",
+                        {{.structure = "test:missing", .weight = 1}}));
+                const std::vector<std::string> possible{"minecraft:plains"};
+                expect(structure::applicable_structure_sets(data, possible)
+                           .empty());
+            };
+
+        "the applicable sets keep the data set order"_test = [&] {
+            structure::structure_data_set data;
+            data.structures.emplace("test:a",
+                                    structure("test:a", "minecraft:plains"));
+            data.sets.emplace(
+                "test:first",
+                set("test:first", {{.structure = "test:a", .weight = 1}}));
+            data.sets.emplace(
+                "test:second",
+                set("test:second", {{.structure = "test:a", .weight = 1}}));
+            data.sets.emplace(
+                "test:third",
+                set("test:third", {{.structure = "test:a", .weight = 1}}));
+            const std::vector<std::string> possible{"minecraft:plains"};
+            const auto applicable =
+                structure::applicable_structure_sets(data, possible);
+            std::vector<std::string> expected;
+            for (const auto &entry : data.sets) {
+                expected.push_back(entry.second.id);
+            }
+            expect(applicable.size() == expected.size());
+            for (std::size_t index = 0;
+                 index < std::min(applicable.size(), expected.size());
+                 ++index) {
+                expect(applicable[index]->id == expected[index]);
+            }
+        };
+
+        "the starts stage evaluates the listed sets only"_test = [&] {
+            structure::structure_data_set data;
+            data.structures.emplace("test:a",
+                                    structure("test:a", "minecraft:plains"));
+            data.structures.emplace("test:b",
+                                    structure("test:b", "minecraft:plains"));
+            data.sets.emplace(
+                "test:a_set",
+                set("test:a_set", {{.structure = "test:a", .weight = 1}}));
+            data.sets.emplace(
+                "test:b_set",
+                set("test:b_set", {{.structure = "test:b", .weight = 1}}));
+            const std::vector<const structure::structure_set *> listed{
+                &data.sets.at("test:b_set")};
+            const structure::structure_start_context context{
+                .seed = 12345,
+                .data = &data,
+                .min_y = -64,
+                .world_height = 384,
+                .sea_level = 63,
+                .fixed_biome = true,
+                .biome_at = [](jint, jint, jint) { return std::uint16_t{0}; },
+                .biome_name = [](std::uint16_t) { return "minecraft:plains"; },
+                .height_at = [](jint, jint, heightmap_kind) { return 70; },
+                .sets = listed,
+            };
+            const auto starts = structure::generate_structure_starts(
+                chunk_pos{.x = 0, .z = 0}, context);
+            expect(starts.size() == 1U);
+            if (!starts.empty()) {
+                expect(starts.front().structure == "test:b");
+            }
+        };
+    };
+
 suite<"worldgen/structure-start"> structure_start_tests = [] {
     "bbox intersection, chunk proximity and reference caps"_test = [] {
         const structure::structure_bbox bounds{.min_x = 10,

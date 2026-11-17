@@ -9,13 +9,20 @@
 // tick p99, the queue depth and the resident memory.
 //
 // The service also owns the chunk residency policy. A column is resident while
-// it is inside some connection's viewport or holds a ticket (spawn and forced
-// columns); every other loaded column is unloaded at the end of the tick after
-// its edits are flushed. The bound is therefore the union of the active
-// viewport squares plus the ticket set, and it follows the view distances
-// instead of growing with the distance a player has travelled. Unloading
-// iterates the resident columns in ascending position order, so a replay
-// unloads the same set at the same ticks.
+// it is inside some connection's viewport, is the look-ahead band of a moving
+// player, or holds a ticket (spawn and forced columns); every other loaded
+// column is unloaded at the end of the tick after its edits are flushed. The
+// bound is therefore the union of the active viewport squares plus the small
+// prefetch band plus the ticket set, and it follows the view distances instead
+// of growing with the distance a player has travelled. Unloading iterates the
+// resident columns in ascending position order, so a replay unloads the same
+// set at the same ticks.
+//
+// A finished generation tile is adopted over several ticks. Each adoption runs
+// the column decode, the entity spawn and the column's initial light, so
+// inserting a whole tile at once is a tick spike, and a joining client already
+// waits for a whole tile to generate. The adoption budget spreads the
+// remaining cost without changing the order the world applies the columns.
 
 #pragma once
 
@@ -32,6 +39,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <set>
@@ -65,6 +73,23 @@ class chunk_service {
     void attach(play_gateway &gateway, chunk_packet_source source) {
         attach(gateway, source, chunk_streamer::backlog_limits{});
     }
+
+    /// Columns one tick may adopt from the generator. A finished tile of the
+    /// production edge delivers 64 columns at once, and one adoption spends
+    /// the column decode, its entity spawn and its initial light; the budget
+    /// is the measured share of a 50 ms tick that keeps a tile burst from
+    /// turning into a long tick while a joining client still sees its first
+    /// ring within a few ticks. The remainder stays queued, in position order,
+    /// for the next tick.
+    static constexpr std::size_t max_adopted_columns_per_tick{8};
+
+    /// Queue generated columns for adoption. The tick drains the queue through
+    /// the adoption budget; the generator result path calls this, and a test
+    /// can feed a synthetic tile result through the same seam.
+    void queue_generated(
+        std::vector<
+            std::pair<refrain::sim::chunk_pos, refrain::sim::storage_chunk>>
+            columns);
 
     /// Bind the source of the entities a streamed column carries. The streamer
     /// announces them after the column packet and removes them when the column
@@ -130,6 +155,11 @@ class chunk_service {
     }
 
   private:
+    /// Adopt at most `max_adopted_columns_per_tick` queued columns into the
+    /// world and tell the streamer each one arrived. Returns the number
+    /// adopted.
+    auto adopt_generated(world_port &world) -> std::size_t;
+
     /// Tell the streamer about every tile whose task failed, so the columns are
     /// requested again instead of staying in flight forever.
     void apply_generation_failures();
@@ -165,6 +195,15 @@ class chunk_service {
     /// The viewport set the pins were last synchronised with. Pins are only
     /// rebuilt when this changes, so a still camera costs nothing per tick.
     std::vector<chunk_streamer::viewport> viewports_{};
+    /// Look-ahead band the pins were last synchronised with. Rebuilding the
+    /// pin set for a moved band costs the same walk as a moved viewport, so it
+    /// runs on the same change check.
+    std::vector<sim::chunk_pos> prefetch_columns_{};
+    /// Generated columns that did not fit the previous tick's adoption budget,
+    /// by position so the world applies them in the same order as a full
+    /// drain.
+    std::map<sim::chunk_pos, sim::storage_chunk, chunk_order>
+        pending_adoption_{};
     /// Columns pinned on behalf of the current viewports, one ticket each.
     std::set<sim::chunk_pos, chunk_order> view_tickets_{};
     /// Dirty columns one residency pass may flush. A batch larger than this

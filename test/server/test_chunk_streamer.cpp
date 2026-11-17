@@ -18,6 +18,7 @@
 #include <cstring>
 #include <memory>
 #include <optional>
+#include <set>
 #include <span>
 #include <string>
 #include <thread>
@@ -154,6 +155,19 @@ class recording_gateway final : public server::play_gateway {
                 }
                 out.push_back({dx, dz});
             }
+        }
+    }
+    return out;
+}
+
+/// The columns of one viewport, as a set of absolute coordinates.
+[[nodiscard]] auto viewport_set(std::int32_t center_x, std::int32_t center_z,
+                                std::int32_t radius)
+    -> std::set<std::pair<std::int32_t, std::int32_t>> {
+    std::set<std::pair<std::int32_t, std::int32_t>> out{};
+    for (std::int32_t dz{-radius}; dz <= radius; ++dz) {
+        for (std::int32_t dx{-radius}; dx <= radius; ++dx) {
+            out.insert({center_x + dx, center_z + dz});
         }
     }
     return out;
@@ -554,6 +568,157 @@ suite<"server/chunk-streamer"> chunk_streamer_tests = [] {
         streamer.tick(views);
         expect(gateway.batches.size() == 1U);
         expect(gateway.raw.empty());
+    };
+};
+
+suite<"server/chunk-streamer-prefetch"> chunk_streamer_prefetch_tests = [] {
+    "server/chunk stream pre-generates ahead and sends only the accepted viewport"_test =
+        [] {
+            recording_gateway gateway;
+            gateway.active = {7};
+            auto state{std::make_shared<fake_encoder>()};
+            server::chunk_streamer streamer{gateway,
+                                            server::chunk_packet_source{}};
+            streamer.set_encoder(make_encoder(state));
+            std::vector<coordinate> requested{};
+            streamer.set_chunk_requester(
+                [&requested](std::int32_t x, std::int32_t z) {
+                    requested.push_back({x, z});
+                    return true;
+                });
+            session::chunk_tracker views;
+            static_cast<void>(views.update(7, 0, 0, 1));
+            streamer.tick(views);
+            expect(streamed(gateway, 7).size() == 9U);
+            expect(requested.empty());
+
+            // Two accepted centre changes in the same direction. The tracker
+            // timestamps them from the same clock the runtime uses, so the
+            // spacing has to be real time like a walking player crossing the
+            // border every so often.
+            const auto step{[&views, &streamer](std::int32_t center_x) {
+                std::this_thread::sleep_for(std::chrono::milliseconds{120});
+                static_cast<void>(views.update(7, center_x, 0, 1));
+                streamer.tick(views);
+            }};
+            step(1);
+            expect(requested.empty());
+            step(2);
+
+            // The look-ahead centre is two chunks ahead (the estimate clamps
+            // to the tile ahead), so the band is x = 4 and 5 across the view
+            // height: pre-generation, never packets.
+            expect(requested.size() == 6U);
+            for (const auto &position : requested) {
+                expect(position.x == 4 || position.x == 5);
+                expect(position.z >= -1 && position.z <= 1);
+            }
+            expect(!streamer.prefetch_columns().empty());
+            expect(streamer.prefetch_columns().size() == 6U);
+            for (const auto &position : streamer.prefetch_columns()) {
+                const auto dx{position.x - 2};
+                const auto dz{position.z - 0};
+                expect(std::max(std::abs(dx), std::abs(dz)) > 1)
+                    << "a prefetched column is inside the accepted viewport";
+            }
+
+            // Nothing outside the accepted viewport reached the client: every
+            // batch before the last move belongs to an accepted viewport, and
+            // the last batch is exactly the viewport around (2, 0).
+            const auto batches_before{gateway.batches.size()};
+            std::this_thread::sleep_for(std::chrono::milliseconds{120});
+            static_cast<void>(views.update(7, 3, 0, 1));
+            streamer.tick(views);
+            std::set<std::pair<std::int32_t, std::int32_t>> last_batch{};
+            for (std::size_t index{batches_before};
+                 index < gateway.batches.size(); ++index) {
+                for (const auto &body : gateway.batches[index].packets) {
+                    coordinate value{};
+                    if (body.size() == sizeof(value)) {
+                        std::memcpy(&value, body.data(), sizeof(value));
+                    }
+                    last_batch.insert({value.x, value.z});
+                }
+            }
+            // The viewport around (2, 0) was already sent; the move to (3, 0)
+            // adds only its new column, and no prefetched column is in it.
+            const std::set<std::pair<std::int32_t, std::int32_t>> added{
+                {4, -1}, {4, 0}, {4, 1}};
+            expect(last_batch == added);
+            for (const auto &position : requested) {
+                expect(position.x > 3)
+                    << "a look-ahead request was made inside the viewport";
+            }
+            // The prefetched columns are outside the accepted viewport.
+            for (const auto &position : streamer.prefetch_columns()) {
+                expect(viewport_set(3, 0, 1).contains(
+                           {position.x, position.z}) == false);
+            }
+        };
+
+    "server/chunk stream stops prefetching when the player reverses"_test = [] {
+        recording_gateway gateway;
+        gateway.active = {8};
+        auto state{std::make_shared<fake_encoder>()};
+        server::chunk_streamer streamer{gateway, server::chunk_packet_source{}};
+        streamer.set_encoder(make_encoder(state));
+        std::vector<coordinate> requested{};
+        streamer.set_chunk_requester(
+            [&requested](std::int32_t x, std::int32_t z) {
+                requested.push_back({x, z});
+                return true;
+            });
+        session::chunk_tracker views;
+        static_cast<void>(views.update(8, 0, 0, 1));
+        streamer.tick(views);
+        const auto step{[&views, &streamer](std::int32_t center_x) {
+            std::this_thread::sleep_for(std::chrono::milliseconds{120});
+            static_cast<void>(views.update(8, center_x, 0, 1));
+            streamer.tick(views);
+        }};
+        step(1);
+        step(2);
+        const auto forward_requests{requested.size()};
+        expect(!streamer.prefetch_columns().empty());
+
+        // One accepted change against the heading collapses the band on that
+        // tick: the old direction is not requested again.
+        step(1);
+        expect(streamer.prefetch_columns().empty());
+        const auto after_reverse{requested.size()};
+        streamer.tick(views);
+        streamer.tick(views);
+        expect(requested.size() == after_reverse);
+        expect(forward_requests > 0U);
+    };
+
+    "server/chunk stream keeps a jittering centre from prefetching"_test = [] {
+        recording_gateway gateway;
+        gateway.active = {9};
+        auto state{std::make_shared<fake_encoder>()};
+        server::chunk_streamer streamer{gateway, server::chunk_packet_source{}};
+        streamer.set_encoder(make_encoder(state));
+        std::vector<coordinate> requested{};
+        streamer.set_chunk_requester(
+            [&requested](std::int32_t x, std::int32_t z) {
+                requested.push_back({x, z});
+                return true;
+            });
+        session::chunk_tracker views;
+        static_cast<void>(views.update(9, 0, 0, 1));
+        streamer.tick(views);
+        const auto step{[&views, &streamer](std::int32_t center_x) {
+            std::this_thread::sleep_for(std::chrono::milliseconds{120});
+            static_cast<void>(views.update(9, center_x, 0, 1));
+            streamer.tick(views);
+        }};
+        // A player crossing one border back and forth: every change reverses
+        // the previous one, so the heading never reaches two steps.
+        step(1);
+        step(0);
+        step(1);
+        expect(requested.empty());
+        expect(streamer.prefetch_columns().empty());
     };
 };
 
