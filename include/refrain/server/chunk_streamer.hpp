@@ -275,9 +275,22 @@ class chunk_streamer {
     /// Encoded chunk bodies survive a tick so a second player with the same
     /// viewport does not encode the chunk again. Eviction is least-recently
     /// used: a chunk that keeps being served stays resident.
+    ///
+    /// A body is only reusable while the column it was encoded from has not
+    /// changed. `revision` is the world revision the encoder read and
+    /// `world_backed` records whether a revision could be read at all, so a
+    /// hit is revalidated before it is served instead of trusting the key: a
+    /// block edit (or a column that left memory and came back) must produce a
+    /// new body, never the pre-edit one.
     struct cache_entry {
         std::vector<std::byte> body{};
         std::uint64_t last_use{0};
+        /// World revision of the column at encode time.
+        std::uint64_t revision{0};
+        /// True when the body was encoded from a world column and `revision`
+        /// is meaningful. A test encoder that does not read the world stores
+        /// no revision and its bodies are not revalidated.
+        bool world_backed{false};
     };
 
     /// The largest view distance the game's configuration accepts (the
@@ -317,6 +330,25 @@ class chunk_streamer {
                std::int64_t deadline_ns) -> bool;
 
     void evict_least_recently_used();
+
+    /// True when `entry` no longer describes the current column at `(x, z)`.
+    ///
+    /// A body is stale when the world revision moved after it was encoded, or
+    /// when the column is no longer loaded: a reloaded column restarts its
+    /// runtime revision at zero but can carry edits the body predates, so a
+    /// revision comparison alone cannot revalidate it. A stale entry is
+    /// dropped and the column is encoded again from the world.
+    [[nodiscard]] auto cache_entry_stale(const cache_entry &entry,
+                                         std::int32_t x, std::int32_t z) const
+        -> bool;
+
+    /// Build a cache entry for a freshly encoded body, recording the world
+    /// revision the body was encoded from. The revision is read in the same
+    /// single-threaded simulation pass as the encode, so no edit can land
+    /// between the two reads.
+    [[nodiscard]] auto make_cache_entry(std::vector<std::byte> body,
+                                        std::int32_t x, std::int32_t z)
+        -> cache_entry;
 
     [[nodiscard]] auto encode(refrain::sim::chunk_pos pos)
         -> result<std::vector<std::byte>>;
