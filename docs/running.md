@@ -75,10 +75,10 @@ data/
     <namespace>/tags/block/**     block tags
     <namespace>/tags/worldgen/**  biome and structure tags
   templates/              structure templates, <namespace>/structure/**.nbt
-  reports/                the climate, default-state and block light
-                          reports, when copied
-  tables.rvtb             tracked block, item, registry and light tables, when
-                          staged
+  reports/                the climate, default-state, block light and block
+                          mining reports, when copied
+  tables.rvtb             tracked block, item, registry, light, mining and tool
+                          tables, when staged
   protocol_registry.json  tracked protocol registry, when staged
 ```
 

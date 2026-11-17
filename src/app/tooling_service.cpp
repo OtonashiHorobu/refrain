@@ -106,9 +106,9 @@ auto run_vanilla_import(const vanilla_import_options &options) -> int {
               << result->states << " state(s), " << result->presets
               << " biome preset(s), " << result->registries << " registr(ies), "
               << result->items << " item(s), " << result->light_shapes
-              << " light shape(s) -> " << result->tables_path << " ("
-              << result->tables_bytes << " bytes, blake3 "
-              << result->tables_digest << ")\n";
+              << " light shape(s), " << result->tools << " tool(s) -> "
+              << result->tables_path << " (" << result->tables_bytes
+              << " bytes, blake3 " << result->tables_digest << ")\n";
     std::cout << "  manifest: " << result->manifest_path << '\n';
     return 0;
 }
@@ -558,6 +558,7 @@ auto run_vanilla_info(const vanilla_info_options &options) -> int {
     std::cout << "  registries: " << info.registries << '\n';
     std::cout << "  items: " << info.items << '\n';
     std::cout << "  light shapes: " << info.light_shapes << '\n';
+    std::cout << "  tools: " << info.tools << '\n';
     return 0;
 }
 

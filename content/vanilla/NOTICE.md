@@ -4,14 +4,16 @@ This directory contains data derived from Minecraft Java Edition 26.3.
 
 Tracked in the repository:
 
-- `tables.rvtb` — compiled block-state, biome-preset, registry, item and light
-  tables.
+- `tables.rvtb` — compiled block-state, biome-preset, registry, item, light,
+  mining and tool tables.
 - `reports/biome_parameters/` — climate parameter points that select the
   overworld and nether biomes.
 - `reports/block_defaults/` — default property values for blocks whose default
   state carries properties.
 - `reports/block_light/` — per-state light emission, sky-light dampening and
   occlusion shapes.
+- `reports/block_mining/` — per-block destroy time, tool requirement and drop
+  tier, and per-tool item rules, speeds and limits.
 - `packets.json` — the packet catalog for protocol 777.
 - `protocol_registry.json` — registry entries, ids and the order the server
   sends to clients.

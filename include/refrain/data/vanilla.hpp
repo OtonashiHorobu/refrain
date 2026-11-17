@@ -101,6 +101,99 @@ struct item_spec {
     std::uint32_t max_damage{0};
 };
 
+/// Tool family of a mining tool. The numeric value is the bit position a
+/// block's tool mask and direct-correct mask use. `none` marks an item that
+/// carries a tool component without mining rules.
+enum class tool_type : std::uint8_t {
+    pickaxe = 0,
+    axe = 1,
+    shovel = 2,
+    hoe = 3,
+    shears = 4,
+    sword = 5,
+    none = 0xFF,
+};
+
+/// Bit of `type` in a block tool mask. `none` has no bit.
+[[nodiscard]] constexpr auto tool_type_bit(tool_type type) -> std::uint8_t {
+    return type == tool_type::none ? 0U
+                                   : static_cast<std::uint8_t>(
+                                         1U << static_cast<std::uint8_t>(type));
+}
+
+/// Mask of every tool-family bit.
+inline constexpr std::uint8_t all_tool_type_bits =
+    static_cast<std::uint8_t>(tool_type_bit(tool_type::sword) << 1U) - 1U;
+
+/// Tool material of a tiered tool. `none` marks shears, swords and items
+/// without tiered rules.
+enum class tool_material : std::uint8_t {
+    none = 0,
+    wood = 1,
+    stone = 2,
+    copper = 3,
+    iron = 4,
+    diamond = 5,
+    netherite = 6,
+    gold = 7,
+};
+
+/// Harvest level an entry without tiered rules carries.
+inline constexpr std::uint8_t harvest_level_none = 0xFF;
+
+/// Highest tool-material harvest level the table stores.
+inline constexpr std::uint8_t max_harvest_level = 3;
+
+/// The block requires a correct tool for drops.
+inline constexpr std::uint8_t block_mining_requires_correct_tool = 1U;
+/// The block is air.
+inline constexpr std::uint8_t block_mining_air = 2U;
+/// The block is a liquid block.
+inline constexpr std::uint8_t block_mining_fluid = 4U;
+
+/// Mining behaviour of one block.
+///
+/// The report compresses the reference's tool rules: a tiered family mines at
+/// one speed and yields drops down to one harvest threshold, while shears and
+/// swords carry their speed and drop answer on the block side. The extractor
+/// proves the compression against the game for every tool and block pair.
+struct block_mining_spec {
+    /// Destroy time the reference caches on every state of the block; `-1`
+    /// means unbreakable.
+    float hardness{0.0F};
+    /// Mining speed of shears on the block.
+    float shears_speed{1.0F};
+    /// Mining speed of a sword on the block.
+    float sword_speed{1.0F};
+    /// Bits of `block_mining_requires_correct_tool`, `block_mining_air` and
+    /// `block_mining_fluid`.
+    std::uint8_t flags{0};
+    /// Tool families that mine the block efficiently, as `tool_type` bits.
+    std::uint8_t tool_mask{0};
+    /// Lowest tool-material harvest level that yields drops.
+    std::uint8_t needed_tier{0};
+    /// Tool families that yield drops without a tier threshold, as
+    /// `tool_type` bits; only shears and swords can appear.
+    std::uint8_t direct_correct{0};
+};
+
+/// One item that carries a tool component.
+struct tool_mining_spec {
+    std::string name{};
+    tool_type type{tool_type::none};
+    tool_material material{tool_material::none};
+    /// Harvest level of `material`, or `harvest_level_none` for an entry
+    /// without tiered rules.
+    std::uint8_t harvest_level{harvest_level_none};
+    /// Mining speed of a tiered family on the blocks it mines efficiently.
+    float tier_speed{1.0F};
+    float default_mining_speed{1.0F};
+    std::uint16_t damage_per_block{0};
+    std::uint16_t max_stack_size{default_item_stack_size};
+    std::uint32_t max_damage{0};
+    bool can_destroy_blocks_in_creative{true};
+};
+
 /// Highest light level a state can emit or dampen.
 inline constexpr std::uint8_t max_light_level = 15;
 
@@ -152,6 +245,12 @@ struct vanilla_spec {
     /// light sections and the runtime falls back to the documented defaults.
     std::vector<light_shape_spec> light_shapes{};
     std::vector<block_light_spec> block_lights{};
+    /// Per-block mining records, aligned with `blocks`, and the tool table.
+    /// Both are empty when the source reports carry no mining data; the
+    /// container then omits the mining sections and the runtime falls back to
+    /// the documented defaults.
+    std::vector<block_mining_spec> block_minings{};
+    std::vector<tool_mining_spec> tools{};
 };
 
 /// Serializes `spec` into an RVTB v1 file.
@@ -179,6 +278,7 @@ struct vanilla_table_info {
     std::uint32_t registries{0};
     std::uint32_t items{0};
     std::uint32_t light_shapes{0};
+    std::uint32_t tools{0};
 };
 
 /// One block record.
@@ -227,6 +327,52 @@ struct light_box_view {
 /// The box counts of one light shape's six faces.
 struct light_shape_view {
     std::array<std::uint16_t, light_shape_faces> face_boxes{};
+};
+
+/// Mining behaviour of one block as stored in the container.
+struct block_mining_view {
+    /// Destroy time; `-1` means unbreakable.
+    float hardness{-1.0F};
+    /// Mining speed of shears on the block.
+    float shears_speed{1.0F};
+    /// Mining speed of a sword on the block.
+    float sword_speed{1.0F};
+    /// `block_mining_*` flag bits.
+    std::uint8_t flags{0};
+    /// Tool families that mine the block efficiently.
+    std::uint8_t tool_mask{0};
+    /// Lowest tool-material harvest level that yields drops.
+    std::uint8_t needed_tier{0};
+    /// Tool families that yield drops without a tier threshold.
+    std::uint8_t direct_correct{0};
+
+    [[nodiscard]] auto requires_correct_tool_for_drops() const noexcept
+        -> bool {
+        return (flags & block_mining_requires_correct_tool) != 0;
+    }
+    [[nodiscard]] auto is_air() const noexcept -> bool {
+        return (flags & block_mining_air) != 0;
+    }
+    [[nodiscard]] auto is_fluid() const noexcept -> bool {
+        return (flags & block_mining_fluid) != 0;
+    }
+    [[nodiscard]] auto unbreakable() const noexcept -> bool {
+        return hardness < 0.0F;
+    }
+};
+
+/// One tool item as stored in the container.
+struct tool_mining_view {
+    std::string_view name{};
+    tool_type type{tool_type::none};
+    tool_material material{tool_material::none};
+    std::uint8_t harvest_level{harvest_level_none};
+    float tier_speed{1.0F};
+    float default_mining_speed{1.0F};
+    std::uint16_t damage_per_block{0};
+    std::uint16_t max_stack_size{0};
+    std::uint32_t max_damage{0};
+    bool can_destroy_blocks_in_creative{true};
 };
 
 /// Light behaviour of one state as stored in the container.
@@ -350,6 +496,25 @@ class vanilla_tables {
     [[nodiscard]] auto light_box(std::uint32_t shape, std::uint8_t face,
                                  std::uint16_t index) const -> light_box_view;
 
+    /// Whether the container carries mining data. A container imported without
+    /// the block mining report does not, and the runtime treats every block as
+    /// unbreakable rather than mining it with a guessed speed.
+    [[nodiscard]] auto has_mining() const noexcept -> bool {
+        return have_mining_;
+    }
+    /// Mining record of one dense block, in the container's block order.
+    [[nodiscard]] auto block_mining_at(std::uint16_t block) const
+        -> block_mining_view;
+    /// Tool items in the container, sorted by name. The table is empty when
+    /// the container carries no mining data.
+    [[nodiscard]] auto tool_count() const noexcept -> std::uint32_t {
+        return info_.tools;
+    }
+    [[nodiscard]] auto tool_at(std::uint32_t index) const -> tool_mining_view;
+    /// Binary search over the name-sorted tool records.
+    [[nodiscard]] auto find_tool(std::string_view name) const
+        -> std::optional<std::uint32_t>;
+
   private:
     struct section {
         std::uint32_t offset{0};
@@ -373,9 +538,12 @@ class vanilla_tables {
     section items_{};
     section light_states_{};
     section light_shapes_section_{};
+    section mining_{};
+    section tools_section_{};
     section section_table_{};
     vanilla_table_info info_{};
     bool have_light_{false};
+    bool have_mining_{false};
     std::uint32_t light_shapes_{0};
     std::uint32_t light_boxes_{0};
 
@@ -396,6 +564,9 @@ struct vanilla_reports {
     /// The `block_light/light.json` report, empty when the reports directory
     /// carries none. A container imported without it has no light sections.
     std::string block_light_json{};
+    /// The `block_mining/mining.json` report, empty when the reports directory
+    /// carries none. A container imported without it has no mining sections.
+    std::string block_mining_json{};
 };
 
 /// Converts the report documents into a container. Ordering and validation
@@ -423,10 +594,12 @@ struct vanilla_import_result {
     std::uint32_t registries{0};
     std::uint32_t items{0};
     std::uint32_t light_shapes{0};
+    std::uint32_t tools{0};
 };
 
 /// Reads `blocks.json`, `biome_parameters/minecraft/*.json`,
-/// `registries.json` and `minecraft/components/item/*.json` from
+/// `registries.json`, `minecraft/components/item/*.json` and, when present,
+/// `block_light/light.json` and `block_mining/mining.json` from
 /// `options.reports`, writes `tables.rvtb` and
 /// `MANIFEST.json` into `options.out`, and returns their hashes.
 [[nodiscard]] auto import_vanilla_reports(const vanilla_import_options &options)

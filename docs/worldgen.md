@@ -160,6 +160,60 @@ report - falls back to the documented default of opaque and emitting nothing;
 it is never guessed from a block name. The report and the container are covered
 by the notice in `content/vanilla/`.
 
+## Block mining report
+
+Mining behaviour is block and item code, not a datapack document: the destroy
+time a state caches, whether a correct tool is required for drops, which tool
+families mine a block efficiently, the harvest tier it needs, and the rule
+list of every item's tool component. The repository ships the derived report
+under `content/vanilla/<version>/reports/block_mining/` and compiles it into
+the tracked table container:
+
+```text
+reports/block_mining/
+  mining.json     per-block mining records, per-tool item records and rules
+  MANIFEST.json   game/data version, counts, report digest, server jar digest
+```
+
+`mining.json` lists one row per block - the destroy time, the
+correct-tool-for-drops flag, the tool families that mine it efficiently, the
+harvest tier its drops need and the shears and sword speeds - and one record
+per item that carries a tool component: its family, material, tier speed,
+damage per block, stack limit, durability and ordered rules. The report also
+carries the block tags those rules reference, and it compresses the rule list
+into one tier speed per family and one per-block speed for shears and swords;
+the probe re-evaluates the game's own speed and drop calls for every tool and
+block pair and aborts if the compressed answer differs from the game.
+
+Regenerate the report from the server jar you own, after the data generator
+wrote its reports:
+
+```bash
+tools/block/extract.sh /path/to/server.jar generated/reports
+```
+
+The script unpacks the bundler jar, binds the vanilla datapack tags and item
+components of the jar, runs `tools/block/MiningProbe.java` against the block
+and item registries and packs the result with `tools/block/pack_report.py`;
+`pack_report.py --check content/vanilla/<version>/reports/block_mining`
+verifies the tracked copy against its manifest without a jar. Import the
+tracked tables with the report next to the data generator output, as for the
+block light report:
+
+```bash
+build/Release/bin/refrain-tools vanilla import \
+    -r generated/reports -o /tmp/refrain-tables --force
+cp /tmp/refrain-tables/tables.rvtb content/vanilla/<version>/
+cp -r generated/reports/block_mining content/vanilla/<version>/reports/
+```
+
+The container carries one mining record per block and one tool record per item
+with a tool component. A block or item the table does not carry - a modded
+block, or a container imported without the report - falls back to the
+documented default: the block is unbreakable and the item has no tool
+component. The fallback is never guessed from a name. The report and the
+container are covered by the notice in `content/vanilla/`.
+
 ## Dimensions
 
 `dimension_profile_for(dimension_kind)` supplies the fixed parameters of the
