@@ -12,12 +12,16 @@
 
 #include <windows.h>
 
+#include <dbghelp.h>
+
 #include <atomic>
 #include <charconv>
 #include <cstddef>
 #include <cstdlib>
+#include <cstring>
 #include <limits>
 #include <string>
+#include <string_view>
 
 namespace refrain::platform {
 
@@ -27,6 +31,81 @@ fault_callback g_callback{nullptr};
 void *g_context{nullptr};
 LPTOP_LEVEL_EXCEPTION_FILTER g_previous_filter{nullptr};
 std::atomic<bool> g_installed{false};
+
+/// Native minidump fallback used when no Crashpad handler is attached. The
+/// directory is prepared by `set_fallback_dump_directory()` (startup context);
+/// the fault handler only builds the file name and calls dbghelp, so it never
+/// allocates through the C++ runtime.
+constexpr std::size_t max_dump_directory{1024};
+wchar_t g_dump_directory[max_dump_directory + 1]{};
+std::atomic<bool> g_dump_enabled{false};
+HMODULE g_dbghelp{nullptr};
+
+using minidump_write_dump_fn = BOOL(WINAPI *)(
+    HANDLE, DWORD, HANDLE, MINIDUMP_TYPE, const PMINIDUMP_EXCEPTION_INFORMATION,
+    const PMINIDUMP_USER_STREAM_INFORMATION,
+    const PMINIDUMP_CALLBACK_INFORMATION);
+minidump_write_dump_fn g_minidump_write_dump{nullptr};
+
+[[nodiscard]] auto append_text(wchar_t *out, std::size_t capacity,
+                               std::size_t at, const wchar_t *text) noexcept
+    -> std::size_t {
+    while (*text != L'\0' && at + 1 < capacity) {
+        out[at++] = *text++;
+    }
+    return at;
+}
+
+[[nodiscard]] auto append_hex(wchar_t *out, std::size_t capacity,
+                              std::size_t at, unsigned long long value) noexcept
+    -> std::size_t {
+    wchar_t digits[16]{};
+    std::size_t count{0};
+    do {
+        digits[count++] = L"0123456789abcdef"[value & 0xFULL];
+        value >>= 4U;
+    } while (value != 0 && count < 16);
+    while (count > 0 && at + 1 < capacity) {
+        out[at++] = digits[--count];
+    }
+    return at;
+}
+
+/// Write one minidump named `refrain-<pid>-<ticks>.dmp` into the configured
+/// directory. Runs in the unhandled-exception filter: the process is already
+/// terminating, so a failure here is silently ignored and the marker callback
+/// still records the fault.
+void write_fallback_minidump(EXCEPTION_POINTERS *info) noexcept {
+    if (info == nullptr || !g_dump_enabled.load(std::memory_order_acquire) ||
+        g_minidump_write_dump == nullptr) {
+        return;
+    }
+    constexpr std::size_t capacity{max_dump_directory + 64};
+    wchar_t path[capacity]{};
+    std::size_t at{append_text(path, capacity, 0, g_dump_directory)};
+    at = append_text(path, capacity, at, L"refrain-");
+    at = append_hex(path, capacity, at, ::GetCurrentProcessId());
+    at = append_text(path, capacity, at, L"-");
+    at = append_hex(path, capacity, at, ::GetTickCount64());
+    at = append_text(path, capacity, at, L".dmp");
+    path[at] = L'\0';
+
+    const HANDLE file{::CreateFileW(path, GENERIC_WRITE, 0, nullptr,
+                                    CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL,
+                                    nullptr)};
+    if (file == INVALID_HANDLE_VALUE) {
+        return;
+    }
+    MINIDUMP_EXCEPTION_INFORMATION exception{};
+    exception.ThreadId = ::GetCurrentThreadId();
+    exception.ExceptionPointers = info;
+    exception.ClientPointers = FALSE;
+    (void)g_minidump_write_dump(
+        ::GetCurrentProcess(), ::GetCurrentProcessId(), file,
+        static_cast<MINIDUMP_TYPE>(MiniDumpNormal | MiniDumpWithThreadInfo),
+        &exception, nullptr, nullptr);
+    (void)::CloseHandle(file);
+}
 
 [[nodiscard]] auto map_exception(DWORD code) noexcept -> fault_kind {
     switch (code) {
@@ -64,6 +143,7 @@ LONG WINAPI unhandled_exception_filter(EXCEPTION_POINTERS *info) noexcept {
                 static_cast<int>(info->ExceptionRecord->ExceptionCode)};
         g_callback(failure, g_context);
     }
+    write_fallback_minidump(info);
     // The fallback must not swallow the fault: return to the previous filter
     // (Crashpad's, when installed) or let Windows terminate the process. This
     // is the Windows equivalent of the POSIX SA_RESETHAND re-raise.
@@ -143,6 +223,47 @@ auto write_fault_marker(const char *path, const fault_info &info) noexcept
                   written == length};
     ::CloseHandle(file);
     return ok;
+}
+
+auto set_fallback_dump_directory(std::string_view utf8_directory) noexcept
+    -> bool {
+    if (utf8_directory.empty() ||
+        utf8_directory.size() >= static_cast<std::size_t>(max_dump_directory)) {
+        return false;
+    }
+    const auto converted{::MultiByteToWideChar(
+        CP_UTF8, MB_ERR_INVALID_CHARS, utf8_directory.data(),
+        static_cast<int>(utf8_directory.size()), g_dump_directory,
+        static_cast<int>(max_dump_directory))};
+    if (converted <= 0) {
+        return false;
+    }
+    std::size_t length{static_cast<std::size_t>(converted)};
+    if (length > 0 && g_dump_directory[length - 1] != L'\\' &&
+        g_dump_directory[length - 1] != L'/') {
+        if (length + 1 >= max_dump_directory) {
+            return false;
+        }
+        g_dump_directory[length++] = L'\\';
+    }
+    g_dump_directory[length] = L'\0';
+
+    if (g_dbghelp == nullptr) {
+        g_dbghelp = ::LoadLibraryW(L"dbghelp.dll");
+        if (g_dbghelp != nullptr) {
+            // GetProcAddress returns FARPROC; a function-pointer cast is
+            // rejected by -Wcast-function-type, so reinterpret through memcpy
+            // (the Win32 ABI guarantees the same representation).
+            const auto symbol{::GetProcAddress(g_dbghelp, "MiniDumpWriteDump")};
+            minidump_write_dump_fn resolved{nullptr};
+            static_assert(sizeof(resolved) == sizeof(symbol));
+            std::memcpy(&resolved, &symbol, sizeof(resolved));
+            g_minidump_write_dump = resolved;
+        }
+    }
+    const bool usable{g_minidump_write_dump != nullptr};
+    g_dump_enabled.store(usable, std::memory_order_release);
+    return usable;
 }
 
 auto native_signal_for(fault_kind kind) noexcept -> int {

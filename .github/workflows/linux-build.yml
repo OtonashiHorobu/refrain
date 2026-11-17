@@ -358,10 +358,11 @@ jobs:
           source build/Release/generators/conanrun.sh
           work="$(mktemp -d)"
           trap 'rm -rf "$work"' EXIT
-          handler="$(find "$HOME/.conan2" -type f -name crashpad_handler -perm -u+x -print -quit)"
-          test -n "$handler"
+          # The build stages crashpad_handler next to the binaries; the crash
+          # reporter discovers it from the executable's directory.
+          test -x ./build/Release/bin/crashpad_handler
           set +e
-          ./build/Release/bin/refrain-tools crash smoke -o "$work/db" --handler "$handler" >/dev/null 2>&1
+          ./build/Release/bin/refrain-tools crash smoke -o "$work/db" >/dev/null 2>&1
           status=$?
           set -e
           test "$status" -ne 0
@@ -374,6 +375,54 @@ jobs:
           test -n "$dump"
           head -c 4 "$dump" | grep -q MDMP
           echo "minidump: $dump"
+
+      - name: Server diagnostics smoke
+        run: |
+          set -euo pipefail
+          source build/Release/generators/conanrun.sh
+          work="$(mktemp -d)"
+          trap 'rm -rf "$work"' EXIT
+          mkdir -p "$work/config" "$work/world"
+          printf 'port = 0\n' >"$work/config/network.toml"
+          # Start from the checkout root so the composition and the tracked
+          # tables are discovered exactly like a release start.
+          (
+            cd "$work"
+            exec "$GITHUB_WORKSPACE/build/Release/bin/refrain-server" \
+              --gamepack "$GITHUB_WORKSPACE/gamepack/gamepack.toml" \
+              --world world --config-dir config --ticks 0 </dev/null
+          ) >"$work/console.log" 2>&1 &
+          pid=$!
+          ready=""
+          for _ in $(seq 1 100); do
+            if grep -q 'ready for Minecraft 26.3 clients' "$work/console.log" 2>/dev/null; then
+              ready=1
+              break
+            fi
+            kill -0 "$pid" 2>/dev/null || break
+            sleep 0.1
+          done
+          if [ -z "$ready" ]; then
+            cat "$work/console.log" || true
+            kill -9 "$pid" 2>/dev/null || true
+            exit 1
+          fi
+          test -s "$work/logs/refrain.log"
+          grep -q 'writing the log to' "$work/logs/refrain.log"
+          grep -q 'crash reporting is active with database' "$work/console.log"
+          test -d "$work/crash"
+          kill -SEGV "$pid"
+          wait "$pid" 2>/dev/null || true
+          dump=""
+          for _ in $(seq 1 100); do
+            dump="$(find "$work/crash" -type f -name '*.dmp' -print -quit 2>/dev/null || true)"
+            [ -n "$dump" ] && break
+            sleep 0.1
+          done
+          test -n "$dump"
+          head -c 4 "$dump" | grep -q MDMP
+          grep -q 'ready for Minecraft 26.3 clients' "$work/logs/refrain.log"
+          echo "server log and crash database: $work/logs/refrain.log, $dump"
 
       - name: Upload failure logs
         if: failure()

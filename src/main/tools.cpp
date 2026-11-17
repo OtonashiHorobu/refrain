@@ -539,10 +539,10 @@ int main(int argc, char **argv) {
         "smoke", "Attach Crashpad, crash on purpose, expect a minidump");
     crash_smoke_cmd->add_option("-o,--out", crash_out,
                                 "minidump database directory");
-    crash_smoke_cmd
-        ->add_option("--handler", crash_handler,
-                     "crashpad_handler executable path")
-        ->required();
+    crash_smoke_cmd->add_option(
+        "--handler", crash_handler,
+        "crashpad_handler executable path (default: the handler staged next "
+        "to this executable)");
     std::string protocol_target{};
     int protocol_timeout_ms{5000};
     protocol_bot_options protocol_bot{};

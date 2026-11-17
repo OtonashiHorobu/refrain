@@ -247,6 +247,51 @@ auto to_file_path(std::string_view utf8_path) -> base::FilePath {
     return base::FilePath{platform::file::native_string(utf8_path)};
 }
 
+/// Handler file staged next to the server executable by the installed layout.
+/// The platform layer owns the executable suffix so this file has no
+/// operating-system branch.
+[[nodiscard]] auto handler_file_name() -> std::string {
+    return "crashpad_handler" +
+           std::string{platform::file::executable_suffix()};
+}
+
+/// Engine UTF-8 spelling of a native filesystem path. `std::filesystem::path`
+/// stores the OS representation (wide on Windows), so the conversion goes
+/// through `u8string()` instead of string concatenation.
+[[nodiscard]] auto to_utf8_path(const std::filesystem::path &path)
+    -> std::string {
+    const auto utf8 = path.u8string();
+    std::string result;
+    result.reserve(utf8.size());
+    for (const char8_t character : utf8) {
+        result.push_back(static_cast<char>(character));
+    }
+    return result;
+}
+
+/// Locate `crashpad_handler` next to the running executable. The release
+/// archive and the build tree both stage it beside the server, so a relocated
+/// package uses its own handler instead of a build-time path. Returns an empty
+/// string when the file is absent.
+[[nodiscard]] auto discover_handler_path() -> std::string {
+    auto executable = platform::executable_path();
+    if (!executable) {
+        log_kernel.warn("cannot locate the crash handler because the "
+                        "executable path is unavailable: {}",
+                        executable.error().message);
+        return {};
+    }
+    const auto path{platform::file::native_path(*executable).parent_path() /
+                    platform::file::native_path(handler_file_name())};
+    std::error_code error{};
+    if (!std::filesystem::is_regular_file(path, error)) {
+        log_kernel.warn("no crash handler next to the executable at '{}'",
+                        to_utf8_path(path));
+        return {};
+    }
+    return to_utf8_path(path);
+}
+
 /// Starts the out-of-process Crashpad handler. Returns true on success; on
 /// failure logs the reason and lets initialize() fall back to the marker.
 ///
@@ -254,9 +299,12 @@ auto to_file_path(std::string_view utf8_path) -> base::FilePath {
 /// diagnostics format; `initialize_impl()`'s caller is the barrier.
 [[nodiscard]] auto start_crashpad(reporter_state &current,
                                   const crash_config &cfg) -> bool {
-    if (cfg.handler_path.empty()) {
-        log_kernel.error("Crashpad is enabled but no handler path is "
-                         "configured");
+    const std::string handler_path =
+        cfg.handler_path.empty() ? discover_handler_path() : cfg.handler_path;
+    if (handler_path.empty()) {
+        log_kernel.error(
+            "Crashpad is enabled but no crash handler was found next to the "
+            "executable");
         return false;
     }
     auto client = std::make_unique<crashpad::CrashpadClient>();
@@ -294,12 +342,12 @@ auto to_file_path(std::string_view utf8_path) -> base::FilePath {
         (cfg.upload == crash_upload::enabled) ? cfg.upload_url : std::string{};
     const std::vector<std::string> arguments{};
     const bool started = client->StartHandler(
-        to_file_path(cfg.handler_path), database, metrics, upload_url,
+        to_file_path(handler_path), database, metrics, upload_url,
         std::string{}, annotations, arguments,
         /*restartable=*/false, /*asynchronous_start=*/false);
     if (!started) {
         log_crash_reporter.error("failed to start the Crashpad handler at '{}'",
-                                 cfg.handler_path);
+                                 handler_path);
         return false;
     }
     current.client = std::move(client);
@@ -363,6 +411,11 @@ auto to_file_path(std::string_view utf8_path) -> base::FilePath {
 #endif
 
     if (cfg.fallback_marker) {
+        // Windows can write a native minidump without an out-of-process
+        // handler; the marker remains the portable, async-signal-safe record.
+        // POSIX returns false here and keeps the marker only.
+        const bool native_dump{
+            platform::set_fallback_dump_directory(current.database_path)};
         // Propagate the platform/step error (specific code + context)
         // instead of collapsing it into a generic mod_error.
         auto installed = install_fallback_handlers(current.database_path);
@@ -371,10 +424,17 @@ auto to_file_path(std::string_view utf8_path) -> base::FilePath {
         }
         current.fallback_installed = true;
         current.initialized.store(true, std::memory_order_release);
-        log_kernel.warn(
-            "Crashpad is unavailable, the fallback crash marker is enabled "
-            "at '{}'",
-            std::string_view{g_marker_path});
+        if (native_dump) {
+            log_kernel.warn(
+                "Crashpad is unavailable, the fallback crash handler writes "
+                "Windows minidumps to '{}'",
+                current.database_path);
+        } else {
+            log_kernel.warn(
+                "Crashpad is unavailable, the fallback crash marker is "
+                "enabled at '{}'",
+                std::string_view{g_marker_path});
+        }
         return status_ok();
     }
     return fail(error_code::mod_error,

@@ -204,6 +204,21 @@ carries the app-local Visual C++ runtime DLLs. Archives are written to
 need a native `refrain-tools` for the schema compiler; the MinGW target and the
 msvc-wine path build it automatically.
 
+The two Windows archives differ in crash reporting. The MSVC archive enables
+Crashpad, ships `crashpad_handler.exe` beside `refrain-server.exe` and its
+Apache-2.0 licence under `licenses/`, and starts the handler as a child process
+behind a `crash/` database on every start. The MinGW cross build cannot compile
+the vendored Crashpad fork: its Windows sources include case-sensitive system
+headers such as `<NTSecAPI.h>` that only resolve on a case-insensitive
+filesystem, which the Linux-hosted cross toolchain does not provide. That
+archive therefore keeps `REFRAIN_WITH_CRASHPAD=OFF`; the server's fallback
+fault handler writes a native Windows minidump through dbghelp plus the
+portable `crash_marker.txt` report instead, and reports honestly in the log
+that Crashpad is unavailable. Both packages create `logs/refrain.log` on the
+first start and print the exit code, log path and crash directory from
+`run-server.cmd`. Because the handler is resolved from the executable's own
+directory, the package can be extracted anywhere.
+
 One limitation: zstd and blake3 contain hand-written x86 assembly for their
 SIMD kernels, and assembly objects carry no CET property notes. The final
 executable therefore still lacks `IBT`/`SHSTK` even when every C/C++ object is

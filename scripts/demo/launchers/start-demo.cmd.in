@@ -1,0 +1,22 @@
+@echo off
+setlocal
+cd /d "%~dp0"
+if not exist "bin\refrain-server.exe" (
+  echo Missing bin\refrain-server.exe
+  pause
+  exit /b 1
+)
+rem The server runs in its own console window and keeps it after this launcher
+rem ends, so the demo does not create a stdin pipe the server would depend on.
+rem This window only waits for the listening port and then starts the client.
+start "Refrain demo server" /min cmd /c ""%~dp0start-server.cmd""
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+  "$ok=$false; for($i=0;$i -lt 240;$i++){ try { $c=New-Object Net.Sockets.TcpClient; $c.Connect('127.0.0.1',25565); $c.Close(); $ok=$true; break } catch { Start-Sleep -Milliseconds 500 } }; if(-not $ok){ exit 1 }"
+if errorlevel 1 (
+  echo The server did not become ready on 127.0.0.1:25565. Its exit code is printed in the server window.
+  if exist "logs\refrain.log" echo Log file: %~dp0logs\refrain.log
+  if exist "crash" echo Crash reports: %~dp0crash
+  pause
+  exit /b 1
+)
+start "" "%~dp0start-client.cmd"

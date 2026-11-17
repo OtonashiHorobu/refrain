@@ -60,6 +60,23 @@ void restore_fault_handlers() noexcept;
 [[nodiscard]] auto write_fault_marker(const char *path,
                                       const fault_info &info) noexcept -> bool;
 
+/// Directory for the platform-native dump written by the fallback crash
+/// handler when no out-of-process reporter is attached.
+///
+/// Windows: the unhandled-exception filter writes one `.dmp` minidump per fatal
+/// fault into `utf8_directory` through dbghelp (loaded at configuration time),
+/// in addition to whatever the marker callback writes. The directory must
+/// already exist; a path that is empty or does not fit the fixed static buffer
+/// disables the minidump fallback and returns false.
+///
+/// POSIX: no native minidump writer exists, so the function records nothing and
+/// returns false; the async-signal-safe marker callback remains the fallback.
+///
+/// The call is made during startup, never from the fault handler itself, so
+/// it may allocate internally; the fault handler only reads the prepared state.
+[[nodiscard]] auto
+set_fallback_dump_directory(std::string_view utf8_directory) noexcept -> bool;
+
 /// Native signal/exception code for a portable fault kind (diagnostics/tests;
 /// 0 when the platform has no mapping).
 [[nodiscard]] auto native_signal_for(fault_kind kind) noexcept -> int;

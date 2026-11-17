@@ -108,8 +108,8 @@ build/Release/bin/refrain-server
 Re-run the tests after a change with `./build/Release/bin/refrain-tests`.
 `scripts/ci.sh --offline` runs the full local gate: vendor checks, the schema
 drift check, the C ABI compile check, the unit tests, the CLI contract, the
-runtime, first-run, extraction and crash-reporter smokes, and the formatting
-check.
+runtime, first-run, diagnostics, extraction and crash-reporter smokes, and the
+formatting check.
 
 A checkout may stage the game data without the network, for example from a
 `server.jar` you own:

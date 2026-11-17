@@ -233,6 +233,15 @@ auto write_fault_marker(const char *path, const fault_info &info) noexcept
     return true;
 }
 
+auto set_fallback_dump_directory(std::string_view /*utf8_directory*/) noexcept
+    -> bool {
+    // POSIX fault handlers must stay async-signal-safe, and there is no
+    // standard native minidump writer. The kernel fallback keeps the
+    // async-signal-safe marker; Crashpad is the out-of-process writer on this
+    // platform.
+    return false;
+}
+
 auto native_signal_for(fault_kind kind) noexcept -> int {
     switch (kind) {
     case fault_kind::segmentation:

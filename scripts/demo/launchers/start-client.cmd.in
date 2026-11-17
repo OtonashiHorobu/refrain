@@ -1,0 +1,38 @@
+@echo off
+setlocal
+cd /d "%~dp0client"
+set "JAVA=..\java\bin\java.exe"
+if not exist "%JAVA%" (
+  echo Missing bundled Java: %JAVA%
+  pause
+  exit /b 1
+)
+set "CP="
+rem A classpath line is longer than the 1023-character limit of `set /p`,
+rem which silently dropped client.jar and most libraries. `for /f` reads the
+rem whole line; the classpath is one line in classpath.txt.
+for /f "usebackq delims=" %%i in ("classpath.txt") do set "CP=%%i"
+if not defined CP (
+  echo Missing classpath.txt
+  pause
+  exit /b 1
+)
+title Refrain demo client
+"%JAVA%" -Xms1G -Xmx3G -XX:+UseG1GC -XX:MaxGCPauseMillis=50 -XX:StackShadowPages=32 ^
+  -Dfile.encoding=UTF-8 -Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8 ^
+  --enable-native-access=ALL-UNNAMED --add-exports java.base/jdk.internal.misc=ALL-UNNAMED ^
+  -Djava.library.path="%CD%\natives\java" ^
+  -Djna.tmpdir="%CD%\natives\jna" ^
+  -Dorg.lwjgl.system.SharedLibraryExtractPath="%CD%\natives\lwjgl" ^
+  -Dio.netty.native.workdir="%CD%\natives\netty" ^
+  -Dminecraft.launcher.brand=Refrain -Dminecraft.launcher.version=demo ^
+  -Dminecraft.client.jar="%CD%\client.jar" ^
+  -Dlog4j.configurationFile="%CD%\logging\client-1.21.2.xml" ^
+  -cp "%CP%" net.minecraft.client.main.Main ^
+  --username Demo --version 26.3 --gameDir "%CD%\game" ^
+  --assetsDir "%CD%\assets" --assetIndex 34 --uuid @OFFLINE_UUID@ ^
+  --accessToken 0 --clientId "" --xuid "" --versionType release ^
+  --width 1280 --height 720 --quickPlayMultiplayer 127.0.0.1:25565
+echo.
+echo Client exited with code %ERRORLEVEL%. Press any key to close.
+pause >nul

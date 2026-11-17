@@ -88,6 +88,8 @@ namespace {
 
 } // namespace
 
+auto executable_suffix() noexcept -> std::string_view { return ".exe"; }
+
 auto native_path(std::string_view utf8_path) -> std::filesystem::path {
     const auto *first = reinterpret_cast<const char8_t *>(utf8_path.data());
     return std::filesystem::path{std::u8string{first, utf8_path.size()}};

@@ -99,14 +99,16 @@ jobs:
 
       - name: Install dependencies
         run: |
+          # Crashpad stays on for the MSVC package: this toolchain is the one
+          # that can build the vendored fork (the MinGW cross build cannot).
           conan install . -pr msvc --build=missing `
-            -o "&:with_crashpad=False" -o "&:with_wasm=False" `
+            -o "&:with_crashpad=True" -o "&:with_wasm=False" `
             -o "&:lto=False" `
             -o "&:build_bench=False" `
             --lockfile=conan/locks/vendor.lock
 
       - name: Configure
-        run: cmake --preset conan-release -DREFRAIN_WITH_CRASHPAD=OFF -DREFRAIN_WITH_WASM=OFF -DREFRAIN_BUILD_BENCH=OFF
+        run: cmake --preset conan-release -DREFRAIN_WITH_CRASHPAD=ON -DREFRAIN_WITH_WASM=OFF -DREFRAIN_BUILD_BENCH=OFF
 
       - name: Build
         run: cmake --build --preset conan-release -j 4
@@ -127,6 +129,32 @@ jobs:
 
       - name: Test
         run: ctest --test-dir build/Release --output-on-failure
+
+      - name: Crashpad smoke
+        shell: pwsh
+        run: |
+          # crashpad_handler.exe is staged next to the tools by the build; the
+          # client resolves it from there. A deliberate crash must leave a
+          # minidump in the database.
+          if (-not (Test-Path build/Release/bin/crashpad_handler.exe)) {
+            throw "crashpad_handler.exe was not staged next to the binaries"
+          }
+          $work = Join-Path $env:RUNNER_TEMP "crash-smoke"
+          Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force $work | Out-Null
+          & ./build/Release/bin/refrain-tools.exe crash smoke -o "$work/db" 2>&1 | Out-Null
+          if ($LASTEXITCODE -eq 0) {
+            throw "crash smoke: the process did not crash"
+          }
+          $dump = Get-ChildItem -Recurse -Filter *.dmp "$work/db" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($null -eq $dump) {
+            throw "crash smoke: Crashpad produced no minidump"
+          }
+          $magic = Get-Content -AsByteStream -TotalCount 4 $dump.FullName
+          if ([System.Text.Encoding]::ASCII.GetString($magic) -ne "MDMP") {
+            throw "crash smoke: $($dump.FullName) is not a minidump"
+          }
+          Write-Host "minidump: $($dump.FullName)"
 
       - name: Upload test logs
         if: failure()

@@ -188,6 +188,8 @@ void sync_parent_directory(const std::string &path) {
 
 } // namespace
 
+auto executable_suffix() noexcept -> std::string_view { return {}; }
+
 auto native_path(std::string_view utf8_path) -> std::filesystem::path {
     return std::filesystem::path{std::string{utf8_path}};
 }

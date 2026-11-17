@@ -838,6 +838,26 @@ if(REFRAIN_BUILD_SERVER)
     endif()
 endif()
 
+# Crashpad's handler is a separate executable: stage it next to the binaries
+# that start it. The server discovers the handler from its own directory (the
+# same relative layout the release archive ships), and the crash smoke test in
+# `refrain-tools` finds it the same way, so neither depends on a build-time
+# Conan path.
+if(REFRAIN_WITH_CRASHPAD)
+    foreach(_refrain_crashpad_consumer refrain-tools refrain-server)
+        if(TARGET ${_refrain_crashpad_consumer})
+            add_custom_command(
+                TARGET ${_refrain_crashpad_consumer} POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        $<TARGET_FILE:crashpad::crashpad_handler>
+                        "$<TARGET_FILE_DIR:${_refrain_crashpad_consumer}>"
+                COMMENT
+                    "Staging crashpad_handler next to ${_refrain_crashpad_consumer}"
+            )
+        endif()
+    endforeach()
+endif()
+
 # --- tests -----------------------------------------------------------------
 if(REFRAIN_BUILD_TESTS)
     enable_testing()

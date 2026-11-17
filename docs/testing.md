@@ -70,8 +70,9 @@ abstraction boundary, a lockfile-pinned Conan install, a full configure and
 build, the unit tests, schema generation drift, the C ABI headers as C11, the
 command-line contract, the runtime replay smoke, archive extraction, the block
 light and block mining report packers and tracked-report checks, the crash
-reporter smoke and
-`clang-format` over first-party sources.
+reporter smoke, the server diagnostics smoke (default log and crash database, a
+forced crash, and the console-only fallback when the log directory is
+unwritable) and `clang-format` over first-party sources.
 
 `--skip-configure` and `--skip-build` reuse an existing build directory.
 

@@ -1,0 +1,25 @@
+@echo off
+setlocal
+cd /d "%~dp0"
+title Refrain demo server
+if not exist "bin\refrain-server.exe" (
+  echo Missing bin\refrain-server.exe
+  pause
+  exit /b 1
+)
+rem The server keeps its own console window and reads console commands from it,
+rem so stdin is not redirected: `stop` stays available. A launcher that starts
+rem the server in a new window gives it a real console even when the caller had
+rem no stdin of its own.
+bin\refrain-server.exe --gamepack "gamepack\gamepack.toml" --data-dir "data" --world "world" --config-dir "config"
+set "RC=%ERRORLEVEL%"
+echo.
+echo Server exited with code %RC%.
+if exist "logs\refrain.log" (
+  echo Log file: %~dp0logs\refrain.log
+) else (
+  echo No log file was written.
+)
+if exist "crash" echo Crash reports: %~dp0crash
+pause >nul
+exit /b %RC%

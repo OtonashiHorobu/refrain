@@ -34,6 +34,16 @@ using scratch_directory = refrain::test_support::scratch_directory;
 
 /// Tests share a process-wide singleton: every test starts from a clean facade.
 void reset_reporter() { refrain::kernel::crash_reporter::shutdown(); }
+
+/// Handler path that deliberately does not exist. The reporter resolves an
+/// empty path next to the running executable, and a test build stages the real
+/// handler in the same directory as the binaries, so the fallback/error paths
+/// must name a missing file explicitly instead of relying on "empty means no
+/// handler".
+[[nodiscard]] auto missing_handler_path(const std::filesystem::path &directory)
+    -> std::string {
+    return (directory / "missing-crashpad-handler").string();
+}
 } // namespace
 
 namespace {
@@ -69,7 +79,7 @@ using namespace boost::ut;
 
             refrain::kernel::crash_config config{};
             config.database_path = directory.string();
-            config.handler_path = {}; // no crashpad_handler available
+            config.handler_path = missing_handler_path(directory.path());
             config.fallback_marker = true;
             const auto result =
                 refrain::kernel::crash_reporter::initialize(config);
@@ -107,7 +117,7 @@ using namespace boost::ut;
 
         refrain::kernel::crash_config config{};
         config.database_path = directory.string();
-        config.handler_path = {};
+        config.handler_path = missing_handler_path(directory.path());
         config.fallback_marker = true;
         const auto result = refrain::kernel::crash_reporter::initialize(config);
         expect(static_cast<bool>(result));
@@ -186,7 +196,7 @@ using namespace boost::ut;
 
         refrain::kernel::crash_config config{};
         config.database_path = deep.string();
-        config.handler_path = {};
+        config.handler_path = missing_handler_path(base.path());
         config.fallback_marker = true;
         const auto result = refrain::kernel::crash_reporter::initialize(config);
         expect(!result);
@@ -237,7 +247,7 @@ using namespace boost::ut;
 
             refrain::kernel::crash_config config{};
             config.database_path = directory.string();
-            config.handler_path = {};
+            config.handler_path = missing_handler_path(directory.path());
             config.fallback_marker = false;
             const auto result =
                 refrain::kernel::crash_reporter::initialize(config);

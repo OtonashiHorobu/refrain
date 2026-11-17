@@ -303,7 +303,11 @@ auto init(const config &cfg) noexcept -> status {
                                                       sinks.end());
         }
         logger->set_level(spdlog::level::trace);
-        logger->flush_on(spdlog::level::warn);
+        // A fatal fault terminates the process before shutdown() runs, so the
+        // lines that explain a crash (startup, ready, last state) must already
+        // have left the standard-library buffer. Info and above are flushed on
+        // every write; debug stays buffered because those lines are frequent.
+        logger->flush_on(spdlog::level::info);
 
         // Publish the logger before flipping `g_initialized`: a concurrent
         // write() that observes initialized == true must also see the logger.

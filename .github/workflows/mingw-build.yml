@@ -126,6 +126,11 @@ jobs:
                 -DREFRAIN_WITH_WASM=OFF
               cmake --build build/host/build/Release -j "$(nproc)" --target refrain-tools
 
+              # Crashpad stays off for the MinGW package: the vendored fork
+              # includes case-sensitive Windows system headers (for example
+              # <NTSecAPI.h>) that a Linux-hosted cross toolchain cannot
+              # resolve. The server falls back to native Windows minidumps; the
+              # smoke step below checks the default log and crash directories.
               conan install . -pr mingw --build=missing \
                 -o "&:with_crashpad=False" -o "&:with_wasm=False" \
                 -o "&:lto=False" \
@@ -147,6 +152,19 @@ jobs:
 
               xvfb-run -a wine build/Release/bin/refrain-tools.exe version
               xvfb-run -a wine build/Release/bin/refrain-server.exe --help
+
+              work="$(mktemp -d)"
+              (
+                cd "$work"
+                xvfb-run -a wine /src/build/Release/bin/refrain-server.exe \
+                  --gamepack /src/gamepack/gamepack.toml --check
+              ) >"$work/check.log" 2>&1
+              test -s "$work/logs/refrain.log"
+              test -d "$work/crash"
+              grep -Eq 'fallback crash (handler writes Windows minidumps|marker is enabled)' \
+                "$work/check.log"
+              grep -q 'writing the log to' "$work/logs/refrain.log"
+              echo "server diagnostics under wine: default log and crash directories created"
             '
 
       - name: Save ccache

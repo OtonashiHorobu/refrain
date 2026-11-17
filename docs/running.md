@@ -40,8 +40,8 @@ After acceptance the server:
 3. unpacks only the datapack documents and the structure templates into the
    data directory and writes `data/MANIFEST.json`, which records the game
    version, the DataVersion, the archive SHA-1 and a content digest;
-4. creates `world` and `config`, generates the spawn area and listens on
-   `0.0.0.0:25565`.
+4. creates `world`, `config`, `logs` and `crash`, generates the spawn area
+   and listens on `0.0.0.0:25565`.
 
 Later starts reuse `data` without touching the network. No game asset is
 committed, redistributed or bundled with the release archive: only the unpacked
@@ -109,6 +109,12 @@ refrain-<version>-<platform>/
   run-server.sh
 ```
 
+`logs/` and `crash/` are not part of the archive: the first start creates both
+next to the process working directory. The release archives for Windows carry
+`crashpad_handler.exe` beside `refrain-server.exe` when the package was built
+with Crashpad (the MSVC package); the MinGW package uses the server's
+Windows-native minidump fallback instead.
+
 The server searches the working directory, the executable's directory and up to
 three parent directories for `gamepack/gamepack.toml` and
 `content/vanilla/<version>`, so it starts the same way from an extracted
@@ -138,6 +144,8 @@ or TOML file:
 | MOTD | `A Refrain Server` | `status.motd` in `network.toml` |
 | Game mode, difficulty | the values stored in the world | in-game commands |
 | Compression threshold | 256 | `compression_threshold` in `network.toml` |
+| Log file | `./logs/refrain.log` (rotating, 16 MiB, 4 files) | none; the file sink is always attached |
+| Crash database | `./crash` | `--crash-dir` |
 
 The first start writes `config/refrain.toml`, `config/network.toml`,
 `config/world.toml`, `config/runtime.toml`, `config/storage.toml`,
@@ -166,7 +174,8 @@ The server enters the tick loop as soon as it starts. `--check` stops after the
 composition, the mod lock and the content layers have been verified, without
 creating a world or starting the loop, which is what a configuration check or a
 CI smoke wants. A run that only inspects the composition does not need the EULA.
-`--ticks 0` runs until `stop`, EOF on stdin or a scripted stop command.
+`--ticks 0` runs until `stop` or a scripted stop command; end of file on stdin
+only ends console input and does not stop the tick loop.
 
 ## Inputs
 
@@ -188,7 +197,8 @@ CI smoke wants. A run that only inspects the composition does not need the EULA.
 | `--script <file>` | tick-indexed commands, one `<tick> <command>` per line |
 | `--cmd-file <file>` | commands executed at tick 0 |
 | `--hash-every <n>` | log the deterministic state hash every n ticks |
-| `--log-level <level>` | console log level |
+| `--log-level <level>` | console and file log level |
+| `--crash-dir <dir>` | local crash database directory (default: `crash`) |
 | `--watchdog-timeout-ms <n>` | warn when a tick stalls longer than n milliseconds |
 | `--autosave-interval-ticks <n>` | flush dirty chunks every n ticks, 0 disables |
 | `--compact-interval-ticks <n>` | compact region files every n ticks, 0 disables |
@@ -867,10 +877,24 @@ no reference schema change exists between 5016 and 5023.
 - The migration is a mod. A custom gamepack that does not load it refuses an
   older world and leaves it untouched; only the current data version opens.
 
-## Crash reporting
+## Logging and crash reporting
 
-`--crash-dir <dir>` enables local minidump capture. Crash dumps are written to
-that directory and remain local.
+Every start attaches two log sinks at the level selected by `--log-level` or
+`[logging].level`: the console (stderr) and a rotating file at
+`logs/refrain.log`. The file sink keeps four files of 16 MiB each and rotates
+the oldest out. The first start creates `logs/`, and a start where it cannot be
+created continues with console logging only and says why; startup never fails
+because of a diagnostic sink.
+
+Crash reporting is also on by default. The local crash database is `crash/`
+under the working directory; `--crash-dir <dir>` overrides the location. Crash
+dumps and their metadata stay local. When the build enables Crashpad, the
+server resolves `crashpad_handler` from its own directory (the release archive
+ships it beside the server) and starts the handler as a child process. When
+Crashpad is not attached, the platform fault handler is installed instead: it
+writes `crash_marker.txt`, and on Windows it also writes a native `.dmp`
+minidump through dbghelp. The server log says which reporter is active and
+where the database lives.
 
 ## See also
 
