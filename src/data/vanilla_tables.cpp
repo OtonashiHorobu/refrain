@@ -45,6 +45,12 @@ auto fail(std::string_view message) -> error {
     return make_error(error_code::invalid_argument, message);
 }
 
+/// Whether a stored tool family mines at one tier speed; the tiered families
+/// are the first four values of `tool_type`.
+auto tiered_tool(std::uint8_t type) -> bool {
+    return type <= static_cast<std::uint8_t>(tool_type::hoe);
+}
+
 /// Append `value` to `out` as little-endian bytes.
 template <core::byte_order::fixed_width_integer T>
 void append_le(std::vector<std::byte> &out, T value) {
@@ -75,6 +81,10 @@ void put_bytes(std::vector<std::byte> &out, std::span<const std::byte> bytes) {
 
 void put_f64(std::vector<std::byte> &out, double value) {
     append_le(out, std::bit_cast<std::uint64_t>(value));
+}
+
+void put_f32(std::vector<std::byte> &out, float value) {
+    append_le(out, std::bit_cast<std::uint32_t>(value));
 }
 
 using core::byte_order::load_le;
@@ -182,6 +192,38 @@ struct built_item {
     std::uint16_t max_stack_size{0};
     std::uint32_t max_damage{0};
 };
+
+struct built_mining {
+    float hardness{0.0F};
+    float shears_speed{1.0F};
+    float sword_speed{1.0F};
+    std::uint8_t flags{0};
+    std::uint8_t tool_mask{0};
+    std::uint8_t needed_tier{0};
+    std::uint8_t direct_correct{0};
+};
+
+struct built_tool {
+    std::uint32_t name{0};
+    std::uint8_t type{0};
+    std::uint8_t material{0};
+    std::uint8_t harvest_level{harvest_level_none};
+    std::uint8_t flags{0};
+    float tier_speed{1.0F};
+    float default_mining_speed{1.0F};
+    std::uint16_t damage_per_block{0};
+    std::uint16_t max_stack_size{0};
+    std::uint32_t max_damage{0};
+};
+
+/// Flag bit of one stored tool record: the item can break blocks in creative.
+inline constexpr std::uint8_t tool_flag_can_destroy_in_creative = 1U;
+
+/// Number of bytes of one stored block mining record.
+constexpr std::size_t mining_record_size = 16;
+
+/// Number of bytes of one stored tool record.
+constexpr std::size_t tool_record_size = 24;
 
 struct built_light {
     std::uint8_t emission{0};
@@ -513,6 +555,136 @@ auto build_vanilla_tables(const vanilla_spec &spec)
         });
     }
 
+    // Mining records: the input aligns one record per block; the container
+    // orders blocks by name, so the records are reordered by name once here.
+    std::vector<built_mining> out_minings;
+    std::vector<built_tool> out_tools;
+    if (!spec.block_minings.empty() || !spec.tools.empty()) {
+        if (spec.block_minings.empty() || spec.tools.empty()) {
+            return std::unexpected{fail("incomplete mining sections")};
+        }
+        if (spec.block_minings.size() != spec.blocks.size()) {
+            return std::unexpected{
+                fail("mining records do not cover every block")};
+        }
+        std::unordered_map<std::string_view, const block_mining_spec *>
+            mining_by_name;
+        mining_by_name.reserve(spec.blocks.size());
+        for (std::size_t i = 0; i < spec.blocks.size(); ++i) {
+            if (!mining_by_name
+                     .emplace(spec.blocks[i].name, &spec.block_minings[i])
+                     .second) {
+                return std::unexpected{
+                    fail("duplicate block name: " + spec.blocks[i].name)};
+            }
+        }
+        out_minings.reserve(blocks.size());
+        for (const auto *block : blocks) {
+            const auto found = mining_by_name.find(block->name);
+            if (found == mining_by_name.end()) {
+                return std::unexpected{
+                    fail("missing mining record for " + block->name)};
+            }
+            const auto &mining = *found->second;
+            if (!std::isfinite(mining.hardness) ||
+                !(mining.hardness == -1.0F || mining.hardness >= 0.0F)) {
+                return std::unexpected{
+                    fail("invalid block hardness: " + block->name)};
+            }
+            if (!std::isfinite(mining.shears_speed) ||
+                mining.shears_speed < 0.0F ||
+                !std::isfinite(mining.sword_speed) ||
+                mining.sword_speed < 0.0F) {
+                return std::unexpected{
+                    fail("invalid block mining speed: " + block->name)};
+            }
+            if ((mining.flags & ~(block_mining_requires_correct_tool |
+                                  block_mining_air | block_mining_fluid)) !=
+                    0U ||
+                (mining.tool_mask & ~all_tool_type_bits) != 0U ||
+                (mining.direct_correct & ~all_tool_type_bits) != 0U ||
+                mining.needed_tier > max_harvest_level) {
+                return std::unexpected{
+                    fail("invalid block mining flags: " + block->name)};
+            }
+            out_minings.push_back(built_mining{
+                .hardness = mining.hardness,
+                .shears_speed = mining.shears_speed,
+                .sword_speed = mining.sword_speed,
+                .flags = mining.flags,
+                .tool_mask = mining.tool_mask,
+                .needed_tier = mining.needed_tier,
+                .direct_correct = mining.direct_correct,
+            });
+        }
+    }
+
+    std::vector<const tool_mining_spec *> sorted_tools;
+    sorted_tools.reserve(spec.tools.size());
+    for (const auto &tool : spec.tools) {
+        if (tool.name.empty()) {
+            return std::unexpected{fail("tool with an empty name")};
+        }
+        const auto type = static_cast<std::uint8_t>(tool.type);
+        if (type != static_cast<std::uint8_t>(tool_type::none) &&
+            type > static_cast<std::uint8_t>(tool_type::sword)) {
+            return std::unexpected{fail("unknown tool family: " + tool.name)};
+        }
+        if (static_cast<std::uint8_t>(tool.material) >
+            static_cast<std::uint8_t>(tool_material::gold)) {
+            return std::unexpected{fail("unknown tool material: " + tool.name)};
+        }
+        if (tiered_tool(type)) {
+            if (tool.material == tool_material::none ||
+                tool.harvest_level > max_harvest_level) {
+                return std::unexpected{
+                    fail("a tiered tool has no material: " + tool.name)};
+            }
+        } else if (tool.material != tool_material::none ||
+                   tool.harvest_level != harvest_level_none) {
+            return std::unexpected{
+                fail("a non-tiered tool names a material: " + tool.name)};
+        }
+        if (!std::isfinite(tool.tier_speed) || tool.tier_speed < 0.0F ||
+            !std::isfinite(tool.default_mining_speed) ||
+            tool.default_mining_speed < 0.0F) {
+            return std::unexpected{
+                fail("invalid tool mining speed: " + tool.name)};
+        }
+        if (tool.max_stack_size < 1U || tool.max_stack_size > 99U) {
+            return std::unexpected{
+                fail("tool stack size out of range: " + tool.name)};
+        }
+        sorted_tools.push_back(&tool);
+    }
+    std::ranges::sort(sorted_tools, {}, &tool_mining_spec::name);
+    for (std::size_t i = 1; i < sorted_tools.size(); ++i) {
+        if (sorted_tools[i - 1]->name == sorted_tools[i]->name) {
+            return std::unexpected{
+                fail("duplicate tool: " + sorted_tools[i]->name)};
+        }
+    }
+    out_tools.reserve(sorted_tools.size());
+    for (const auto *tool : sorted_tools) {
+        const auto type = static_cast<std::uint8_t>(tool->type);
+        out_tools.push_back(built_tool{
+            .name = pool.add(tool->name),
+            .type = type,
+            .material = static_cast<std::uint8_t>(tool->material),
+            .harvest_level =
+                tiered_tool(type) ? tool->harvest_level : harvest_level_none,
+            .flags = static_cast<std::uint8_t>(
+                tool->can_destroy_blocks_in_creative
+                    ? tool_flag_can_destroy_in_creative
+                    : 0U),
+            .tier_speed = tool->tier_speed,
+            .default_mining_speed = tool->default_mining_speed,
+            .damage_per_block = tool->damage_per_block,
+            .max_stack_size = tool->max_stack_size,
+            .max_damage = tool->max_damage,
+        });
+    }
+
     if (out_states.size() > 0xFFFFU) {
         return std::unexpected{fail("too many block states")};
     }
@@ -630,6 +802,36 @@ auto build_vanilla_tables(const vanilla_spec &spec)
         put_u16(items_section, 0);
         put_u32(items_section, item.max_damage);
         put_u32(items_section, 0);
+    }
+
+    std::vector<std::byte> mining_section;
+    std::vector<std::byte> tools_section;
+    if (!out_minings.empty()) {
+        put_u32(mining_section, static_cast<std::uint32_t>(out_minings.size()));
+        for (const auto &mining : out_minings) {
+            put_f32(mining_section, mining.hardness);
+            put_f32(mining_section, mining.shears_speed);
+            put_f32(mining_section, mining.sword_speed);
+            mining_section.push_back(static_cast<std::byte>(mining.flags));
+            mining_section.push_back(static_cast<std::byte>(mining.tool_mask));
+            mining_section.push_back(
+                static_cast<std::byte>(mining.needed_tier));
+            mining_section.push_back(
+                static_cast<std::byte>(mining.direct_correct));
+        }
+        put_u32(tools_section, static_cast<std::uint32_t>(out_tools.size()));
+        for (const auto &tool : out_tools) {
+            put_u32(tools_section, tool.name);
+            tools_section.push_back(static_cast<std::byte>(tool.type));
+            tools_section.push_back(static_cast<std::byte>(tool.material));
+            tools_section.push_back(static_cast<std::byte>(tool.harvest_level));
+            tools_section.push_back(static_cast<std::byte>(tool.flags));
+            put_f32(tools_section, tool.tier_speed);
+            put_f32(tools_section, tool.default_mining_speed);
+            put_u16(tools_section, tool.damage_per_block);
+            put_u16(tools_section, tool.max_stack_size);
+            put_u32(tools_section, tool.max_damage);
+        }
     }
 
     std::vector<std::byte> light_states_section;
@@ -785,6 +987,12 @@ auto build_vanilla_tables(const vanilla_spec &spec)
         sections.push_back({.tag = {'L', 'S', 'H', 'P'},
                             .bytes = std::move(light_shapes_section)});
     }
+    if (!mining_section.empty()) {
+        sections.push_back(
+            {.tag = {'M', 'I', 'N', 'E'}, .bytes = std::move(mining_section)});
+        sections.push_back(
+            {.tag = {'T', 'O', 'O', 'L'}, .bytes = std::move(tools_section)});
+    }
 
     std::size_t cursor = header_size + sections.size() * section_record_size;
     std::vector<std::uint32_t> offsets;
@@ -904,6 +1112,8 @@ auto vanilla_tables::open(std::span<const std::byte> bytes, bool verify)
     bool have_items = false;
     bool have_light_states = false;
     bool have_light_shapes = false;
+    bool have_mining_states = false;
+    bool have_tool_records = false;
 
     for (std::uint32_t i = 0; i < section_count; ++i) {
         const auto base =
@@ -961,6 +1171,12 @@ auto vanilla_tables::open(std::span<const std::byte> bytes, bool verify)
         } else if (name == "LSHP") {
             table.light_shapes_section_ = record;
             have_light_shapes = true;
+        } else if (name == "MINE") {
+            table.mining_ = record;
+            have_mining_states = true;
+        } else if (name == "TOOL") {
+            table.tools_section_ = record;
+            have_tool_records = true;
         }
     }
     if (!have_strings || !have_blocks || !have_block_properties ||
@@ -1109,6 +1325,108 @@ auto vanilla_tables::open(std::span<const std::byte> bytes, bool verify)
                 }
             }
         }
+    }
+
+    if (have_mining_states != have_tool_records) {
+        return std::unexpected{fail("incomplete mining sections")};
+    }
+    if (have_mining_states) {
+        const auto count = load_le32(bytes, table.mining_.offset);
+        if (count != table.info_.blocks) {
+            return std::unexpected{
+                fail("mining record count does not match the block count")};
+        }
+        if (table.mining_.size <
+            4U + static_cast<std::uint64_t>(count) * mining_record_size) {
+            return std::unexpected{fail("mining section truncated")};
+        }
+        const auto mining_base = table.mining_.offset + 4U;
+        for (std::uint32_t i = 0; i < count; ++i) {
+            const auto base = mining_base + i * mining_record_size;
+            const auto hardness = std::bit_cast<float>(load_le32(bytes, base));
+            const auto shears_speed =
+                std::bit_cast<float>(load_le32(bytes, base + 4U));
+            const auto sword_speed =
+                std::bit_cast<float>(load_le32(bytes, base + 8U));
+            const auto flags = std::to_integer<std::uint8_t>(bytes[base + 12U]);
+            const auto mask = std::to_integer<std::uint8_t>(bytes[base + 13U]);
+            const auto needed =
+                std::to_integer<std::uint8_t>(bytes[base + 14U]);
+            const auto direct =
+                std::to_integer<std::uint8_t>(bytes[base + 15U]);
+            if (!std::isfinite(hardness) ||
+                !(hardness == -1.0F || hardness >= 0.0F) ||
+                !std::isfinite(shears_speed) || shears_speed < 0.0F ||
+                !std::isfinite(sword_speed) || sword_speed < 0.0F) {
+                return std::unexpected{fail("mining record invalid")};
+            }
+            if ((flags & ~(block_mining_requires_correct_tool |
+                           block_mining_air | block_mining_fluid)) != 0U ||
+                (mask & ~all_tool_type_bits) != 0U ||
+                (direct & ~all_tool_type_bits) != 0U ||
+                needed > max_harvest_level) {
+                return std::unexpected{fail("mining flags invalid")};
+            }
+        }
+        const auto tool_count = load_le32(bytes, table.tools_section_.offset);
+        if (table.tools_section_.size <
+            4U + static_cast<std::uint64_t>(tool_count) * tool_record_size) {
+            return std::unexpected{fail("tool section truncated")};
+        }
+        const auto tool_base = table.tools_section_.offset + 4U;
+        std::string_view previous{};
+        for (std::uint32_t i = 0; i < tool_count; ++i) {
+            const auto base = tool_base + i * tool_record_size;
+            const auto name_index = load_le32(bytes, base);
+            if (name_index >= table.info_.strings) {
+                return std::unexpected{fail("tool name out of range")};
+            }
+            const auto name = table.string_at(name_index);
+            if (name.empty() || (!previous.empty() && name <= previous)) {
+                return std::unexpected{
+                    fail("tool records are not sorted by name")};
+            }
+            previous = name;
+            const auto type = std::to_integer<std::uint8_t>(bytes[base + 4U]);
+            const auto material =
+                std::to_integer<std::uint8_t>(bytes[base + 5U]);
+            const auto harvest =
+                std::to_integer<std::uint8_t>(bytes[base + 6U]);
+            const auto flags = std::to_integer<std::uint8_t>(bytes[base + 7U]);
+            const auto tier_speed =
+                std::bit_cast<float>(load_le32(bytes, base + 8U));
+            const auto default_speed =
+                std::bit_cast<float>(load_le32(bytes, base + 12U));
+            const auto stack = load_le16(bytes, base + 18U);
+            if ((type != static_cast<std::uint8_t>(tool_type::none) &&
+                 type > static_cast<std::uint8_t>(tool_type::sword)) ||
+                material > static_cast<std::uint8_t>(tool_material::gold) ||
+                (flags & ~tool_flag_can_destroy_in_creative) != 0U) {
+                return std::unexpected{fail("tool record invalid")};
+            }
+            if (!std::isfinite(tier_speed) || tier_speed < 0.0F ||
+                !std::isfinite(default_speed) || default_speed < 0.0F) {
+                return std::unexpected{fail("tool speed invalid")};
+            }
+            if (stack < 1U || stack > 99U) {
+                return std::unexpected{fail("tool stack size out of range")};
+            }
+            const bool tiered =
+                tiered_tool(type) &&
+                material != static_cast<std::uint8_t>(tool_material::none);
+            if (tiered) {
+                if (harvest > max_harvest_level) {
+                    return std::unexpected{
+                        fail("tool harvest level out of range")};
+                }
+            } else if (harvest != harvest_level_none ||
+                       material !=
+                           static_cast<std::uint8_t>(tool_material::none)) {
+                return std::unexpected{fail("tool material invalid")};
+            }
+        }
+        table.info_.tools = tool_count;
+        table.have_mining_ = true;
     }
 
     const auto block_base = table.blocks_.offset + 4U;
@@ -1515,6 +1833,65 @@ auto vanilla_tables::item_at(std::uint32_t index) const -> item_view {
         .max_stack_size = load_le16(bytes_, base + 4),
         .max_damage = load_le32(bytes_, base + 8),
     };
+}
+
+auto vanilla_tables::block_mining_at(std::uint16_t block) const
+    -> block_mining_view {
+    if (!have_mining_ || block >= info_.blocks) {
+        return block_mining_view{};
+    }
+    const auto base = mining_.offset + 4U + block * mining_record_size;
+    block_mining_view view;
+    view.hardness = std::bit_cast<float>(load_le32(bytes_, base));
+    view.shears_speed = std::bit_cast<float>(load_le32(bytes_, base + 4U));
+    view.sword_speed = std::bit_cast<float>(load_le32(bytes_, base + 8U));
+    view.flags = std::to_integer<std::uint8_t>(bytes_[base + 12U]);
+    view.tool_mask = std::to_integer<std::uint8_t>(bytes_[base + 13U]);
+    view.needed_tier = std::to_integer<std::uint8_t>(bytes_[base + 14U]);
+    view.direct_correct = std::to_integer<std::uint8_t>(bytes_[base + 15U]);
+    return view;
+}
+
+auto vanilla_tables::tool_at(std::uint32_t index) const -> tool_mining_view {
+    if (!have_mining_ || index >= info_.tools) {
+        return tool_mining_view{};
+    }
+    const auto base = tools_section_.offset + 4U + index * tool_record_size;
+    tool_mining_view view;
+    view.name = string_at(load_le32(bytes_, base));
+    view.type = static_cast<tool_type>(
+        std::to_integer<std::uint8_t>(bytes_[base + 4U]));
+    view.material = static_cast<tool_material>(
+        std::to_integer<std::uint8_t>(bytes_[base + 5U]));
+    view.harvest_level = std::to_integer<std::uint8_t>(bytes_[base + 6U]);
+    const auto flags = std::to_integer<std::uint8_t>(bytes_[base + 7U]);
+    view.tier_speed = std::bit_cast<float>(load_le32(bytes_, base + 8U));
+    view.default_mining_speed =
+        std::bit_cast<float>(load_le32(bytes_, base + 12U));
+    view.damage_per_block = load_le16(bytes_, base + 16U);
+    view.max_stack_size = load_le16(bytes_, base + 18U);
+    view.max_damage = load_le32(bytes_, base + 20U);
+    view.can_destroy_blocks_in_creative =
+        (flags & tool_flag_can_destroy_in_creative) != 0U;
+    return view;
+}
+
+auto vanilla_tables::find_tool(std::string_view name) const
+    -> std::optional<std::uint32_t> {
+    std::uint32_t low = 0;
+    std::uint32_t high = info_.tools;
+    while (low < high) {
+        const auto middle = low + (high - low) / 2;
+        if (tool_at(middle).name < name) {
+            low = middle + 1;
+        } else {
+            high = middle;
+        }
+    }
+    if (low < info_.tools && tool_at(low).name == name) {
+        return low;
+    }
+    return std::nullopt;
 }
 
 auto vanilla_tables::find_item(std::string_view name) const

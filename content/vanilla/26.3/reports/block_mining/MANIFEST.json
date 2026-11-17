@@ -1,0 +1,19 @@
+{
+  "data_version": 5023,
+  "extractor": "tools/block/extract.sh",
+  "files": {
+    "mining.json": {
+      "block_count": 1286,
+      "bytes": 122674,
+      "format": "refrain.block-mining/1",
+      "sha256": "6d226dd562e89fb42c8e4d1433978d7409d943925c708d156149fd689008b655",
+      "state_count": 35723,
+      "tool_count": 38
+    }
+  },
+  "game_version": "26.3",
+  "kind": "block_mining",
+  "notice": "../../../NOTICE.md",
+  "server_jar_sha256": "d052f14d7a173734fba553711e5b570162e2f2a313267ee31a21b975a679be64",
+  "source": "official server.jar block registry, item components and block tags"
+}

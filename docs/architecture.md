@@ -255,6 +255,18 @@ operator's own `server.jar` by `tools/light/extract.sh`, and the tables are
 imported from it, so a game update updates the light data with the rest of the
 content rather than an in-source table.
 
+Block destroy times, the correct-tool-for-drops flag and the tool component
+behaviour come from the same content data. The tracked vanilla container
+carries one mining record per block - its destroy time, the tool families that
+mine it efficiently, the harvest tier it needs and the shears and sword speeds
+- and one record per item that carries a tool component: its family, material,
+tier speed, damage per block, stack limit and durability. A block or item the
+table does not carry falls back to the documented default instead of a guessed
+value. `tools/block/extract.sh` regenerates the report from the block
+registry, the item registry and the vanilla datapack tags of the operator's own
+`server.jar`, and the container is imported from it with the rest of the
+content.
+
 ### Generated entities
 
 World generation places the entities a structure template carries, and the

@@ -220,6 +220,44 @@ auto reports() -> vanilla_reports {
             [[], [[0.0, 0.0, 0.0, 1.0, 0.5, 1.0]], [], [], [], []]
         ]
     })";
+    value.block_mining_json = R"({
+        "format": "refrain.block-mining/1",
+        "game_version": "26.3",
+        "data_version": 5023,
+        "block_count": 2,
+        "state_count": 5,
+        "tool_count": 1,
+        "tool_types": ["pickaxe", "axe", "shovel", "hoe", "shears", "sword"],
+        "materials": [
+            {"name": "wood", "harvest_level": 0},
+            {"name": "stone", "harvest_level": 1},
+            {"name": "copper", "harvest_level": 1},
+            {"name": "iron", "harvest_level": 2},
+            {"name": "diamond", "harvest_level": 3},
+            {"name": "netherite", "harvest_level": 3},
+            {"name": "gold", "harvest_level": 0}
+        ],
+        "blocks": [
+            ["minecraft:oak_stairs", 2.0, 0, 2, 0, 1.0, 1.0, 0],
+            ["minecraft:stone", 1.5, 1, 1, 0, 1.0, 1.0, 0]
+        ],
+        "tools": [
+            {
+                "id": "minecraft:wooden_pickaxe",
+                "tool_type": "pickaxe",
+                "material": "wood",
+                "harvest_level": 0,
+                "tier_speed": 2.0,
+                "default_mining_speed": 1.0,
+                "damage_per_block": 1,
+                "can_destroy_blocks_in_creative": true,
+                "max_damage": 59,
+                "max_stack_size": 1,
+                "rules": []
+            }
+        ],
+        "tags": {}
+    })";
     value.item_components.emplace_back("minecraft:stone", R"({
         "components": {"minecraft:max_stack_size": 64}
     })");
@@ -447,6 +485,20 @@ suite<"data/vanilla-tables"> vanilla_tables_tests = [] {
             expect(tables->item_at(*sword).max_damage == 1561U);
         }
         expect(tables->find_item("minecraft:stone").has_value());
+        expect(tables->has_mining());
+        expect(tables->tool_count() == 1U);
+        const auto stone_block = tables->find_block("minecraft:stone");
+        expect(stone_block.has_value());
+        if (stone_block.has_value()) {
+            const auto mining = tables->block_mining_at(*stone_block);
+            expect(mining.hardness == 1.5F);
+            expect(mining.requires_correct_tool_for_drops());
+        }
+        const auto pickaxe = tables->find_tool("minecraft:wooden_pickaxe");
+        expect(pickaxe.has_value());
+        if (pickaxe.has_value()) {
+            expect(tables->tool_at(*pickaxe).tier_speed == 2.0F);
+        }
     };
 
     "invalid specifications are rejected"_test = [] {
@@ -612,6 +664,8 @@ suite<"data/vanilla-tables"> vanilla_tables_tests = [] {
                                fixture.biome_presets.at(0).second));
         expect(write_text_file(reports_dir / "block_light" / "light.json",
                                fixture.block_light_json));
+        expect(write_text_file(reports_dir / "block_mining" / "mining.json",
+                               fixture.block_mining_json));
         for (const auto &[name, json] : fixture.item_components) {
             const auto short_name{name.substr(
                 name.find(':') == std::string::npos ? 0 : name.find(':') + 1)};
@@ -636,6 +690,7 @@ suite<"data/vanilla-tables"> vanilla_tables_tests = [] {
         expect(imported->registries == 2U);
         expect(imported->items == 2U);
         expect(imported->light_shapes == 1U);
+        expect(imported->tools == 1U);
 
         auto tables_bytes =
             refrain::core::io::read_file((out_dir / "tables.rvtb").string());
@@ -651,6 +706,8 @@ suite<"data/vanilla-tables"> vanilla_tables_tests = [] {
                 expect(tables->item_count() == 2U);
                 expect(tables->has_light());
                 expect(tables->light_shape_count() == 1U);
+                expect(tables->has_mining());
+                expect(tables->tool_count() == 1U);
                 const auto stairs{tables->find_state(
                     "minecraft:oak_stairs[facing=south,half=top]")};
                 expect(stairs.has_value());

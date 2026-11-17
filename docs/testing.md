@@ -69,7 +69,8 @@ The pipeline checks, in order: vendored recipes against the lock, the platform
 abstraction boundary, a lockfile-pinned Conan install, a full configure and
 build, the unit tests, schema generation drift, the C ABI headers as C11, the
 command-line contract, the runtime replay smoke, archive extraction, the block
-light report packer and tracked-report check, the crash reporter smoke and
+light and block mining report packers and tracked-report checks, the crash
+reporter smoke and
 `clang-format` over first-party sources.
 
 `--skip-configure` and `--skip-build` reuse an existing build directory.

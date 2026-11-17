@@ -1277,6 +1277,12 @@ python3 tools/light/pack_report.py \
     --check "$ROOT/content/vanilla/26.3/reports/block_light" \
     || die "light: tracked block light report does not match its manifest"
 echo "  block light report packer and tracked report OK"
+python3 tools/block/test_pack_report.py \
+    || die "mining: block mining report packer accepted inconsistent data"
+python3 tools/block/pack_report.py \
+    --check "$ROOT/content/vanilla/26.3/reports/block_mining" \
+    || die "mining: tracked block mining report does not match its manifest"
+echo "  block mining report packer and tracked report OK"
 
 say "[10/11] Crashpad minidump smoke"
 HANDLER="$(find "$CONAN_HOME_DIR" -type f -name crashpad_handler \
