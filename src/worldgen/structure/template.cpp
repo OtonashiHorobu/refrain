@@ -12,7 +12,6 @@
 #include <array>
 #include <charconv>
 #include <cmath>
-#include <cstdio>
 #include <limits>
 #include <ranges>
 #include <set>
@@ -1803,11 +1802,6 @@ auto update_template_block(block_state_registry &states, chunk_region &region,
         return changed;
     };
     bool changed = false;
-    if (std::getenv("REFRAIN_FENCE_DEBUG") != nullptr && pos.x == 751 &&
-        pos.y == 85 && pos.z == 82) {
-        std::fprintf(stderr, "fence at target name=%s\n",
-                     std::string{parsed.name}.c_str());
-    }
     if (is_fence(parsed.name)) {
         for (const auto *direction : {"north", "east", "south", "west"}) {
             const auto target = neighbour_pos(pos, direction);
