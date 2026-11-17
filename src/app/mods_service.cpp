@@ -94,8 +94,11 @@ namespace script = refrain::script;
 /// `refrain:net.protocol`). A slot is satisfied by
 /// the exact contract, a sub-contract in its namespace (`data` ->
 /// `refrain:data.packs`) or the default network namespace (`protocol` ->
-/// `refrain:net.protocol`, `session` -> `refrain:net.session`). The check stays
-/// advisory: the first-party providers are not implemented yet.
+/// `refrain:net.protocol`, `session` -> `refrain:net.session`).
+// TODO: an unsatisfied gamepack provider slot only produces a warning, because
+// the first-party provider implementations are absent. The correct behavior is
+// to fail `mods check` and refuse a composition that binds the slot when no
+// loaded mod declares the required contract.
 [[nodiscard]] auto declares_provider_service(const mod::candidate &mod,
                                              std::string_view service) -> bool {
     const auto exact{fmt::format("refrain:{}", service)};
@@ -682,8 +685,11 @@ auto run_mods_install(const mods_install_options &options) -> int {
     }
     trusted_keys->append_range(*more_keys | std::views::as_rvalue);
     // Trust/update policy: the server policy file when given, otherwise the
-    // tool defaults (unsigned packages stay installable for development). The
-    // flags override individual values for this run.
+    // built-in production default, which requires a trusted signature. The tool
+    // never silently relaxes signature enforcement for a convenience default:
+    // a development store that accepts unsigned packages opts out explicitly by
+    // passing a policy file with `[signature] require = false`. The flags
+    // override individual values for this run.
     mod::install_policy_config policy{};
     if (!options.policy_file.empty()) {
         auto loaded{mod::load_install_policy(options.policy_file)};
@@ -691,8 +697,6 @@ auto run_mods_install(const mods_install_options &options) -> int {
             return report_error(loaded.error());
         }
         policy = std::move(*loaded);
-    } else {
-        policy.require_signature = false;
     }
     {
         mod::install_policy_overrides overrides{};
@@ -721,6 +725,12 @@ auto run_mods_install(const mods_install_options &options) -> int {
         }
         mod::apply_install_policy_overrides(policy, overrides);
     }
+    // Audit line: the operator must be able to see which policy an install
+    // used, so a missing `--policy-file` cannot be mistaken for a lax one.
+    std::cout << fmt::format(
+        "trust policy: {} (require_signature: {})\n",
+        policy.source.empty() ? std::string{"built-in default"} : policy.source,
+        policy.require_signature ? "yes" : "no");
     auto reader{mod::rfmod_reader::open_file(options.archive)};
     if (!reader) {
         return report_error(reader.error());

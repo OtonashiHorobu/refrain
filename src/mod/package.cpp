@@ -315,19 +315,19 @@ auto make_package_resolver(std::span<const std::byte> builtin_image)
             return std::unique_ptr<package_source>{std::move(source)};
         }
         case package_kind::directory: {
-            // `path` is `<root>/mods/<id>/manifest.toml`; the package root
-            // is the directory that holds the manifest.
-            const auto manifest_path{mod.path};
-            const auto slash{manifest_path.rfind('/')};
-            if (slash == std::string::npos || slash == 0) {
-                return std::unexpected{
-                    fail(error_code::invalid_argument,
-                         fmt::format("mod '{}' has an unusable manifest path "
-                                     "'{}'",
-                                     mod.id, manifest_path))};
-            }
-            return make_directory_package_source(
-                manifest_path.substr(0, slash));
+            // Directory side-loading is not a runtime source: a directory is a
+            // packaging input, not an install, so it has no receipt, no
+            // archive digest and no signature to verify. Loading one through
+            // the runtime resolver would bypass the install transaction, so it
+            // is refused here instead of being wrapped into a package source.
+            // Tools and tests that inspect a manifest tree construct
+            // `make_directory_package_source()` explicitly.
+            return std::unexpected{fail(
+                error_code::unsupported,
+                fmt::format("mod '{}' is a directory candidate; directory "
+                            "side-loading is not a runtime source, install "
+                            "the package to load it",
+                            mod.id))};
         }
         case package_kind::rfmod: {
             // Installed package: the receipt is the source of truth and

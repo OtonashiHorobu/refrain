@@ -145,4 +145,44 @@ suite mod_package = [] {
             }
         }
     };
+
+    // The standard runtime resolver refuses a directory candidate: a directory
+    // is a packaging input, not an install, so it has no receipt or signature
+    // the install transaction could verify. Tools that inspect a manifest tree
+    // construct the directory source explicitly.
+    "runtime resolver refuses a directory candidate"_test = [] {
+        const package_temp temporary;
+        const auto root{temporary.sub("mods/test")};
+        ut::expect(
+            static_cast<bool>(refrain::core::io::create_directories(root)));
+        ut::expect(static_cast<bool>(refrain::core::io::write_text(
+            root + "/manifest.toml", "id = \"test\"\n")));
+
+        auto resolver{
+            refrain::mod::make_package_resolver(std::span<const std::byte>{})};
+        ut::expect(static_cast<bool>(resolver));
+        if (!resolver) {
+            return;
+        }
+        refrain::mod::candidate directory_candidate{};
+        directory_candidate.id = "test";
+        directory_candidate.version = "1.0.0";
+        directory_candidate.path = root + "/manifest.toml";
+        directory_candidate.kind = refrain::mod::package_kind::directory;
+        const auto refused{(*resolver)(directory_candidate)};
+        ut::expect(!refused);
+        if (!refused) {
+            ut::expect(refused.error().code ==
+                       refrain::error_code::unsupported);
+        }
+
+        // The explicit directory source still reads the tree for tools/tests.
+        auto source{refrain::mod::make_directory_package_source(root)};
+        ut::expect(static_cast<bool>(source));
+        if (!source) {
+            return;
+        }
+        ut::expect((*source)->kind() == refrain::mod::package_kind::directory);
+        ut::expect(static_cast<bool>((*source)->read("manifest.toml")));
+    };
 };
