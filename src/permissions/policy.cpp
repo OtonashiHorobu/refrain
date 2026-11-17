@@ -4,6 +4,8 @@
 
 #include <refrain/permissions/policy.hpp>
 
+#include <refrain/core/log.hpp>
+
 #include <fmt/format.h>
 
 #include <algorithm>
@@ -23,6 +25,15 @@ namespace {
 namespace config = core::config;
 using services::permissions::permission_result;
 using services::permissions::subject_kind;
+
+constexpr refrain::log::logger log_permissions{"permissions"};
+
+/// Warnings collected while a document parses. They are emitted only once the
+/// whole policy is accepted, so a rejected document does not leave the operator
+/// with advice about a configuration that is not in effect.
+using load_warnings = std::vector<std::string>;
+
+constexpr std::string_view player_key_prefix{"player:"};
 
 constexpr std::array<std::string_view, 5> root_tables{"defaults", "op", "ops",
                                                       "grants", "groups"};
@@ -48,6 +59,18 @@ constexpr std::string_view group_prefix{"@"};
 [[nodiscard]] auto contains_one_of(std::span<const std::string_view> known,
                                    std::string_view candidate) -> bool {
     return std::ranges::find(known, candidate) != known.end();
+}
+
+/// The profile name of a `player:<name>` subject key, or empty for a uuid key
+/// and for the other subject kinds. Only an accepted configuration reaches the
+/// point that calls this, so a non-empty result is a valid profile name.
+[[nodiscard]] auto profile_name_key(std::string_view key) noexcept
+    -> std::string_view {
+    if (!key.starts_with(player_key_prefix)) {
+        return {};
+    }
+    const auto id{key.substr(player_key_prefix.size())};
+    return is_uuid(id) ? std::string_view{} : id;
 }
 
 /// Reject keys the schema does not define so a typo cannot be read as "not
@@ -186,9 +209,12 @@ constexpr std::string_view group_prefix{"@"};
 /// Parse `[ops].players`: the operator source the built-in resolver owns. Each
 /// entry is a canonical lowercase player uuid or a profile name; anything else
 /// is a configuration error, because a malformed entry would otherwise be a
-/// silently ineffective grant of operator rights.
+/// silently ineffective grant of operator rights. A profile name is accepted
+/// for compatibility and warned about, because the name belongs to the account
+/// that holds it, not to the operator who configured it.
 [[nodiscard]] auto parse_ops(const config::document &document,
-                             policy &policy_value) -> status {
+                             policy &policy_value, load_warnings &warnings)
+    -> status {
     const std::array<std::string_view, 1> path{"ops"};
     if (!document.contains_at(path)) {
         return status_ok();
@@ -220,6 +246,13 @@ constexpr std::string_view group_prefix{"@"};
                 fmt::format("ops.players[{}] '{}' is not a lowercase player "
                             "uuid or a profile name",
                             index, entry))};
+        }
+        if (!is_uuid(entry)) {
+            warnings.push_back(fmt::format(
+                "operator entry '{}' in [ops].players of '{}' matches by "
+                "profile name, which another account can claim after the "
+                "holder renames; list the player uuid instead",
+                entry, document.origin()));
         }
         policy_value.operators.push_back(entry);
     }
@@ -273,7 +306,8 @@ constexpr std::string_view group_prefix{"@"};
 }
 
 [[nodiscard]] auto parse_grants(const config::document &document,
-                                policy &policy_value) -> status {
+                                policy &policy_value, load_warnings &warnings)
+    -> status {
     const std::array<std::string_view, 1> path{"grants"};
     if (!document.contains_at(path)) {
         return status_ok();
@@ -289,6 +323,13 @@ constexpr std::string_view group_prefix{"@"};
                             "'player:<uuid or profile name>', "
                             "'entity:<uuid>' or 'plugin:<mod id>')",
                             key))};
+        }
+        if (!profile_name_key(key).empty()) {
+            warnings.push_back(fmt::format(
+                "grant '{}' in '{}' matches by profile name, which another "
+                "account can claim after the holder renames; key it by the "
+                "player uuid instead",
+                key, document.origin()));
         }
         const std::array<std::string_view, 2> value_path{"grants", key};
         auto values{document.get_strings_at(value_path)};
@@ -584,12 +625,13 @@ auto parse_policy(const core::config::document &document) -> result<policy> {
     }
 
     policy policy_value{};
+    load_warnings warnings{};
     // Groups first: grants may reference them and a dangling reference is an
     // error, not a silently ignored rule.
     if (auto parsed{parse_groups(document, policy_value)}; !parsed) {
         return std::unexpected{std::move(parsed.error())};
     }
-    if (auto parsed{parse_grants(document, policy_value)}; !parsed) {
+    if (auto parsed{parse_grants(document, policy_value, warnings)}; !parsed) {
         return std::unexpected{std::move(parsed.error())};
     }
     if (auto parsed{parse_defaults(document, policy_value)}; !parsed) {
@@ -598,8 +640,14 @@ auto parse_policy(const core::config::document &document) -> result<policy> {
     if (auto parsed{parse_op(document, policy_value)}; !parsed) {
         return std::unexpected{std::move(parsed.error())};
     }
-    if (auto parsed{parse_ops(document, policy_value)}; !parsed) {
+    if (auto parsed{parse_ops(document, policy_value, warnings)}; !parsed) {
         return std::unexpected{std::move(parsed.error())};
+    }
+    // A name-keyed entry is a compatibility fallback, so it stays in effect.
+    // The warning tells the operator that the rule follows a mutable profile
+    // name, which a different account can hold after a rename.
+    for (const auto &warning : warnings) {
+        log_permissions.warn("{}", warning);
     }
     return policy_value;
 }

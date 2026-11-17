@@ -369,9 +369,22 @@ watchdog_timeout_ms = 5000
 a dot-separated lowercase path such as `refrain.command.gamemode` or
 `refrain.mods.admin`; a rule may end in `.*` to cover a namespace and may start
 with `!` to deny, and a deny wins over every grant. Subjects are
-`player:<uuid>` (a profile name also matches as a fallback), `entity:<uuid>` and
-`plugin:<mod id>`; a grant may list `@<group>` to join a group declared in
-`[groups]`.
+`player:<uuid>` (a profile name also matches as a fallback and warns at load),
+`entity:<uuid>` and `plugin:<mod id>`; a grant may list `@<group>` to join a
+group declared in `[groups]`.
+
+Profile names are mutable. Online mode identifies an account by its profile
+uuid, and a player who renames releases the old name for another account to
+claim. A name-keyed entry (`player:<profile name>` in `[grants]` or a profile
+name in `[ops].players`) follows the name, so a rename can transfer the grant
+or the operator status to the account that claims the old name.
+
+The resolver keeps the name fallback for compatibility and loading the policy
+writes one warning for each name-keyed entry, naming the entry and recommending
+the uuid form. Prefer the canonical lowercase profile uuid in online mode. The
+join log line `player joined with id <uuid> as <name>` prints the profile uuid
+of a joining player, and `permissions grant <name> <node>` resolves an online
+name to that uuid before it writes the entry.
 
 ```toml
 [defaults]
@@ -387,8 +400,9 @@ min_level = 1
 nodes = ["*"]           # nodes every operator holds
 
 [ops]
-# Players treated as operators: canonical lowercase profile uuids or profile
-# names. The server console always holds every node.
+# Players treated as operators, by canonical lowercase profile uuid. A profile
+# name is accepted for compatibility and warns at load. The server console
+# always holds every node.
 players = []
 
 [grants]
