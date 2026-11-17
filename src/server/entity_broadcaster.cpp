@@ -14,6 +14,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <span>
 #include <utility>
 #include <vector>
@@ -230,13 +231,31 @@ void broadcast_session_animation(play_gateway &gateway,
     }
 }
 
-[[nodiscard]] auto chunk_coordinate(double value) -> std::int64_t {
+[[nodiscard]] auto chunk_coordinate(double value)
+    -> std::optional<std::int64_t> {
+    // The broadcast snapshot drops a record it cannot index, so the guard is
+    // unreachable from `tick`; it keeps a future caller from converting a
+    // value whose floor is outside the integer range.
+    if (!std::isfinite(value) || std::fabs(value) > world_horizontal_limit) {
+        return std::nullopt;
+    }
     return static_cast<std::int64_t>(std::floor(value / 16.0));
 }
 
 [[nodiscard]] auto angle_byte(float degrees) -> std::int8_t {
-    return static_cast<std::int8_t>(
-        std::lround(static_cast<double>(degrees) * (256.0 / 360.0)));
+    // The snapshot drops a non-finite record, so the guard is unreachable from
+    // `tick`; it keeps a future caller from rounding a value that has no
+    // defined result.
+    if (!std::isfinite(degrees)) {
+        return 0;
+    }
+    // The byte angle is periodic; reduce the angle into one turn first so a
+    // finite but unnormalised view angle cannot overflow the rounding.
+    auto wrapped{std::fmod(static_cast<double>(degrees), 360.0)};
+    if (wrapped < 0.0) {
+        wrapped += 360.0;
+    }
+    return static_cast<std::int8_t>(std::lround(wrapped * (256.0 / 360.0)));
 }
 
 } // namespace
@@ -256,6 +275,16 @@ void entity_broadcaster::tick(const refrain::session::play_session &players) {
     snapshot_.clear();
     snapshot_.reserve(players.size());
     players.for_each([this](const refrain::session::player &value) {
+        // A record the visibility index cannot key or the movement encoders
+        // cannot convert is left out of this tick. The movement and teleport
+        // boundaries never store such a position; the filter keeps a provider
+        // that bypassed them from making the broadcast perform an undefined
+        // conversion. Addressable records are unaffected.
+        if (!finite_position(value.x, value.y, value.z, value.yaw,
+                             value.pitch) ||
+            !addressable_position(value.x, value.y, value.z)) {
+            return;
+        }
         snapshot_.push_back(&value);
     });
     // The index and every emitted stream follow ascending entity id; the
@@ -350,26 +379,29 @@ void entity_broadcaster::collect_visibility_changes() {
     for (const auto *value : snapshot_) {
         const auto chunk_x{chunk_coordinate(value->x)};
         const auto chunk_z{chunk_coordinate(value->z)};
+        if (!chunk_x || !chunk_z) {
+            continue;
+        }
         const auto found{anchors_.find(value->connection)};
         if (found == anchors_.end()) {
             const entity_anchor anchor{
                 .world = std::string{value->world},
-                .chunk_x = chunk_x,
-                .chunk_z = chunk_z,
+                .chunk_x = *chunk_x,
+                .chunk_z = *chunk_z,
                 .view_distance = value->view_distance,
             };
             anchors_.emplace(value->connection, anchor);
             dirty_viewers_.insert(value->connection);
             dirty_entities_.insert(value->connection);
         } else if (found->second.world != value->world ||
-                   found->second.chunk_x != chunk_x ||
-                   found->second.chunk_z != chunk_z ||
+                   found->second.chunk_x != *chunk_x ||
+                   found->second.chunk_z != *chunk_z ||
                    found->second.view_distance != value->view_distance) {
             // Only a change touches the stored anchor: the steady state is one
             // comparison against the record, not a copy of it.
             found->second.world.assign(value->world);
-            found->second.chunk_x = chunk_x;
-            found->second.chunk_z = chunk_z;
+            found->second.chunk_x = *chunk_x;
+            found->second.chunk_z = *chunk_z;
             found->second.view_distance = value->view_distance;
             dirty_viewers_.insert(value->connection);
             dirty_entities_.insert(value->connection);
@@ -489,8 +521,12 @@ void entity_broadcaster::refresh_entity(std::uint64_t connection) {
     pair_work_ += snapshot_.size();
     // Every viewer that may see the entity now sits inside the chunk window
     // of its current chunk.
-    index_.viewers_at(entity->world, chunk_coordinate(entity->x),
-                      chunk_coordinate(entity->z), candidates_);
+    const auto chunk_x{chunk_coordinate(entity->x)};
+    const auto chunk_z{chunk_coordinate(entity->z)};
+    if (!chunk_x || !chunk_z) {
+        return;
+    }
+    index_.viewers_at(entity->world, *chunk_x, *chunk_z, candidates_);
     pair_work_ += candidates_.size();
     for (const auto viewer_position : candidates_) {
         if (viewer_position == entity_position) {
