@@ -24,6 +24,11 @@ namespace refrain::sim {
 /// needs a deterministic, replay-stable identifier for the entity table. Ids
 /// stay within the signed 32-bit range because they are written to the wire as
 /// a VarInt entity id.
+///
+/// TODO: entity ids are not persisted yet. When the storage entity format
+/// lands, a world reload must restore the stored id of every entity before
+/// allocating new ones, so replay and the state hash stay stable across a
+/// restart.
 using entity_id = std::uint64_t;
 
 /// Connection id reserved for the synthetic player that the console and replay

@@ -16,7 +16,13 @@
 //   `world_store::open` before any region is opened.
 // * A corrupt/foreign marker or an ambiguous on-disk state fails closed
 //   (`parse_error`/`io_error`); it is never silently ignored.
-// * Online dual-generation rewriting is not implemented.
+// * Online rewriting is not implemented: this contract requires the world to be
+//   closed for the whole rebuild.
+//
+// TODO: online rewriting needs dual generations. The new generation is written
+// and validated beside the live one, readers keep the old generation open until
+// they release it, and the store switches new opens to the rebuilt generation
+// before the old one is retired, so no reader observes a half-swapped world.
 
 #pragma once
 
