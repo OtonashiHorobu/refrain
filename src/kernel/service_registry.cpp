@@ -268,11 +268,22 @@ auto service_registry::select_active(std::string_view service,
     }
 
     // Re-selecting an existing (service, instance) slot updates it in place;
-    // selecting a new instance adds a slot (instanced composition).
+    // selecting a new instance adds a slot (instanced composition). When the
+    // slot already has a visible payload, the new payload and its generation
+    // are published in the same critical section: a `provider_handle` cached
+    // before this call is stale from the moment the new provider becomes
+    // visible, not only after the next `commit_epoch()`. The first publish of a
+    // slot keeps generation zero until the commit that stamps the initial
+    // composition (see commit_epoch()), so no handle can be invalidated by a
+    // generation that was never handed out.
     const auto key{key_of(service, instance)};
-    active_.insert_or_assign(
-        key, active_entry{.serial = candidate->serial,
-                          .generation = slot_generations_[key]});
+    const auto *previous = active_locked(key);
+    auto generation = slot_generations_[key];
+    if (previous != nullptr || generation != 0) {
+        generation = ++slot_generations_[key];
+    }
+    active_.insert_or_assign(key, active_entry{.serial = candidate->serial,
+                                               .generation = generation});
     dirty_.insert(key);
     staged_.erase(key);
     return status_ok();
@@ -429,12 +440,19 @@ auto service_registry::commit_epoch() -> result<std::uint64_t> {
     }
     staged_.clear();
 
+    // `select_active()` publishes a payload together with its new generation
+    // whenever the slot already had one; the dirty pass only has to stamp the
+    // first generation of a slot (the initial composition) and account for the
+    // epoch advance. Bumping the generation again here would invalidate a
+    // perfectly current handle at a commit that changed no payload.
     for (const auto &key : dirty_) {
         const auto slot = active_.find(key);
         if (slot == active_.end()) {
             continue;
         }
-        slot->second.generation = ++slot_generations_[key];
+        if (slot->second.generation == 0) {
+            slot->second.generation = ++slot_generations_[key];
+        }
         if (!in_flight_.contains(key)) {
             in_flight_[key] =
                 std::make_shared<std::atomic<std::uint64_t>>(std::uint64_t{0});
