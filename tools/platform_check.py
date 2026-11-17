@@ -44,6 +44,10 @@ ALLOWED_WHITE_BOX_TESTS = (
     # needs to prove the check happens before `open` (a real open on a FIFO
     # blocks). POSIX-only; compiled out on Windows (`#if !defined(_WIN32)`).
     Path("test/core/test_io.cpp"),
+    # Config fail-closed: the error path (a path component that is a regular
+    # file) is the POSIX ENOTDIR model; Windows reports it as a missing path
+    # instead, so that assertion is compiled out there (`#if !defined(_WIN32)`).
+    Path("test/core/test_config.cpp"),
     # Console sink direction: proving that diagnostics go to stderr and never
     # to the command's stdout data channel is only observable at the stdio
     # descriptor level; the test dup2's fd 1/2 onto temp files and restores
