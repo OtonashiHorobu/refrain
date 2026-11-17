@@ -171,4 +171,54 @@ suite<"sim/world-move"> world_move_tests = [] {
             expect(tick_events == 1);
             expect(target->schedule_after(1, [] {}) == 2U);
         };
+
+    "a moved world keeps its players and entities and their id sequence"_test =
+        [] {
+            const refrain::test_support::scratch_directory scratch;
+            auto source{make_world(scratch.path() / "source")};
+            expect(source.has_value());
+            if (!source) {
+                return;
+            }
+            const auto alice{source->add_player(sim::player_table::registration{
+                .connection = 1,
+                .name = "Alice",
+                .world = "overworld",
+                .x = 1.0,
+                .y = 65.0,
+                .z = 2.0,
+            })};
+            const auto pig{
+                source->spawn_entity("minecraft:pig", 4.5, 65.0, 4.5)};
+            expect(alice.has_value() && *alice == 1U);
+            expect(pig.has_value() && *pig == 2U);
+            auto *record{source->player(1)};
+            expect(record != nullptr);
+            if (record != nullptr) {
+                record->health = 11.0F;
+            }
+
+            sim::world moved{std::move(*source)};
+            // The player table lives in the entity store the world owns, so a
+            // move must carry both the table and the entity components.
+            expect(moved.player(1) != nullptr);
+            expect(moved.player(1)->name == "Alice");
+            expect(moved.player(1)->health == 11.0F);
+            expect(moved.player(2) == nullptr);
+            expect(moved.entity(2).has_value());
+            expect(moved.entities().size() == 1U);
+            // The shared sequence continues from the source, so the moved-to
+            // world never reissues a live id.
+            const auto cow{moved.spawn_entity("minecraft:cow", 8.5, 65.0, 8.5)};
+            expect(cow.has_value() && *cow == 3U);
+            const auto bob{moved.add_player(sim::player_table::registration{
+                .connection = 2,
+                .name = "Bob",
+                .world = "overworld",
+                .x = 9.0,
+                .y = 65.0,
+                .z = 9.0,
+            })};
+            expect(bob.has_value() && *bob == 4U);
+        };
 };

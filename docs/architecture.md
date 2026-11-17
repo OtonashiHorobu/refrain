@@ -213,9 +213,10 @@ way to read the entity set: a spawn appends because a new id is always the
 highest, a despawn removes its entry, and adopting or reloading a column
 rebuilds and sorts it. Component pools iterate in creation order and are never
 walked directly, so the state hash and the clientbound entity stream see the
-same order regardless of which entity was created or destroyed first. A player
-record still lives in its own player table and shares the logical id space with
-the spawned entities.
+same order regardless of which entity was created or destroyed first. Player
+records live in the same store: the player table is a component of the registry,
+the store owns it next to the entity components, and player registration and
+entity spawn allocate their ids from the store's one sequence.
 
 ### Player physics and survival
 

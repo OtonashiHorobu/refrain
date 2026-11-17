@@ -143,8 +143,7 @@ world::world(store_type &store, borrowed_tag)
 world::world(world &&other) noexcept
     : store_{std::move(other.store_)}, borrowed_{other.borrowed_},
       registry_{std::move(other.registry_)}, chunks_{std::move(other.chunks_)},
-      tickets_{std::move(other.tickets_)}, players_{std::move(other.players_)},
-      items_{std::move(other.items_)},
+      tickets_{std::move(other.tickets_)}, items_{std::move(other.items_)},
       light_table_{std::move(other.light_table_)},
       zstd_policy_{other.zstd_policy_}, entities_{std::move(other.entities_)},
       spawn_{other.spawn_}, difficulty_{other.difficulty_},
@@ -169,7 +168,6 @@ auto world::operator=(world &&other) noexcept -> world & {
         collisions_.clear();
         chunks_ = std::move(other.chunks_);
         tickets_ = std::move(other.tickets_);
-        players_ = std::move(other.players_);
         items_ = std::move(other.items_);
         light_table_ = std::move(other.light_table_);
         zstd_policy_ = other.zstd_policy_;
@@ -332,7 +330,7 @@ auto world::spawn_column_entities(chunk &column,
         const auto &record{records[index]};
         auto id{std::optional<entity_id>{}};
         if (entity_ids.empty()) {
-            auto allocated{players_.allocate_entity_id()};
+            auto allocated{entities_->allocate_id()};
             if (!allocated) {
                 // Roll back the ids allocated for this column so a failed load
                 // leaves no orphaned entities behind.
@@ -898,7 +896,7 @@ auto world::compression_level_for(const chunk_pos &pos) const noexcept -> int {
     // (not truncation) keeps negative coordinates on the correct chunk. The
     // first player by entity id is the reference; with no players the chunk
     // distance is measured from the origin.
-    const auto *primary{players_.first()};
+    const auto *primary{entities_->players().first()};
     const auto player_x{
         std::floor((primary == nullptr ? 0.0 : primary->x) /
                    static_cast<double>(world_ns::section_edge))};
@@ -1220,26 +1218,28 @@ auto world::store_clock_state() -> status {
     return store_ref().commit();
 }
 
-auto world::players() noexcept -> player_table & { return players_; }
+auto world::players() noexcept -> player_table & {
+    return entities_->players();
+}
 
 auto world::players() const noexcept -> const player_table & {
-    return players_;
+    return entities_->players();
 }
 
 auto world::add_player(player_table::registration record) -> result<entity_id> {
-    return players_.add(std::move(record));
+    return entities_->players().add(std::move(record));
 }
 
 auto world::remove_player(std::uint64_t connection) -> bool {
-    return players_.remove(connection);
+    return entities_->players().remove(connection);
 }
 
 auto world::player(entity_id id) noexcept -> player_state * {
-    return players_.find(id);
+    return entities_->players().find(id);
 }
 
 auto world::player(entity_id id) const noexcept -> const player_state * {
-    return players_.find(id);
+    return entities_->players().find(id);
 }
 
 void world::set_player_position(player_state &player, double x, double y,
@@ -1281,7 +1281,8 @@ void world::tick() noexcept {
     // Players tick in ascending entity id order; a player record's physics
     // depends only on its own state and the world blocks, so the order does not
     // couple the records but stays fixed for the state hash.
-    players_.for_each([this](player_state &player) { tick_player(player); });
+    entities_->players().for_each(
+        [this](player_state &player) { tick_player(player); });
     tick_entities();
     ++tick_;
     (void)rng_.next_u64();
@@ -1498,7 +1499,7 @@ auto world::spawn_entity(std::string_view type, double x, double y, double z)
         return std::unexpected{make_error(error_code::invalid_argument,
                                           "entity type must not be empty")};
     }
-    auto id{players_.allocate_entity_id()};
+    auto id{entities_->allocate_id()};
     if (!id) {
         return std::unexpected{std::move(id.error())};
     }
@@ -2300,8 +2301,8 @@ auto world::state_hash() const -> data::digest32 {
     // Every player record in ascending entity id order. The key is the entity
     // id, not the insertion order; identity fields are excluded because they
     // are not simulation state.
-    append_u64(static_cast<std::uint64_t>(players_.size()));
-    for (const auto &[id, player] : players_.records()) {
+    append_u64(static_cast<std::uint64_t>(entities_->players().size()));
+    for (const auto &[id, player] : entities_->players().records()) {
         append_u64(id);
         append_double(player.x);
         append_double(player.y);

@@ -19,9 +19,9 @@
 
 namespace refrain::sim {
 
-/// Process-local runtime entity id. Ids are assigned in spawn order and are
+/// Process-local logical entity id. Ids are assigned in spawn order and are
 /// never persisted (the storage entity format is not implemented yet); the sim
-/// needs a deterministic, replay-stable identifier for the entity table. Ids
+/// needs a deterministic, replay-stable identifier for the entity storage. Ids
 /// stay within the signed 32-bit range because they are written to the wire as
 /// a VarInt entity id.
 ///
@@ -30,6 +30,28 @@ namespace refrain::sim {
 /// allocating new ones, so replay and the state hash stay stable across a
 /// restart.
 using entity_id = std::uint64_t;
+
+namespace detail {
+
+/// Monotonic process-local logical-id sequence shared by player registration
+/// and runtime entity spawn, so a client never receives two entities with one
+/// id.
+///
+/// The entity store owns the sequence next to its component registry; a player
+/// table used without a world owns one of its own. Ids start at one, increase
+/// by one per allocation and are never handed out again. The ceiling is the
+/// signed 32-bit maximum because a logical id travels as a VarInt entity id.
+class id_sequence {
+  public:
+    /// Yield the next logical id, or `invalid_argument` when the wire range is
+    /// exhausted.
+    [[nodiscard]] auto allocate() -> result<entity_id>;
+
+  private:
+    entity_id next_{1};
+};
+
+} // namespace detail
 
 /// Connection id reserved for the synthetic player that the console and replay
 /// scripts drive. Network connections use positive ids, so the synthetic player
@@ -200,11 +222,27 @@ struct player_state {
 /// Table of player records, keyed and addressed by entity id.
 ///
 /// The map orders records by ascending entity id, which is the canonical order
-/// for the state hash, console selection and packet emission. Player and
-/// non-player entity ids come from the same sequence so a client never receives
-/// two entities with one id.
+/// for the state hash, console selection and packet emission. A world's table
+/// lives in the entity registry as the `players` component: the store owns it
+/// next to the runtime entity components, and both player registration and
+/// entity spawn draw their ids from the store's one sequence. A table
+/// constructed without a sequence serves callers that run the session layer on
+/// their own.
 class player_table {
   public:
+    /// A table that allocates its own ids, for a session layer with no world.
+    player_table() noexcept = default;
+
+    /// A table that draws its ids from `ids`. The entity store constructs its
+    /// table this way so player and entity ids stay one sequence.
+    explicit player_table(detail::id_sequence &ids) noexcept : ids_{&ids} {}
+
+    player_table(const player_table &) = delete;
+    auto operator=(const player_table &) -> player_table & = delete;
+    player_table(player_table &&other) noexcept;
+    auto operator=(player_table &&other) noexcept -> player_table &;
+    ~player_table() = default;
+
     /// Everything needed to create one player record.
     struct registration {
         std::uint64_t connection{synthetic_connection};
@@ -286,12 +324,20 @@ class player_table {
         return players_.size();
     }
 
-    /// Allocate the next process-local entity id. `world::spawn_entity()` draws
-    /// from the same sequence as player registration. Fails when the signed
+    /// Allocate the next process-local logical id. `world::spawn_entity()`
+    /// draws from the same sequence as player registration, so the ids of
+    /// players and runtime entities never collide. Fails when the signed
     /// 32-bit wire range is exhausted.
     [[nodiscard]] auto allocate_entity_id() -> result<entity_id>;
 
   private:
+    /// Sequence of a table that was constructed without one. Declared before
+    /// the pointer below so the default member initialiser can take its
+    /// address.
+    detail::id_sequence own_ids_{};
+    /// Sequence this table draws from; points at `own_ids_` unless a store
+    /// attached its shared sequence at construction.
+    detail::id_sequence *ids_{&own_ids_};
     std::map<entity_id, player_state> players_{};
     /// Entity ids in ascending order, which is the order of the map. A new
     /// player always receives the highest id, so an addition appends and a
@@ -301,7 +347,6 @@ class player_table {
     /// index only follows `add()` and `remove()`; no ordering decision reads
     /// it.
     std::unordered_map<std::uint64_t, entity_id> by_connection_{};
-    entity_id next_entity_id_{1};
 };
 
 } // namespace refrain::sim
