@@ -650,6 +650,39 @@ suite<"server/chunk-service"> chunk_service_tests = [] {
             expect(requests == settled);
         };
 
+    "server/chunk service does not load a column for an update no client holds"_test =
+        [] {
+            test_support::scratch_directory scratch;
+            const auto path{(scratch.path() / "world").string()};
+            expect(static_cast<bool>(world::create_world(path, 7, "probe")));
+            auto opened{sim::world::open(path)};
+            expect(static_cast<bool>(opened));
+            if (!opened) {
+                return;
+            }
+            expect(static_cast<bool>(
+                opened->insert_chunk(sim::chunk_pos{0, 0}, make_column())));
+            const auto torch{opened->registry().intern("minecraft:torch")};
+            expect(static_cast<bool>(opened->set_block(
+                sim::block_pos{0, static_cast<std::int16_t>(0), 0}, torch)));
+            // Keep only the light changes: block edits are drained here so the
+            // update under test is the one the unloaded column left behind.
+            static_cast<void>(opened->take_block_edits());
+            expect(
+                static_cast<bool>(opened->unload_chunk(sim::chunk_pos{0, 0})));
+            expect(opened->loaded_chunks() == 0U);
+
+            const auto port{server::make_borrowed_world_port(*opened)};
+            recording_gateway gateway;
+            // No active connection holds the column, so no packet is sent and
+            // the column must not be reloaded just to encode one.
+            server::chunk_service service;
+            service.attach(gateway,
+                           server::chunk_packet_source{.world = port.get()});
+            service.broadcast_updates(*port);
+            expect(opened->loaded_chunks() == 0U);
+        };
+
     "server/chunk store reload returns the same content"_test = [] {
         test_support::scratch_directory scratch;
         const auto path{(scratch.path() / "world").string()};
