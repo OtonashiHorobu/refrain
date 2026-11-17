@@ -33,6 +33,21 @@ auto dispatcher::node_count() const noexcept -> std::size_t {
     return nodes_.size();
 }
 
+auto dispatcher::permission_of(std::string_view command) const
+    -> node_permission {
+    if (command.empty() || nodes_.empty()) {
+        return {};
+    }
+    for (const auto child : nodes_[0].children) {
+        const auto &entry = nodes_[child];
+        if (entry.kind == node_kind::literal && entry.name == command) {
+            return node_permission{entry.permission_node,
+                                   entry.permission_fallback};
+        }
+    }
+    return {};
+}
+
 auto dispatcher::root() noexcept -> node_ref { return node_ref{this, 0}; }
 
 auto dispatcher::literal(std::string_view name) -> node_ref {
@@ -127,9 +142,20 @@ void dispatcher::set_requirement(
     bump_revision();
 }
 
-void dispatcher::set_visibility_filter(
-    std::function<bool(const source &, std::string_view)> filter) {
-    visibility_ = std::move(filter);
+void dispatcher::set_permission_filter(permission_filter filter) {
+    permission_filter_ = std::move(filter);
+    bump_revision();
+}
+
+void dispatcher::set_permission(std::size_t index, std::string_view node,
+                                permission_level fallback) {
+    if (index >= nodes_.size()) {
+        assert(false && "permission set on a missing command node");
+        return;
+    }
+    auto &entry = nodes_[index];
+    entry.permission_node = std::string{node};
+    entry.permission_fallback = fallback;
     bump_revision();
 }
 
@@ -165,23 +191,30 @@ void dispatcher::bump_revision() noexcept {
     revision_.fetch_add(1, std::memory_order_relaxed);
 }
 
-auto dispatcher::is_allowed(std::size_t index, const source &src) const
-    -> bool {
-    return nodes_[index].requirement == nullptr ||
-           nodes_[index].requirement(src);
-}
-
 auto dispatcher::is_visible(std::size_t index, const source &src) const
     -> bool {
-    if (!is_allowed(index, src)) {
+    const auto &entry = nodes_[index];
+    if (entry.requirement != nullptr && !entry.requirement(src)) {
         return false;
     }
-    // The root has no name to filter on; its own requirement still gates the
-    // whole graph.
-    if (index == 0 || visibility_ == nullptr) {
+    if (entry.permission_node.empty()) {
         return true;
     }
-    return visibility_(src, nodes_[index].name);
+    if (permission_filter_) {
+        const auto decision{permission_filter_(
+            src,
+            node_permission{entry.permission_node, entry.permission_fallback})};
+        if (decision == permission_decision::allowed) {
+            return true;
+        }
+        if (decision == permission_decision::denied) {
+            return false;
+        }
+    }
+    // No filter, or the provider has no opinion: the declared vanilla level is
+    // the fallback, which is the whole policy of a composition without a
+    // permission service.
+    return src.has_permission(entry.permission_fallback);
 }
 
 auto dispatcher::parse_command(std::string_view input, const source &src,
@@ -487,6 +520,14 @@ auto node_ref::require(std::function<bool(const source &)> predicate)
     -> node_ref {
     if (valid()) {
         owner_->set_requirement(index_, std::move(predicate));
+    }
+    return *this;
+}
+
+auto node_ref::require_node(std::string_view node, permission_level fallback)
+    -> node_ref {
+    if (valid()) {
+        owner_->set_permission(index_, node, fallback);
     }
     return *this;
 }

@@ -156,8 +156,7 @@ constexpr std::string_view clean_loader_id{"com.example.clean"};
                                     bool hot_reload) -> std::string {
     const auto directory{scratch.path() / std::string{name}};
     const auto admin{fmt::format(
-        "[lifecycle]\nhot_install = {}\nhot_reload = {}\n"
-        "\n[admin]\noperators = []\n",
+        "[lifecycle]\nhot_install = {}\nhot_reload = {}\n",
         hot_install ? "true" : "false", hot_reload ? "true" : "false")};
     // The fixture packages are unsigned; allow unsigned installs.
     static_cast<void>(write_text(directory / "mods_admin.toml", admin));

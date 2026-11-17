@@ -33,8 +33,10 @@ namespace refrain::app {
 // ones that fail or are refused.
 
 /// Permission node the in-game frontend checks. The console is always
-/// allowed; a player needs the operator permission the server maps onto this
-/// node.
+/// allowed. A player needs this node; the built-in permission service decides
+/// who holds it (an operator listed under `[ops].players` or an explicit
+/// grant), and a composition without the service falls back to the declared
+/// vanilla op level of the command tree.
 inline constexpr std::string_view mod_admin_permission{"refrain.mods.admin"};
 
 /// Who runs a management command. The console has no player uuid; a player

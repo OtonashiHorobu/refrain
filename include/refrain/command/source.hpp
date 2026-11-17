@@ -34,6 +34,15 @@ inline constexpr permission_level owner = permission_level::owner;
 
 } // namespace level
 
+/// Answer of one permission node check, mirroring the tri-state of the
+/// `refrain:permissions` chain: a provider that owns only some nodes answers
+/// `not_handled` for the rest, and the caller then applies its own fallback.
+enum class permission_decision : std::uint8_t {
+    allowed = 0,
+    denied = 1,
+    not_handled = 2,
+};
+
 /// Identity hook that is independent of the protocol and the world layer. The
 /// key is opaque to the command module: a server stores whatever stable value
 /// it uses for the player (a hash of the profile id, a session id, ...). The

@@ -170,8 +170,7 @@ struct log_capture {
                                     std::string_view name, bool hot_reload_data)
     -> std::string {
     const auto directory{scratch.path() / std::string{name}};
-    const auto admin{fmt::format("[lifecycle]\nhot_reload_data = {}\n"
-                                 "\n[admin]\noperators = []\n",
+    const auto admin{fmt::format("[lifecycle]\nhot_reload_data = {}\n",
                                  hot_reload_data ? "true" : "false")};
     static_cast<void>(write_text(directory / "mods_admin.toml", admin));
     return directory.string();

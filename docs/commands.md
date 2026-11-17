@@ -69,14 +69,18 @@ nothing; the client simply shows no completion for that argument.
 ## Adding a command
 
 Registration attaches literals and arguments to the dispatcher. `then()`
-attaches a child, `executes()` attaches an executor, `require()` attaches a
-visibility requirement, `tooltip()` supplies the completion tooltip and
-`redirect()` continues parsing at another node without consuming its name.
+attaches a child, `executes()` attaches an executor, `require_node()` declares
+the command's permission node and its vanilla ladder fallback, `require()`
+attaches a plain visibility requirement, `tooltip()` supplies the completion
+tooltip and `redirect()` continues parsing at another node without consuming
+its name.
 
 ```cpp
-auto gamemode = dispatcher.literal("gamemode").tooltip("Change your game mode");
-auto mode = dispatcher.argument("mode", command::gamemode_arg())
-                .require(command::level::gamemode);
+auto gamemode =
+    dispatcher.literal("gamemode")
+        .require_node("refrain.command.gamemode", command::level::gamemode)
+        .tooltip("Change your game mode");
+auto mode = dispatcher.argument("mode", command::gamemode_arg());
 mode.executes([](command::context &ctx) -> refrain::result<int> {
     const auto mode = ctx.gamemode("mode");
     if (!mode.has_value()) {
@@ -104,9 +108,11 @@ The dispatcher is single-writer: build the graph at startup, then share it.
 `dispatcher::tree(source)` walks the graph and returns an immutable snapshot in
 preorder. Nodes whose requirement rejects the source are absent together with
 their subtrees, and a redirect whose target is absent is dropped. The
-visibility filter (see below) is consulted in the same walk. The snapshot owns
-its storage, so it stays valid while the dispatcher is mutated; the bridge
-caches one wire tree per permission level and dispatcher revision.
+permission filter (see below) is consulted in the same walk. The snapshot owns
+its storage, so it stays valid while the dispatcher is mutated. The network
+bridge caches one wire tree per subject and per pair of revisions that can
+change the answer: the dispatcher revision and the permission policy revision.
+A change in either rebuilds the snapshot and resends the tree.
 
 The wire adapter serializes the snapshot into the `commands` payload: node type
 flags, children, redirect target, and per argument node the registry id and its
@@ -145,18 +151,31 @@ form the bridge forwards to the client.
 
 Two hooks control which commands a source sees and may run:
 
-- `require()` on a node: a permission level or an arbitrary predicate. It
-  filters the tree, completion and execution.
-- `dispatcher::set_visibility_filter()`: one callback consulted for every node
-  in addition to its own requirement. A permission service installs its check
-  here; the command module itself has no permission registry.
+- `require_node()` on a node: the stable permission node of the command, for
+  example `refrain.command.gamemode` or `refrain.mods.admin`, plus the vanilla
+  ladder level used when no permission provider is active. Overloads of
+  `require()` remain for a bare level or an arbitrary predicate.
+- `dispatcher::set_permission_filter()`: one callback consulted for every node
+  that declares a node, in addition to its own requirement. It receives the
+  source and the declared node and answers `allowed`, `denied` or
+  `not_handled`; `not_handled` falls back to the declared ladder level. The
+  composition root installs the check backed by the `refrain:permissions`
+  service; the command module itself has no permission registry.
+
+The same filter decides the tree snapshot, the completion list and the
+execution path, so the three cannot disagree about who may use a command. A
+denied literal is absent from the tree and from completion, and the network
+bridge answers the denial with the node text instead of a generic parse error.
+The server console is a `console_source` at the owner level and the permission
+service answers it as holding every node.
 
 The `source` interface carries the permission ladder, an opaque identity key and
 an optional online-player list used for name completion, so a caller can
 implement console, player, command-block or test sources without the network or
 world layers. Whether a particular command requires a particular permission is
 a registration decision; the reference's permission levels are available as
-`command::level`.
+`command::level`. The complete node table of the built-in tree is in
+[Running a server](running.md#in-game-commands).
 
 ## Current limits
 
@@ -286,6 +305,6 @@ commands are delivered in the batches named in the notes.
 | `/worldborder` | planned | batch 4: execute and functions |
 
 Two server commands are not part of the reference's root set: `/mods` manages
-the installed mod packages (operator-gated tree) and `/hardcore` toggles the
-hardcore flag of the open world.
+the installed mod packages (gated by the `refrain.mods.admin` permission node)
+and `/hardcore` toggles the hardcore flag of the open world.
 

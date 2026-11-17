@@ -24,10 +24,11 @@ namespace config = core::config;
 using services::permissions::permission_result;
 using services::permissions::subject_kind;
 
-constexpr std::array<std::string_view, 4> root_tables{"defaults", "op",
+constexpr std::array<std::string_view, 5> root_tables{"defaults", "op", "ops",
                                                       "grants", "groups"};
-constexpr std::array<std::string_view, 2> default_keys{"default"};
+constexpr std::array<std::string_view, 2> default_keys{"default", "nodes"};
 constexpr std::array<std::string_view, 2> op_keys{"min_level", "nodes"};
+constexpr std::array<std::string_view, 1> ops_keys{"players"};
 constexpr std::string_view deny_prefix{"!"};
 constexpr std::string_view group_prefix{"@"};
 
@@ -95,6 +96,19 @@ constexpr std::string_view group_prefix{"@"};
                                    document.keys("defaults"))};
         !checked) {
         return checked;
+    }
+    const std::array<std::string_view, 2> nodes_path{"defaults", "nodes"};
+    if (document.contains_at(nodes_path)) {
+        auto values{document.get_strings_at(nodes_path)};
+        if (!values) {
+            return std::unexpected{type_error(document, "defaults.nodes",
+                                              "an array of node strings")};
+        }
+        auto set{parse_node_set(document, *values, "[defaults].nodes")};
+        if (!set) {
+            return std::unexpected{std::move(set.error())};
+        }
+        policy_value.default_nodes = std::move(*set);
     }
     const std::array<std::string_view, 2> value_path{"defaults", "default"};
     if (!document.contains_at(value_path)) {
@@ -166,6 +180,49 @@ constexpr std::string_view group_prefix{"@"};
         return std::unexpected{std::move(set.error())};
     }
     policy_value.op_nodes = std::move(*set);
+    return status_ok();
+}
+
+/// Parse `[ops].players`: the operator source the built-in resolver owns. Each
+/// entry is a canonical lowercase player uuid or a profile name; anything else
+/// is a configuration error, because a malformed entry would otherwise be a
+/// silently ineffective grant of operator rights.
+[[nodiscard]] auto parse_ops(const config::document &document,
+                             policy &policy_value) -> status {
+    const std::array<std::string_view, 1> path{"ops"};
+    if (!document.contains_at(path)) {
+        return status_ok();
+    }
+    if (document.kind_at(path) != config::value_kind::table) {
+        return std::unexpected{type_error(document, "ops", "a table")};
+    }
+    if (auto checked{
+            validate_keys(document, "ops", ops_keys, document.keys("ops"))};
+        !checked) {
+        return checked;
+    }
+    const std::array<std::string_view, 2> players_path{"ops", "players"};
+    if (!document.contains_at(players_path)) {
+        return status_ok();
+    }
+    auto values{document.get_strings_at(players_path)};
+    if (!values) {
+        return std::unexpected{
+            type_error(document, "ops.players",
+                       "an array of player uuids or profile names")};
+    }
+    policy_value.operators.reserve(values->size());
+    for (std::size_t index{0}; index < values->size(); ++index) {
+        const auto &entry{(*values)[index]};
+        if (!valid_subject_key(fmt::format("player:{}", entry))) {
+            return std::unexpected{policy_error(
+                document,
+                fmt::format("ops.players[{}] '{}' is not a lowercase player "
+                            "uuid or a profile name",
+                            index, entry))};
+        }
+        policy_value.operators.push_back(entry);
+    }
     return status_ok();
 }
 
@@ -285,6 +342,27 @@ constexpr std::string_view group_prefix{"@"};
     return found == policy_value.subjects.end() ? nullptr : &found->second;
 }
 
+/// True when the subject is an operator: a player listed in `[ops].players`
+/// (by canonical uuid or profile name) or a player at or above
+/// `[op].min_level` on the vanilla ladder supplied in the query.
+[[nodiscard]] auto is_operator_subject(const policy &policy_value,
+                                       const subject_view &subject,
+                                       std::uint32_t op_level) noexcept
+    -> bool {
+    if (subject.kind != subject_kind::player) {
+        return false;
+    }
+    if (op_level >= policy_value.op_min_level) {
+        return true;
+    }
+    const auto named = [&policy_value](std::string_view identity) {
+        return !identity.empty() &&
+               std::ranges::find(policy_value.operators, identity) !=
+                   policy_value.operators.end();
+    };
+    return named(subject.id) || named(subject.profile_name);
+}
+
 /// Match one node against every node set that applies to the subject. Returns
 /// deny when any set denies, otherwise grant when any set grants, otherwise
 /// none.
@@ -319,9 +397,14 @@ match_subject(const policy &policy_value, const subject_view &subject,
             return rule_match::deny;
         }
     }
-    const bool is_operator{subject.kind == subject_kind::player &&
-                           op_level >= policy_value.op_min_level};
-    if (is_operator && apply(policy_value.op_nodes)) {
+    const bool operator_subject{
+        is_operator_subject(policy_value, subject, op_level)};
+    if (operator_subject && apply(policy_value.op_nodes)) {
+        return rule_match::deny;
+    }
+    // A public grant applies to every subject and a deny in it still wins over
+    // any grant above it.
+    if (apply(policy_value.default_nodes)) {
         return rule_match::deny;
     }
     return result;
@@ -506,6 +589,9 @@ auto parse_policy(const core::config::document &document) -> result<policy> {
     if (auto parsed{parse_op(document, policy_value)}; !parsed) {
         return std::unexpected{std::move(parsed.error())};
     }
+    if (auto parsed{parse_ops(document, policy_value)}; !parsed) {
+        return std::unexpected{std::move(parsed.error())};
+    }
     return policy_value;
 }
 
@@ -546,8 +632,7 @@ auto evaluate(const policy &policy_value, const subject_view &subject,
         return permission_result::allowed;
     }
     if (policy_value.fallback == default_answer::op &&
-        subject.kind == subject_kind::player &&
-        op_level >= policy_value.op_min_level) {
+        is_operator_subject(policy_value, subject, op_level)) {
         return permission_result::allowed;
     }
     return permission_result::denied;

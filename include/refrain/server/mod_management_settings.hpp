@@ -9,7 +9,6 @@
 
 #include <string>
 #include <string_view>
-#include <vector>
 
 namespace refrain::server {
 
@@ -20,20 +19,22 @@ namespace refrain::server {
 //   mods.toml        install/trust policy, read by the same parser the startup
 //                    content bootstrap uses, so a runtime install cannot
 //                    accept a package the next start would reject;
-//   mods_admin.toml  the hot gates and the in-game operator list:
+//   mods_admin.toml  the hot lifecycle gates:
 //
 //     [lifecycle]
 //     hot_install = false      # apply install/uninstall while running
 //     hot_reload = false       # rebuild a loaded mod in place
 //     hot_reload_data = false  # rebuild the datapack content view
 //
-//     [admin]
-//     operators = ["<uuid>"]   # players allowed to run /mods (console is
-//                              # always allowed)
-//
 // A missing file keeps the safe default (hot off, no player operator). The
 // console reads the policy from the file; a one-run CLI override applies to the
 // startup bootstrap only.
+//
+// Who may run `/mods` is not a setting of this file any more: the in-game tree
+// declares the `refrain.mods.admin` permission node, and the built-in
+// permission service (`config/permissions.toml`) decides who holds it. A
+// leftover `[admin]` table is ignored with a warning so an old operator list is
+// not silently mistaken for an effective grant.
 
 struct mod_management_settings {
     mod::install_policy_config policy{};
@@ -46,9 +47,6 @@ struct mod_management_settings {
     /// `[lifecycle] hot_reload_data`: rebuild the datapack content view
     /// (recipes, loot tables, advancements, worldgen documents) in place.
     bool hot_reload_data{false};
-    /// Canonical lowercase player uuids allowed to run the in-game command,
-    /// in configuration order.
-    std::vector<std::string> operators{};
 };
 
 /// Read the settings from `config_dir`. An empty directory returns the
