@@ -12,6 +12,7 @@
 #include <cstddef>
 #include <ranges>
 #include <set>
+#include <span>
 #include <string>
 #include <utility>
 #include <vector>
@@ -233,6 +234,30 @@ auto decode_structure_document(std::string_view id,
         decoded.jigsaw = std::move(*jigsaw);
     }
     return decoded;
+}
+
+auto applicable_structure_sets(const structure_data_set &data,
+                               std::span<const std::string> possible_biomes)
+    -> std::vector<const structure_set *> {
+    std::vector<const structure_set *> applicable;
+    for (const auto &set_entry : data.sets) {
+        const structure_set &set = set_entry.second;
+        const bool matches = std::ranges::any_of(
+            set.structures, [&](const weighted_structure &entry) {
+                const auto structure = data.structures.find(entry.structure);
+                if (structure == data.structures.end()) {
+                    return false;
+                }
+                return std::ranges::any_of(
+                    possible_biomes, [&](const std::string &biome) {
+                        return data.allows_biome(structure->second, biome);
+                    });
+            });
+        if (matches) {
+            applicable.push_back(&set);
+        }
+    }
+    return applicable;
 }
 
 auto structure_step_index(const structure_data_set &data,

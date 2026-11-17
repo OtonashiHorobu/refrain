@@ -242,7 +242,15 @@ worlds whose preset declares a single biome.
 
 The structure generator runs starts in every dimension: the nether generates
 fortresses, bastion remnants and fossils, and the end generates end cities,
-next to the overworld structure types. The loot tables a structure's containers
+next to the overworld structure types. A generator evaluates only the structure
+sets whose structures can appear with one of the biomes its source produces,
+which is the filter the reference applies when it loads a world's structure
+sets. The filtered list keeps the data set's own order, and a set stays whole
+when one of its entries is possible, so a weighted draw still consumes the same
+entries in the same order. A set that names only other dimensions' biomes is
+never scanned: its starts could not pass their biome check anyway, and a start
+candidate pays for the height and block probes its generation performs before
+that check. The loot tables a structure's containers
 carry are built-in constants of the target version rather than datapack fields:
 the 26.3 structure, template and processor documents name none for the buried
 treasure, igloo, jungle temple, ocean ruin, shipwreck, desert pyramid,
