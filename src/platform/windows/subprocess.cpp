@@ -8,6 +8,8 @@
 
 #include <refrain/platform/file.hpp>
 
+#include "argument_quoting.hpp"
+
 #include <fmt/format.h>
 
 #include <windows.h>
@@ -28,23 +30,6 @@ namespace {
                                fmt::format("{}: {}", what, code.message()));
 }
 
-[[nodiscard]] auto quote_argument(std::string_view argument) -> std::string {
-    if (!argument.empty() &&
-        argument.find_first_of(" \t\"") == std::string_view::npos) {
-        return std::string{argument};
-    }
-    std::string quoted{"\""};
-    for (const char character : argument) {
-        if (character == '"') {
-            quoted += "\\\"";
-        } else {
-            quoted += character;
-        }
-    }
-    quoted += '"';
-    return quoted;
-}
-
 } // namespace
 
 auto run_process(const subprocess_options &options)
@@ -63,10 +48,10 @@ auto run_process(const subprocess_options &options)
             windows_failure("cannot create the stdin pipe", ::GetLastError())};
     }
     ::SetHandleInformation(write_pipe, HANDLE_FLAG_INHERIT, 0);
-    std::string command{quote_argument(options.program)};
+    std::string command{windows_detail::quote_argument(options.program)};
     for (const auto &argument : options.arguments) {
         command += ' ';
-        command += quote_argument(argument);
+        command += windows_detail::quote_argument(argument);
     }
     STARTUPINFOW startup{};
     startup.cb = sizeof(startup);

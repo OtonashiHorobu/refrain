@@ -54,6 +54,13 @@ ALLOWED_WHITE_BOX_TESTS = (
     # them. A production "redirect stdio" abstraction would exist solely for
     # this test. POSIX-only (`#if !defined(_WIN32)`).
     Path("test/core/test_log.cpp"),
+    # Windows command-line quoting: the only way to prove the command line the
+    # subprocess backend builds means the caller's arguments to the child is to
+    # run it back through `CommandLineToArgvW`, the parser the child's C
+    # runtime uses. The test includes the private quoting header, opens
+    # `<windows.h>`/`<shellapi.h>` and frees the parser's block with
+    # `LocalFree`; the `_WIN32` branch compiles all of it out elsewhere.
+    Path("test/platform/test_subprocess.cpp"),
 )
 
 SOURCE_DIRS = ("include", "src", "test", "bench", "tools", "sdk", "schema",
