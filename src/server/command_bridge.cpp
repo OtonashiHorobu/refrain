@@ -9,6 +9,8 @@
 #include <refrain/permissions/client.hpp>
 #include <refrain/server/command_tree_wire.hpp>
 
+#include "command_world_commands.hpp"
+
 #include <fmt/format.h>
 
 #include <algorithm>
@@ -797,6 +799,7 @@ void register_runtime_commands(
         weather.then(node);
     }
 
+    register_world_commands(environment);
     register_mod_commands(environment);
 }
 

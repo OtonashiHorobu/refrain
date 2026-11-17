@@ -253,6 +253,51 @@ struct coordinate {
     return coordinate{value, relative};
 }
 
+/// Parse one world-axis coordinate of a `vec3` position.
+///
+/// Absolute values may be fractional, unlike a block position. The reference
+/// centres an integer absolute X or Z by half a block, because a block position
+/// names the block the entity stands in, and never centres Y; `centre` is false
+/// for the Y component. The centring test is the reference's: the typed number
+/// contains no decimal point.
+[[nodiscard]] auto parse_vec3_coordinate(reader &in, std::size_t argument_start,
+                                         bool centre)
+    -> std::expected<coordinate, argument_error> {
+    if (in.peek() == '^') {
+        return std::unexpected{
+            make_argument_error("you cannot mix world and local coordinates",
+                                in.cursor() - argument_start)};
+    }
+    if (!in.can_read()) {
+        return std::unexpected{make_argument_error(
+            "expected a number", in.cursor() - argument_start)};
+    }
+    bool relative{false};
+    if (in.peek() == '~') {
+        relative = true;
+        in.skip();
+    }
+    double value{0.0};
+    bool has_number{false};
+    bool has_decimal_point{false};
+    if (in.can_read() && in.peek() != ' ') {
+        const auto number_start = in.cursor();
+        if (!read_number_prefix(in, value)) {
+            return std::unexpected{make_argument_error(
+                "invalid number", number_start - argument_start)};
+        }
+        has_number = true;
+        has_decimal_point =
+            in.input()
+                .substr(number_start, in.cursor() - number_start)
+                .find('.') != std::string_view::npos;
+    }
+    if (!relative && centre && has_number && !has_decimal_point) {
+        value += 0.5;
+    }
+    return coordinate{value, relative};
+}
+
 /// Parse one `^` local coordinate component.
 [[nodiscard]] auto parse_local_coordinate(reader &in,
                                           std::size_t argument_start)
@@ -729,6 +774,45 @@ void block_position_parser::suggest(std::string_view remaining, const source &,
     suggest_coordinates(remaining, remaining.starts_with('^'), 3, *this, out);
 }
 
+auto vec3_parser::descriptor() const -> parser_descriptor {
+    parser_descriptor descriptor{};
+    descriptor.kind = parser_kind::vec3;
+    return descriptor;
+}
+
+auto vec3_parser::parse(reader &in) const -> parse_result {
+    const auto argument_start = in.cursor();
+    vec3_position out{};
+    const auto local = in.peek() == '^';
+    out.local = local;
+    std::array<coordinate, 3> components{};
+    for (std::size_t axis = 0; axis < components.size(); ++axis) {
+        if (axis != 0 && !expect_separator(in)) {
+            return std::unexpected{
+                make_argument_error("expected a complete position", 0)};
+        }
+        auto component =
+            local ? parse_local_coordinate(in, argument_start)
+                  : parse_vec3_coordinate(in, argument_start, axis != 1);
+        if (!component) {
+            return std::unexpected{std::move(component.error())};
+        }
+        components[axis] = *component;
+    }
+    out.x = components[0].value;
+    out.y = components[1].value;
+    out.z = components[2].value;
+    out.relative_x = components[0].relative;
+    out.relative_y = components[1].relative;
+    out.relative_z = components[2].relative;
+    return argument_value{out};
+}
+
+void vec3_parser::suggest(std::string_view remaining, const source &,
+                          suggestion_builder &out) const {
+    suggest_coordinates(remaining, remaining.starts_with('^'), 3, *this, out);
+}
+
 auto rotation_parser::descriptor() const -> parser_descriptor {
     parser_descriptor descriptor{};
     descriptor.kind = parser_kind::rotation;
@@ -1015,6 +1099,8 @@ auto resource_location_arg() -> resource_location_parser {
 auto block_position_arg() -> block_position_parser {
     return block_position_parser{};
 }
+
+auto vec3_arg() -> vec3_parser { return vec3_parser{}; }
 
 auto rotation_arg() -> rotation_parser { return rotation_parser{}; }
 

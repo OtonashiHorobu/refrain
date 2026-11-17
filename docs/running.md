@@ -324,7 +324,8 @@ with `!` to deny, and a deny wins over every grant. Subjects are
 [defaults]
 default = "deny"        # or "op": an operator holds every node
 # Nodes every subject holds. The public command surface of the server.
-nodes = ["refrain.command.help", "refrain.command.list"]
+nodes = ["refrain.command.help", "refrain.command.list",
+         "refrain.command.me", "refrain.command.msg"]
 
 [op]
 # Vanilla ladder level that counts as an operator. It is reserved for a
@@ -350,12 +351,13 @@ player in `[ops].players` or at `[op].min_level` on the ladder), a grant in
 `[defaults].nodes`, then `[defaults].default`.
 
 The generated first-start policy leaves the public command surface
-(`refrain.command.help`, `refrain.command.list`) open to every player, grants
-`[ops].players` every node, and denies everything else. A fresh install
-therefore announces and runs `/help` and `/list` for everyone; `/say`, the
-game-management commands and `/mods` need an `[ops].players` entry or an
-explicit `[grants]` rule. Remove an entry from `[defaults].nodes` to hide that
-command from players, and add a node there to make another command public.
+(`refrain.command.help`, `refrain.command.list`, `refrain.command.me`,
+`refrain.command.msg`) open to every player, grants `[ops].players` every node,
+and denies everything else. A fresh install therefore announces and runs
+`/help`, `/list`, `/me` and `/msg` for everyone; `/say`, the world and player
+commands and `/mods` need an `[ops].players` entry or an explicit `[grants]`
+rule. Remove an entry from `[defaults].nodes` to hide that command from
+players, and add a node there to make another command public.
 
 The old `config/mods_admin.toml` operator list is not imported: the file keeps
 only its `[lifecycle]` gates. Move its entries into `[ops].players` to keep
@@ -406,6 +408,15 @@ The server announces a small command tree after joining:
 | `/defaultgamemode <mode>` | persist the world's default game mode |
 | `/difficulty <0-3>` | persist and broadcast the world difficulty |
 | `/hardcore <on\|off>` | persist hardcore for new logins |
+| `/time <...>`, `/weather <...>` | read and change the overworld clock and weather |
+| `/tp <x y z>`, `/tp <player>`, `/tp <player> <x y z>`, `/tp <player> <player>` | move a player (also `/teleport`) |
+| `/setblock <x y z> <block> [replace\|keep]` | place one block |
+| `/fill <from> <to> <block> [replace\|keep\|hollow\|outline]` | edit a block region |
+| `/clone <from> <to> <destination> [replace\|masked]` | copy a block region |
+| `/give <player> <item> [count]` | add items to a player's inventory |
+| `/me <action>` | broadcast an emote |
+| `/msg <player> <message>` | whisper to one player (also `/tell` and `/w`) |
+| `/save-all [flush]` | flush dirty chunks and the clock state to the store |
 | `/mods <command>` | list, verify, install, uninstall, reload, reload content data or manage the trust state of mods (requires `refrain.mods.admin`; see [Mod management](#mod-management)) |
 
 Every in-game command declares a stable permission node. The policy decides who
@@ -424,6 +435,14 @@ nodes and may run every console command.
 | `/time <...>` | `refrain.command.time` | gamemaster |
 | `/weather <...>` | `refrain.command.weather` | gamemaster |
 | `/hardcore <on\|off>` | `refrain.command.hardcore` | admin |
+| `/tp <...>`, `/teleport <...>` | `refrain.command.teleport` | gamemaster |
+| `/setblock <...>` | `refrain.command.setblock` | gamemaster |
+| `/fill <...>` | `refrain.command.fill` | gamemaster |
+| `/clone <...>` | `refrain.command.clone` | gamemaster |
+| `/give <...>` | `refrain.command.give` | gamemaster |
+| `/me <action>` | `refrain.command.me` | everyone |
+| `/msg <player> <message>`, `/tell`, `/w` | `refrain.command.msg` | everyone |
+| `/save-all [flush]` | `refrain.command.save-all` | owner |
 | `/mods <command>` | `refrain.mods.admin` | admin |
 
 The tree snapshot and the completion list omit a node the player's subject may

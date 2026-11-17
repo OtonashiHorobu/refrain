@@ -49,6 +49,7 @@ enum class parser_kind : std::uint8_t {
     time = 13,
     dimension = 14,
     uuid = 15,
+    vec3 = 16,
 };
 
 /// String parser shape. These values match the vanilla `brigadier:string`

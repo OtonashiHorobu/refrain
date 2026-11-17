@@ -55,6 +55,8 @@ auto wire_parser_id(command::parser_kind kind) -> std::optional<std::uint32_t> {
         return 43U; // time
     case command::parser_kind::uuid:
         return 61U; // uuid
+    case command::parser_kind::vec3:
+        return 10U; // vec3
     case command::parser_kind::enum_values:
         // The vocabulary is server-owned; the client renders the argument as a
         // greedy string and asks the server for values.
@@ -97,6 +99,8 @@ auto wire_parser_name(command::parser_kind kind) -> std::string_view {
         return "dimension";
     case command::parser_kind::uuid:
         return "uuid";
+    case command::parser_kind::vec3:
+        return "vec3";
     case command::parser_kind::none:
         return {};
     }
@@ -150,6 +154,7 @@ auto to_wire_tree(const command::tree &snapshot) -> net::command_tree {
         case command::parser_kind::gamemode:
         case command::parser_kind::dimension:
         case command::parser_kind::uuid:
+        case command::parser_kind::vec3:
         case command::parser_kind::none:
             break;
         case command::parser_kind::integer:

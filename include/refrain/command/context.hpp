@@ -76,6 +76,10 @@ class context {
         -> const data::resource_location *;
     [[nodiscard]] auto position(std::string_view name) const noexcept
         -> const block_position *;
+    /// Typed `vec3` position accessor; null when the argument is absent or is
+    /// not a `vec3` position.
+    [[nodiscard]] auto vec3(std::string_view name) const noexcept
+        -> const vec3_position *;
     [[nodiscard]] auto rotation_value(std::string_view name) const noexcept
         -> const rotation *;
     [[nodiscard]] auto uuid_value(std::string_view name) const noexcept

@@ -56,6 +56,8 @@ auto to_string(parser_kind kind) noexcept -> std::string_view {
         return "dimension";
     case parser_kind::uuid:
         return "uuid";
+    case parser_kind::vec3:
+        return "vec3";
     }
     return "unknown";
 }

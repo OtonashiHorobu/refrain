@@ -204,6 +204,67 @@ template <typename Parser>
         }
     };
 
+    "vec3 parser reads fractional positions and centres integers"_test = [] {
+        const auto parser = refrain::command::vec3_arg();
+
+        const auto absolute = parse_all(parser, "1 2 -3");
+        expect(absolute.has_value());
+        if (absolute) {
+            const auto &pos =
+                std::get<refrain::command::vec3_position>(*absolute);
+            // An integer absolute X/Z names the block centre, which the
+            // reference rounds by half a block; Y is never centred.
+            expect(pos.x == 1.5 && pos.y == 2.0 && pos.z == -2.5);
+            expect(!pos.relative_x && !pos.relative_y && !pos.relative_z);
+            expect(!pos.local);
+        }
+
+        const auto fractional = parse_all(parser, "0.1 -0.5 0.9");
+        expect(fractional.has_value());
+        if (fractional) {
+            const auto &pos =
+                std::get<refrain::command::vec3_position>(*fractional);
+            expect(pos.x == 0.1 && pos.y == -0.5 && pos.z == 0.9);
+        }
+
+        const auto exponent = parse_all(parser, "1e2 0 0");
+        expect(exponent.has_value());
+        if (exponent) {
+            // A number without a decimal point is still centred, which is the
+            // reference's test.
+            expect(std::get<refrain::command::vec3_position>(*exponent).x ==
+                   100.5);
+        }
+
+        const auto relative = parse_all(parser, "~1 ~ ~-2.5");
+        expect(relative.has_value());
+        if (relative) {
+            const auto &pos =
+                std::get<refrain::command::vec3_position>(*relative);
+            expect(pos.relative_x && pos.relative_y && pos.relative_z);
+            expect(pos.x == 1.0 && pos.y == 0.0 && pos.z == -2.5);
+        }
+
+        const auto local = parse_all(parser, "^ ^1 ^-2");
+        expect(local.has_value());
+        if (local) {
+            const auto &pos = std::get<refrain::command::vec3_position>(*local);
+            expect(pos.local);
+            expect(pos.x == 0.0 && pos.y == 1.0 && pos.z == -2.0);
+        }
+
+        expect(!parse_all(parser, "1 2").has_value());
+        expect(!parse_all(parser, "1 2 3 4").has_value());
+        expect(!parse_all(parser, "^ 1 2").has_value());
+        expect(!parse_all(parser, "nan 0 0").has_value());
+        const auto mixed = parse_all(parser, "^ ~ ~");
+        expect(!mixed.has_value());
+        if (!mixed) {
+            expect(mixed.error().message.find("cannot mix") !=
+                   std::string::npos);
+        }
+    };
+
     "rotation parser reads yaw and pitch"_test = [] {
         const auto parser = refrain::command::rotation_arg();
         const auto absolute = parse_all(parser, "90 -45");
@@ -380,6 +441,12 @@ template <typename Parser>
             expect(position.find("expected a complete block position") !=
                    std::string::npos);
             expect(position.find("at position 4") != std::string::npos);
+
+            const auto vec3_incomplete = dispatch_error(
+                refrain::command::vec3_arg(), "tp", "tp 1 2", source);
+            expect(vec3_incomplete.find("expected a complete position") !=
+                   std::string::npos);
+            expect(vec3_incomplete.find("at position 3") != std::string::npos);
 
             const auto rotation = dispatch_error(
                 refrain::command::rotation_arg(), "rot", "rot 90", source);

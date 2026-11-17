@@ -56,8 +56,8 @@ class example_source final : public refrain::command::source {
 
 constexpr std::string_view example_line =
     "example true 7 123456789012 0.5 1.25 word \"quoted text\" "
-    "minecraft:stone 1 2 3 90 45 Steve creative 20s minecraft:overworld "
-    "dd12be42-52a9-4a91-a8a1-11c01849e498";
+    "minecraft:stone 1 2 3 0.5 64 1.5 90 45 Steve creative 20s "
+    "minecraft:overworld dd12be42-52a9-4a91-a8a1-11c01849e498";
 
 [[maybe_unused]] const suite command_example_tests = [] {
     "the example command parses every typed argument end to end"_test = [] {
@@ -71,7 +71,7 @@ constexpr std::string_view example_line =
             return;
         }
         expect(outcome->success);
-        expect(outcome->value == 15);
+        expect(outcome->value == 16);
         expect(has_reply(source.replies, "flag true")) << source.replies.size();
         expect(has_reply(source.replies, "count 7"));
         expect(has_reply(source.replies, "big 123456789012"));
@@ -81,6 +81,7 @@ constexpr std::string_view example_line =
         expect(has_reply(source.replies, "quoted quoted text"));
         expect(has_reply(source.replies, "id minecraft:stone"));
         expect(has_reply(source.replies, "pos 1 2 3"));
+        expect(has_reply(source.replies, "vec 0.5 64 1.5"));
         expect(has_reply(source.replies, "rot 90 45"));
         expect(has_reply(source.replies, "player Steve"));
         expect(has_reply(source.replies, "mode creative"));
@@ -96,8 +97,8 @@ constexpr std::string_view example_line =
         example_source source;
 
         auto bad_mode = dispatcher.execute(
-            "example true 7 1 0.5 1.25 w x minecraft:stone 1 2 3 90 45 "
-            "Steve builder 20s minecraft:overworld "
+            "example true 7 1 0.5 1.25 w x minecraft:stone 1 2 3 0.5 64 1.5 "
+            "90 45 Steve builder 20s minecraft:overworld "
             "dd12be42-52a9-4a91-a8a1-11c01849e498",
             source);
         expect(!bad_mode);
@@ -125,7 +126,7 @@ constexpr std::string_view example_line =
         if (snapshot == nullptr) {
             return;
         }
-        expect(snapshot->nodes.size() == 17U);
+        expect(snapshot->nodes.size() == 18U);
         expect(snapshot->root_node().children.size() == 1U);
         if (snapshot->root_node().children.size() != 1U) {
             return;
@@ -147,6 +148,7 @@ constexpr std::string_view example_line =
                 {"quoted", refrain::command::parser_kind::string},
                 {"id", refrain::command::parser_kind::resource_location},
                 {"pos", refrain::command::parser_kind::block_position},
+                {"vec", refrain::command::parser_kind::vec3},
                 {"rot", refrain::command::parser_kind::rotation},
                 {"player", refrain::command::parser_kind::player_name},
                 {"mode", refrain::command::parser_kind::gamemode},
@@ -192,7 +194,8 @@ constexpr std::string_view example_line =
         expect(has_suggestion(positions, "~ ~ ~"));
 
         const std::string before_mode{
-            "example true 7 1 0.5 1.25 w x minecraft:stone 1 2 3 90 45 Steve "};
+            "example true 7 1 0.5 1.25 w x minecraft:stone 1 2 3 0.5 64 1.5 "
+            "90 45 Steve "};
         auto modes =
             dispatcher.suggest(before_mode, before_mode.size(), source);
         expect(has_suggestion(modes, "creative"));
