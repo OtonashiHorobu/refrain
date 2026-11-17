@@ -118,23 +118,23 @@ auto same_heightmap(const chunk &left, const chunk &right,
 [[nodiscard]] auto entity_tag(std::string id, std::vector<double> pos,
                               std::vector<float> rotation)
     -> data::nbt::compound {
-    data::nbt::compound tag{};
-    tag["id"] = data::nbt::value{std::move(id)};
+    data::nbt::compound entity{};
+    entity["id"] = data::nbt::value{std::move(id)};
     std::vector<data::nbt::value> coordinates{};
     coordinates.reserve(pos.size());
     for (const auto value : pos) {
         coordinates.push_back(data::nbt::value{value});
     }
-    tag["Pos"] = data::nbt::make_list(data::nbt::tag_type::double_,
-                                      std::move(coordinates));
+    entity["Pos"] = data::nbt::make_list(data::nbt::tag_type::double_,
+                                         std::move(coordinates));
     std::vector<data::nbt::value> angles{};
     angles.reserve(rotation.size());
     for (const auto value : rotation) {
         angles.push_back(data::nbt::value{value});
     }
-    tag["Rotation"] =
+    entity["Rotation"] =
         data::nbt::make_list(data::nbt::tag_type::float_, std::move(angles));
-    return tag;
+    return entity;
 }
 
 } // namespace

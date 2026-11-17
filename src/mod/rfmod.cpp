@@ -32,6 +32,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -394,8 +395,7 @@ constexpr std::array<std::string_view, 3> package_table_names{
 /// Byte view of text (BLAKE3/Ed25519 take byte spans).
 [[nodiscard]] auto as_bytes(std::string_view text) noexcept
     -> std::span<const std::byte> {
-    return {reinterpret_cast<const std::byte *>(text.data()), // NOLINT
-            text.size()};
+    return std::as_bytes(std::span{text});
 }
 
 /// True when `text` is exactly `length` lowercase hex characters.

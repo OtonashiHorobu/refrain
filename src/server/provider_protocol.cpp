@@ -98,8 +98,7 @@ auto provider_protocol::next_packet(std::uint64_t connection,
     }
     packet_id = decoded.packet.packet_id;
     const auto bytes{contracts::as_bytes(decoded.packet.payload)};
-    payload = std::span<const std::byte>{
-        reinterpret_cast<const std::byte *>(bytes.data()), bytes.size()};
+    payload = std::as_bytes(bytes);
     return true;
 }
 
@@ -156,8 +155,7 @@ auto provider_protocol::take_outbound(std::uint64_t connection,
         return false;
     }
     const auto bytes{contracts::as_bytes(chunk.data)};
-    data = std::span<const std::byte>{
-        reinterpret_cast<const std::byte *>(bytes.data()), bytes.size()};
+    data = std::as_bytes(bytes);
     return true;
 }
 

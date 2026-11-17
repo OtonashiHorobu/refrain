@@ -16,6 +16,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <span>
 #include <string>
 #include <utility>
 #include <vector>
@@ -243,9 +244,7 @@ class cursor {
         payload.resize(base + 2, std::byte{0});
         rwf::detail::put_u16(payload, base,
                              static_cast<std::uint16_t>(text.size()));
-        payload.insert(
-            payload.end(), reinterpret_cast<const std::byte *>(text.data()),
-            reinterpret_cast<const std::byte *>(text.data()) + text.size());
+        payload.append_range(std::as_bytes(std::span{text}));
         return status_ok();
     };
     for (const auto &section : value.sections) {
@@ -341,11 +340,7 @@ class cursor {
         payload.resize(name_base + 2, std::byte{0});
         rwf::detail::put_u16(payload, name_base,
                              static_cast<std::uint16_t>(heightmap.name.size()));
-        payload.insert(
-            payload.end(),
-            reinterpret_cast<const std::byte *>(heightmap.name.data()),
-            reinterpret_cast<const std::byte *>(heightmap.name.data()) +
-                heightmap.name.size());
+        payload.append_range(std::as_bytes(std::span{heightmap.name}));
         const auto head{payload.size()};
         payload.resize(head + 3, std::byte{0});
         rwf::detail::put_u8(payload, head, heightmap.bits_per_entry);
@@ -374,10 +369,7 @@ class cursor {
             payload.resize(id_base + 2, std::byte{0});
             rwf::detail::put_u16(payload, id_base,
                                  static_cast<std::uint16_t>(tick.id.size()));
-            payload.insert(payload.end(),
-                           reinterpret_cast<const std::byte *>(tick.id.data()),
-                           reinterpret_cast<const std::byte *>(tick.id.data()) +
-                               tick.id.size());
+            payload.append_range(std::as_bytes(std::span{tick.id}));
             const auto base{payload.size()};
             payload.resize(base + 16, std::byte{0});
             rwf::detail::put_i32(payload, base, tick.pos.x);
@@ -418,10 +410,7 @@ class cursor {
         payload.resize(head + 2, std::byte{0});
         rwf::detail::put_u16(payload, head,
                              static_cast<std::uint16_t>(entity.id.size()));
-        payload.insert(payload.end(),
-                       reinterpret_cast<const std::byte *>(entity.id.data()),
-                       reinterpret_cast<const std::byte *>(entity.id.data()) +
-                           entity.id.size());
+        payload.append_range(std::as_bytes(std::span{entity.id}));
         const auto transform{payload.size()};
         payload.resize(transform + 42, std::byte{0});
         rwf::detail::put_u64(payload, transform,

@@ -12,6 +12,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <string>
 #include <utility>
 #include <vector>
@@ -68,9 +69,7 @@ auto palette_table::serialize() const -> std::vector<std::byte> {
         out.resize(length + 2);
         rwf::detail::put_u16(out, length,
                              static_cast<std::uint16_t>(entry.size()));
-        out.insert(out.end(), reinterpret_cast<const std::byte *>(entry.data()),
-                   reinterpret_cast<const std::byte *>(entry.data()) +
-                       entry.size());
+        out.append_range(std::as_bytes(std::span{entry}));
     }
     return out;
 }

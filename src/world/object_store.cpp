@@ -4,6 +4,7 @@
 
 #include <refrain/world/object_store.hpp>
 
+#include <refrain/core/byte_order.hpp>
 #include <refrain/core/io.hpp>
 #include <refrain/data/checksum.hpp>
 #include <refrain/data/content_segment.hpp>
@@ -22,6 +23,7 @@
 #include <map>
 #include <memory>
 #include <set>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -59,13 +61,7 @@ struct pending_object {
 
 [[nodiscard]] auto digest_id(const data::digest32 &digest) noexcept
     -> std::uint64_t {
-    std::uint64_t id{0};
-    for (std::size_t index{0}; index < 8; ++index) {
-        id |= static_cast<std::uint64_t>(
-                  std::to_integer<unsigned int>(digest[index]))
-              << (8U * index);
-    }
-    return id;
+    return core::byte_order::load_le64(digest);
 }
 
 [[nodiscard]] auto magic_matches(std::span<const std::byte> bytes,
@@ -104,8 +100,7 @@ void append_u64(std::vector<std::byte> &out, std::uint64_t value) {
     rwf::detail::put_u64(out, offset, value);
 }
 void append_text(std::vector<std::byte> &out, std::string_view text) {
-    out.insert(out.end(), reinterpret_cast<const std::byte *>(text.data()),
-               reinterpret_cast<const std::byte *>(text.data()) + text.size());
+    out.append_range(std::as_bytes(std::span{text}));
 }
 
 [[nodiscard]] auto parse_failure(std::string message)
