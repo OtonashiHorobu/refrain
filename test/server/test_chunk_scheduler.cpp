@@ -222,6 +222,9 @@ auto make_positions(worldgen::jint width, worldgen::jint depth)
 
 suite<"server/chunk-scheduler"> chunk_scheduler_tests = [] {
     "server/chunk scheduler queues a demanded column once"_test = [] {
+        if (!test_support::vanilla_data().available) {
+            return;
+        }
         auto scheduler{create_scheduler(2)};
         expect(scheduler.has_value())
             << (scheduler ? "" : scheduler.error().message);
@@ -237,6 +240,9 @@ suite<"server/chunk-scheduler"> chunk_scheduler_tests = [] {
 
     "server/chunk scheduler runs terrain before the ordered decoration and serve steps"_test =
         [] {
+            if (!test_support::vanilla_data().available) {
+                return;
+            }
             auto scheduler{create_scheduler(1)};
             expect(scheduler.has_value());
             if (!scheduler) {
