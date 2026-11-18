@@ -1,0 +1,92 @@
+// SPDX-License-Identifier: MIT
+//
+// SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
+//
+// `refrain:script.host` service contract v1.1.
+//
+// The host bootstrap owns one sealed script host: the process-wide dispatch
+// path into the sandboxed guests of the first-party script runtimes. It is a
+// separate contract from `refrain:mod.loader` because the two answer different
+// questions. Loading is a composition-time lifecycle operation the mod host
+// drives through a loader instance (validate, load, unload, reload); calling a
+// guest is a per-call execution path with its own instruction and wall-clock
+// budgets, its own error codes and a quarantine state. A loader's vtable stays
+// a pure lifecycle surface, and a loader that executes no guest code
+// implements nothing here.
+//
+// The host dispatches a call by its instance handle: the handle is the one the
+// loader returned for the loaded mod, so the caller does not need to know
+// which runtime is behind it. The script host bounds the argument size, the
+// instruction budget and the wall-clock deadline; the guest ABI those limits
+// apply to is documented in the modding guide.
+
+module refrain::services::script_host;
+version 1.1.0;
+
+import refrain::core;
+import refrain::services::mod_loader;
+
+/// Script host failures. Zero is success, so entries start at one. The codes
+/// distinguish a caller mistake (`invalid_argument`, `not_found`) from guest
+/// misbehaviour (`budget_exceeded`, `deadline_exceeded`, `guest_trapped`) and
+/// the state a trapped instance enters (`quarantined`).
+enum script_error : u32 {
+    invalid_argument = 1,
+    not_found = 2,
+    permission_denied = 3,
+    unsupported = 4,
+    /// The guest exhausted the per-call instruction budget.
+    budget_exceeded = 5,
+    /// The guest outlived the per-call wall-clock deadline.
+    deadline_exceeded = 6,
+    /// The guest trapped for a reason other than a budget, for example an
+    /// unreachable instruction or an out-of-bounds memory access.
+    guest_trapped = 7,
+    /// The instance is quarantined after an earlier failed call. A quarantined
+    /// instance runs no further guest code and is released by unloading it.
+    quarantined = 8,
+    internal = 9,
+}
+
+/// One callback invocation.
+struct script_call_request {
+    /// Exported guest function the host calls. It must be a wasm export name:
+    /// 1 to 64 characters from `[A-Za-z0-9_.-]`, starting with a letter, digit
+    /// or underscore.
+    string callback;
+    /// Argument bytes staged at the start of the guest's linear memory before
+    /// the call. At most 256 bytes; a guest that accepts arguments keeps that
+    /// prefix of its memory reserved.
+    bytes arguments;
+    /// Loader id that owns `instance`. Instance handles are allocated per
+    /// loader, so the script host refuses a request naming a loader it does not
+    /// serve instead of resolving the handle against its own guest table.
+    string loader;
+}
+
+/// Result of one callback invocation.
+struct script_call_result {
+    /// The guest callback's i32 return value.
+    i32 value;
+}
+
+service script_host : 1.1.0 {
+    side = server;
+    thread = main;
+    composition = sealed;
+    provides = [ "refrain:script.host" ];
+    requires = [ "refrain:core>=1.0.0" ];
+    capabilities = [ "call-dispatch", "budgeted-calls" ];
+
+    /// Invoke one exported guest callback. The call runs under the loader's
+    /// per-call instruction budget and wall-clock deadline and is refused for
+    /// a quarantined instance. A guest that traps is quarantined: the instance
+    /// stays registered but executes no further guest code, including its
+    /// unload hook, until the loader releases the whole store. A request names
+    /// the loader that owns the instance handle; a host that does not serve
+    /// that loader reports `not_found` rather than resolving the handle
+    /// against another loader's table.
+    #[thread(main)] #[can_fail]
+    fn call(mod_instance instance, in script_call_request request)
+        -> result<script_call_result, script_error>;
+}

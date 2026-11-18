@@ -363,6 +363,77 @@ auto block_state_registry::find(std::string_view key) const
                : std::optional<block_state_id>{found->second};
 }
 
+auto block_state_registry::holds(std::string_view key) const -> bool {
+    return index_.contains(key) || shadow_index_.contains(key) ||
+           defaults_.contains(std::string{key});
+}
+
+auto block_state_registry::verify_frozen() const -> status {
+    if (!frozen_) {
+        return std::unexpected{
+            make_error(error_code::invalid_argument,
+                       "the block state table was checked for completeness "
+                       "before it was frozen")};
+    }
+    if (keys_.size() != traits_.size() || keys_.size() != blocks_.size() ||
+        keys_.size() != vanilla_ids_.size()) {
+        return std::unexpected{make_error(
+            error_code::parse_error,
+            "the frozen block state table has inconsistent state columns")};
+    }
+    if (keys_.empty()) {
+        return std::unexpected{make_error(
+            error_code::not_found, "the frozen block state table is empty")};
+    }
+    const auto air = index_.find("minecraft:air");
+    if (air == index_.end() || air->second != 0) {
+        return std::unexpected{make_error(error_code::not_found,
+                                          "the frozen block state table does "
+                                          "not hold minecraft:air as id 0")};
+    }
+    for (block_state_id id = 0; id < keys_.size(); ++id) {
+        const std::string_view key{keys_[id]};
+        if (key.empty()) {
+            return std::unexpected{make_error(
+                error_code::parse_error,
+                "the frozen block state table holds an empty state key")};
+        }
+        const auto visible = index_.find(key);
+        const auto hidden = shadow_index_.find(key);
+        const auto resolved =
+            visible != index_.end()
+                ? visible->second
+                : (hidden != shadow_index_.end() ? hidden->second
+                                                 : no_block_state);
+        if (resolved != id) {
+            return std::unexpected{make_error(
+                error_code::parse_error,
+                "the frozen block state table does not resolve state " +
+                    std::string{key} + " to its own id")};
+        }
+    }
+    for (const auto &[block_name, state] : defaults_) {
+        if (state >= keys_.size()) {
+            return std::unexpected{
+                make_error(error_code::parse_error,
+                           "the frozen block state table maps block " +
+                               block_name + " to a state outside the table")};
+        }
+    }
+    for (const auto &[tag, states] : tags_) {
+        for (const auto state : states) {
+            if (state >= keys_.size()) {
+                return std::unexpected{make_error(
+                    error_code::parse_error,
+                    "the frozen block state table has a member outside the "
+                    "table in tag " +
+                        tag)};
+            }
+        }
+    }
+    return status_ok();
+}
+
 auto block_state_registry::block(block_state_id id) const -> std::uint16_t {
     return id < blocks_.size() ? blocks_[id] : 0;
 }
@@ -481,23 +552,34 @@ auto build_registry_impl(const data::vanilla_tables &tables,
             .blocks_motion_no_leaves = motion_no_leaves.contains(block_name),
         };
 
-        auto id =
-            registry.intern(state.key, traits, state.block, state.vanilla_id);
+        // A shared table interns every state and bare default spelling as a
+        // generation-only key: `find` keeps the per-generator behaviour, where
+        // only a key the data pack interned is visible, while `intern` resolves
+        // the complete content universe to the ids assigned here. A
+        // per-generator table interns the canonical keys and records the bare
+        // name as the default-state alias `find` resolves.
+        const auto id =
+            shared ? registry.intern_shadow(state.key, traits, state.block,
+                                            state.vanilla_id)
+                   : registry.intern(state.key, traits, state.block,
+                                     state.vanilla_id);
         if (!id) {
             return std::unexpected{id.error()};
         }
-        if (shared && index == block.default_state) {
-            // Generation folds a default-property spelling to the bare block
-            // name. Interning the bare name up front means both spellings hit
-            // the frozen table instead of appending a first-use id.
-            const auto bare = registry.intern(block.name, traits, state.block,
-                                              state.vanilla_id);
-            if (!bare) {
-                return std::unexpected{bare.error()};
+        if (index == block.default_state) {
+            if (shared) {
+                // Generation folds a default-property spelling to the bare
+                // block name. Interning the bare name up front means both
+                // spellings hit the frozen table instead of failing after the
+                // freeze.
+                const auto bare = registry.intern_shadow(
+                    block.name, traits, state.block, state.vanilla_id);
+                if (!bare) {
+                    return std::unexpected{bare.error()};
+                }
+            } else {
+                registry.add_default_state(block.name, *id);
             }
-            registry.add_default_state(block.name, *bare);
-        } else if (index == block.default_state) {
-            registry.add_default_state(block.name, *id);
             block_default_properties defaults_for_block;
             const auto property_ids = tables.block_properties(state.block);
             for (std::size_t property = 0; property < property_ids.size();
@@ -513,6 +595,39 @@ auto build_registry_impl(const data::vanilla_tables &tables,
                                        std::move(defaults_for_block));
         }
         by_block[block_name].push_back(*id);
+    }
+
+    if (shared) {
+        // The owner freezes this table once the first worker generator loaded,
+        // and a key the builder missed would then surface as a failed lookup
+        // that the generation paths can only fall back on silently. Assert the
+        // whole content universe while the builder can still report the key.
+        for (std::uint32_t index = 0; index < tables.state_count(); ++index) {
+            const auto state = tables.state_at(index);
+            if (!registry.holds(state.key)) {
+                return std::unexpected{make_error(
+                    error_code::not_found,
+                    "the shared block state table does not hold state " +
+                        std::string{state.key})};
+            }
+        }
+        for (std::uint32_t block_index = 0; block_index < tables.block_count();
+             ++block_index) {
+            const auto block =
+                tables.block_at(static_cast<std::uint16_t>(block_index));
+            if (!registry.holds(block.name)) {
+                return std::unexpected{make_error(
+                    error_code::not_found,
+                    "the shared block state table does not hold the default "
+                    "spelling of block " +
+                        std::string{block.name})};
+            }
+        }
+        if (!registry.holds("minecraft:air")) {
+            return std::unexpected{make_error(
+                error_code::not_found,
+                "the shared block state table does not hold minecraft:air")};
+        }
     }
 
     for (const auto &[tag, entries] : tag_set.entries()) {
@@ -546,105 +661,7 @@ auto build_block_state_registry(const data::vanilla_tables &tables,
 auto build_shared_block_state_registry(const data::vanilla_tables &tables,
                                        const block_tag_set &tag_set)
     -> result<block_state_registry> {
-    std::unordered_set<std::string> motion;
-    std::unordered_set<std::string> motion_no_leaves;
-    if (tag_set.has("minecraft:blocks_motion_in_heightmap")) {
-        auto resolved = tag_set.resolve("minecraft:blocks_motion_in_heightmap");
-        if (!resolved) {
-            return std::unexpected{resolved.error()};
-        }
-        motion.insert(resolved->begin(), resolved->end());
-    }
-    if (tag_set.has("minecraft:blocks_motion_in_heightmap_no_leaves")) {
-        auto resolved =
-            tag_set.resolve("minecraft:blocks_motion_in_heightmap_no_leaves");
-        if (!resolved) {
-            return std::unexpected{resolved.error()};
-        }
-        motion_no_leaves.insert(resolved->begin(), resolved->end());
-    }
-
-    block_state_registry registry;
-    block_default_map default_properties;
-    std::unordered_map<std::string, std::vector<block_state_id>> by_block;
-    for (std::uint32_t index = 0; index < tables.state_count(); ++index) {
-        const auto state = tables.state_at(index);
-        const auto block = tables.block_at(state.block);
-        const std::string block_name{block.name};
-
-        bool waterlogged = false;
-        const auto properties = tables.block_properties(state.block);
-        for (std::size_t i = 0; i < properties.size(); ++i) {
-            if (tables.property_name(properties[i]) == "waterlogged" &&
-                tables.property_value(properties[i], state.values[i]) ==
-                    "true") {
-                waterlogged = true;
-            }
-        }
-
-        const bool water = block_name == "minecraft:water" || waterlogged;
-        const bool fluid = water || block_name == "minecraft:lava" ||
-                           block_name == "minecraft:bubble_column";
-        const state_traits traits{
-            .air = is_air_block(block_name),
-            .fluid = fluid,
-            .water = water,
-            .blocks_motion = motion.contains(block_name),
-            .blocks_motion_no_leaves = motion_no_leaves.contains(block_name),
-        };
-
-        // The canonical spelling is what a feature or structure state provider
-        // derives to; the bare block name is what the terrain, the material
-        // rule and a default-spelling lookup ask for. Both are interned before
-        // the table freezes, in the table's key order, and both stay invisible
-        // to `find`: a lookup keeps the per-generator registry's behaviour,
-        // where a key the data pack did not intern is a miss.
-        auto canonical = registry.intern_shadow(state.key, traits, state.block,
-                                                state.vanilla_id);
-        if (!canonical) {
-            return std::unexpected{canonical.error()};
-        }
-        if (index == block.default_state) {
-            if (const auto bare = registry.intern_shadow(
-                    block.name, traits, state.block, state.vanilla_id);
-                !bare) {
-                return std::unexpected{bare.error()};
-            }
-            block_default_properties defaults_for_block;
-            const auto property_ids = tables.block_properties(state.block);
-            for (std::size_t property = 0; property < property_ids.size();
-                 ++property) {
-                defaults_for_block.push_back(block_default_property{
-                    .name = std::string{tables.property_name(
-                        property_ids[property])},
-                    .value = std::string{tables.property_value(
-                        property_ids[property], state.values[property])},
-                });
-            }
-            default_properties.emplace(block.name,
-                                       std::move(defaults_for_block));
-        }
-        by_block[block_name].push_back(*canonical);
-    }
-
-    for (const auto &[tag, entries] : tag_set.entries()) {
-        (void)entries;
-        auto names = tag_set.resolve(tag);
-        if (!names) {
-            return std::unexpected{names.error()};
-        }
-        std::vector<block_state_id> ids;
-        for (const auto &name : *names) {
-            const auto found = by_block.find(name);
-            if (found == by_block.end()) {
-                continue;
-            }
-            ids.insert(ids.end(), found->second.begin(), found->second.end());
-        }
-        registry.add_tag(tag, ids);
-    }
-    registry.set_block_defaults(std::move(default_properties));
-    return registry;
+    return build_registry_impl(tables, tag_set, true);
 }
 
 } // namespace refrain::worldgen

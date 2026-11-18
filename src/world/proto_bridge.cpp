@@ -9,6 +9,8 @@
 #include <refrain/worldgen/chunk/heightmap.hpp>
 #include <refrain/worldgen/chunk/status.hpp>
 
+#include "structure_nbt_internal.hpp"
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -210,6 +212,14 @@ auto from_proto_chunk(const worldgen::proto_chunk &source,
         out.entities.push_back(std::move(*entity));
     }
     canonicalize_entities(out.entities);
+
+    auto structures = detail::encode_structures(
+        source.structure_starts(), source.structure_references(),
+        source.chunk_x(), source.chunk_z());
+    if (!structures) {
+        return std::unexpected{std::move(structures.error())};
+    }
+    out.structures = std::move(*structures);
     return out;
 }
 

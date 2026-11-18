@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: b995a7348a18db2f
+// Schema hash: 609b48b50eecda7f
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
@@ -3015,6 +3015,22 @@ template <> struct custom_traits<::refrain::services::runtime::runtime_config> {
         refrain::reflect::custom_field{"content_gc_budget_ms", &::refrain::services::runtime::runtime_config::content_gc_budget_ms},
         refrain::reflect::custom_field{"content_gc_interval_ticks", &::refrain::services::runtime::runtime_config::content_gc_interval_ticks},
         refrain::reflect::custom_field{"config_dir", &::refrain::services::runtime::runtime_config::config_dir});
+};
+
+/// Generated RIDL struct 'refrain::services::script_host::script_call_request'.
+template <> struct custom_traits<::refrain::services::script_host::script_call_request> {
+    static constexpr std::string_view type_name = "refrain::services::script_host::script_call_request";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"callback", &::refrain::services::script_host::script_call_request::callback},
+        refrain::reflect::custom_field{"arguments", &::refrain::services::script_host::script_call_request::arguments},
+        refrain::reflect::custom_field{"loader", &::refrain::services::script_host::script_call_request::loader});
+};
+
+/// Generated RIDL struct 'refrain::services::script_host::script_call_result'.
+template <> struct custom_traits<::refrain::services::script_host::script_call_result> {
+    static constexpr std::string_view type_name = "refrain::services::script_host::script_call_result";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"value", &::refrain::services::script_host::script_call_result::value});
 };
 
 /// Generated RIDL struct 'refrain::services::session_lifecycle::player_info'.

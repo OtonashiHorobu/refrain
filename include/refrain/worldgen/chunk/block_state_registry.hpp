@@ -109,6 +109,28 @@ class block_state_registry final : public block_state_table {
     [[nodiscard]] auto size() const noexcept -> std::size_t {
         return keys_.size();
     }
+
+    /// Whether the table holds `key` under any spelling it resolves: a data
+    /// pack key, a key only generation resolves, or the bare name of a default
+    /// state. This is the union a frozen table must cover before generation
+    /// starts.
+    [[nodiscard]] auto holds(std::string_view key) const -> bool;
+
+    /// Checks that a frozen table is internally consistent: the parallel state
+    /// columns have one entry per state, every key resolves back to the id it
+    /// was assigned, `minecraft:air` is id 0, every default-state alias names
+    /// an existing id and every tag member exists. A table that fails was
+    /// frozen before its state universe finished interning.
+    ///
+    /// This is a structural check of the frozen table. Which content keys it
+    /// holds is asserted by the shared builder, which re-checks every state of
+    /// the content's block table and every block's bare default spelling after
+    /// interning them. A key generation derives that the content table does not
+    /// define is neither held nor caught here: `intern` rejects it after the
+    /// freeze, and the generation path that asks for it still falls back to the
+    /// empty state.
+    [[nodiscard]] auto verify_frozen() const -> status;
+
     [[nodiscard]] auto block(block_state_id id) const -> std::uint16_t;
     [[nodiscard]] auto vanilla_id(block_state_id id) const -> std::uint16_t;
 

@@ -30,9 +30,9 @@ auto resolve_server_mods(const mod::gamepack_spec &spec,
 auto register_script_loaders(mod::host &host) -> status {
     const auto register_one{
         [&host](std::string_view loader_id,
-                const script::mod_loader_provider &provider) -> status {
+                const script::mod_loader_provider &provider) -> result<bool> {
             if (host.find_loader(loader_id) != nullptr) {
-                return status_ok();
+                return false;
             }
             auto registered{host.register_mod_loader(
                 loader_id, mod::provider_api{.vtable = provider.vtable,
@@ -45,15 +45,34 @@ auto register_script_loaders(mod::host &host) -> status {
                                 loader_id, failure.message);
                 return std::unexpected{std::move(failure)};
             }
-            return status_ok();
+            return true;
         }};
-    if (auto registered{register_one(
-            mod::wasm_loader_id, script::wasm::default_mod_loader_provider())};
-        !registered) {
-        return registered;
+    auto wasm_registered{register_one(
+        mod::wasm_loader_id, script::wasm::default_mod_loader_provider())};
+    if (!wasm_registered) {
+        return std::unexpected{std::move(wasm_registered.error())};
     }
-    return register_one(mod::lua_loader_id,
-                        script::lua::default_mod_loader_provider());
+    if (auto lua_registered{register_one(
+            mod::lua_loader_id, script::lua::default_mod_loader_provider())};
+        !lua_registered) {
+        return std::unexpected{std::move(lua_registered.error())};
+    }
+    // The script host dispatches callbacks into the guests of the wasm loader
+    // this bootstrap registered. An embedder that installed its own wasm
+    // loader owns the matching script host, because instance handles are
+    // loader-owned.
+    if (*wasm_registered) {
+        if (auto registered{script::register_script_host(
+                host, script::wasm::default_script_host_provider())};
+            !registered) {
+            auto failure{std::move(registered.error())};
+            failure.message =
+                fmt::format("cannot register the script callback host: {}",
+                            failure.message);
+            return std::unexpected{std::move(failure)};
+        }
+    }
+    return status_ok();
 }
 
 auto activate_server_mods(mod::host &host, const mod::composition &composition,

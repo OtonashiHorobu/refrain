@@ -19,6 +19,7 @@
 #include <cstdlib>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <string>
 #include <system_error>
 #include <tuple>
@@ -615,6 +616,36 @@ auto chunk_generation::dispatch(std::uint64_t tick_elapsed_ns) -> std::size_t {
         if (scheduler_ == nullptr) {
             return 0;
         }
+        // Bound the decorated working set the scheduler keeps: the entries a
+        // position demanded by this service can still read or write are inside
+        // two chunks of the wanted set and the chains in flight, so anything
+        // farther is unloaded. A request that arrives outside this window
+        // rebuilds its neighbourhood from the seed, which is the documented
+        // content consequence of a large jump; a viewport that keeps moving
+        // stays inside it.
+        std::optional<worldgen::chunk_rectangle> window{};
+        const auto include = [&window](refrain::world::chunk_pos position) {
+            if (!window.has_value()) {
+                window = worldgen::chunk_rectangle{.min_x = position.x,
+                                                   .min_z = position.z,
+                                                   .max_x = position.x,
+                                                   .max_z = position.z};
+                return;
+            }
+            window->min_x = std::min(window->min_x, position.x);
+            window->min_z = std::min(window->min_z, position.z);
+            window->max_x = std::max(window->max_x, position.x);
+            window->max_z = std::max(window->max_z, position.z);
+        };
+        for (const auto &key : wanted_) {
+            include({.x = key.first, .z = key.second});
+        }
+        for (const auto &key : active_) {
+            include({.x = key.first, .z = key.second});
+        }
+        if (window.has_value()) {
+            (void)scheduler_->trim_outside(*window, 2);
+        }
         const auto ordered{
             rank_columns_by_distance(candidates, centres_, lookahead_centres_)};
         std::size_t admitted{0};
@@ -1090,6 +1121,10 @@ void chunk_generation::run_pipeline(std::size_t worker) {
             fail_task(refrain::world::chunk_pos{.x = job->position.x,
                                                 .z = job->position.z},
                       message);
+            // The failed chain released the ordered lane, so another worker's
+            // ordered job may be ready now; the other completion sites notify
+            // for the same reason.
+            wake_.notify_all();
             continue;
         }
         scheduler_->complete(*job, nullptr);

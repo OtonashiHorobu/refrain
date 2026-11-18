@@ -395,10 +395,12 @@ the radius-eight window whose box overlaps it.
 
 The pipeline never serves a chunk whose three-by-three is incomplete, and it
 decorates an undecorated chunk only after the earlier chunks of its decorated
-neighbourhood were processed, so the write order is ascending x then z. Terrain is a pure function of the seed,
-the data and the position: every fill resets the multi-noise search, and the
-structure starts of a chunk are generated from a fresh biome search too, so a
-cached start never depends on which chunk the worker scanned before it. Feature
+neighbourhood were processed, so the write order is ascending x then z.
+Terrain is reproducible from the seed, the data, the position and the starts
+window of the request that first produced it: every fill resets the multi-noise
+search, and the structure starts of a chunk are generated from a fresh biome
+search too, so a cached start never depends on which chunk the worker scanned
+before it. Feature
 decoration of a cached chunk reads the palettes of the chunks around it from the
 cache, which are the same palettes the reference possible-biome set uses. A
 terrain fill reads the structure starts of the requesting chunk's window, which
@@ -420,8 +422,10 @@ loads the content block table and the first worker generator, so an unsupported
 content configuration fails at start instead of on the first demanded column.
 
 The scheduler queues three status jobs per demanded column. `terrain` fills the
-chunks the column publishes first; it is a pure function of the seed, the data
-and the position, so any worker may run it. `decorated` places the structure
+chunks the column publishes first; it is reproducible from the seed, the data,
+the position and the column's starts window, and the demand that publishes a
+chunk is fixed the first time it is needed, so any worker may run it and a
+refill reproduces the same blocks. `decorated` places the structure
 pieces of the column's three-by-three and runs its feature step, and `served`
 copies the column out. The terrain jobs run on all workers; the decorated and
 served jobs run as one ordered lane in demand order. A column is served only
@@ -432,17 +436,85 @@ worker count only decides how the terrain fills are spread over threads.
 
 Two pieces of shared state make that content independent of worker order. The
 block-state table is built from the content's block table container
-(`tables.rvtb`, the sibling of the data directory) and frozen before any worker
-starts. It interns every state of the table, in the table's key order, and the
-bare block name of every default state, so a state key always resolves to the
-same id regardless of which worker reaches it first; an unknown key fails
-instead of taking a first-use id. The proto cache is shared under one mutex and
-records the first demanded column that publishes each terrain chunk, so a chunk
-is filled from the dependency window that the per-generator pipeline would have
-used. After a column is served, terrain entries older than the cache's retention
-window are evicted in ascending position order; their content is reproducible,
-so the eviction cannot change a served chunk. A decorated entry carries
-neighbour feature writes and is kept until `clear`.
+(`tables.rvtb`, the sibling of the data directory) and frozen after the first
+worker generator loaded. It interns every state of the table, in the table's key
+order, and the bare block name of every default state, so a state key always
+resolves to the same id regardless of which worker reaches it first; an unknown
+key fails to intern instead of taking a first-use id. The shared builder
+re-checks after interning that every state of the content's block table and the
+bare name of every block is held, and the frozen table is checked before the
+scheduler starts (`block_state_registry::verify_frozen`): the air state is id
+0, every key resolves to its own id, and every default-state and tag entry
+names an existing id. Those checks cover the table's internal consistency and
+the keys the builder just interned; a generation-derived key that the content
+table does not define still interns to `not_found`, and the dimension
+generator's resolver falls back to the empty state.
+
+The proto cache is shared under one mutex and records the first demanded column
+that publishes each terrain chunk, so a chunk is filled from the dependency
+window that the per-generator pipeline would have used. Its `capacity` bounds
+the pristine terrain entries, the fills that no structure or feature has written
+to yet: an insertion evicts pristine entries in ascending position order until
+the count is back at the bound. The guarantee is stated at the scheduler level.
+The scheduler pins at most one five-by-five dependency window and clamps
+`capacity` to at least 25, so its inserts cannot hide enough pristine entries to
+overshoot; a stats reader never sees the transient `capacity + 1` state inside
+an insertion because the read and the insertion share the mutex. A caller that
+pins more entries than `capacity`, or drives the cache without pinning its
+dependency windows, must size `capacity` above its pinned set.
+
+An evicted pristine entry is refilled from the dependency window of the demand
+that first published it. That window decides the fill's structure beard as well
+as its noise, so the refill recomputes the pieces the chunk already carried
+instead of producing a seed-only fill; the original window is a function of the
+demand sequence, so eviction cannot change a served chunk. The tests compare a
+capacity of 25 against a non-evicting capacity over a demand gap larger than one
+window and get equal digests. Pinned entries, which the ordered lane holds while
+it reads its five-by-five dependency window, are never evicted, and the
+pipeline never mutates an entry through a pointer the cache could drop.
+
+A terrain entry that received a structure piece or a neighbour feature write is
+no longer reproducible from the seed, so it is marked written and is not an
+eviction candidate until it is decorated. Written and decorated entries carry
+state that only an unload can drop, and a long viewport would grow them without
+bound, so the caller declares the rectangle of positions it may demand next
+(`chunk_scheduler::trim_outside`) and the entries more than two chunks outside
+it, which no such demand can read or write, are unloaded. The experimental
+runtime derives that window from the wanted set and the chains in flight on
+every dispatch, so a walking viewport keeps the cached set inside its current
+working set; a request that jumps outside the declared window rebuilds its
+neighbourhood from the seed and can serve different blocks than an unbounded
+cache, which is the accepted consequence of not keeping the whole session in
+memory. Without a declared window the decorated and written entries stay cached
+until `clear`.
+
+The statistics are race free: the cache maintains its entry, pristine and
+high-water counters under its own mutex, and the ordered lane publishes a stage
+change, a written mark or a seal through locked cache methods instead of writing
+the entry through an unlocked `find` pointer. A reader may therefore poll
+`chunk_scheduler::stats` while the workers generate. The high-water counters are
+what the memory bound is checked against: the published
+`cache_peak_pristine_entries` is recorded after the insertion evicted back to the
+bound and never exceeds `cache_capacity`, and `cache_peak_terrain_entries`
+additionally covers the written dependency ring.
+
+The worker loop follows the runtime contract: a worker waits on a condition
+variable whose predicate is `chunk_scheduler::has_job`, takes one job with
+`next_job`, and the completion sites notify the condition variable so another
+worker can pick up the ordered lane or a queued fill. The tests drive the
+scheduler as waiting workers rather than busy polling `next_job`.
+
+The scheduler's tests pin its content gates on the development machine; these
+are correctness digests, not throughput numbers. A sixteen-by-sixteen fill at
+eight workers with the default capacity of 256 terms serves every column and
+peaks at 125 pristine and 125 resident terrain entries (400 cached entries in
+total, including the decorated ring), so the pristine bound holds with room to
+spare. At one, four and eight workers the same four-by-four fill at capacity 25
+serves identical digests, and an eight-by-eight fill served by the scheduler
+equals the serial per-generator pipeline at capacity 128, where that generator's
+own cache evicts sixteen entries. The residency numbers are indicative and not
+comparable with the bench host figures below; throughput on the shared path is
+measured separately before it can replace the tile path.
 
 The scheduler is opt-in. `chunk_generation` drives it only when its
 `experimental_chunk_pipeline` config flag is set, and the flag is off by default
@@ -796,7 +868,20 @@ they are written, so the same seed and template always produce the same
 record bytes and a reload keeps the entity once. A tag the bridge cannot
 interpret (no type id or a malformed position) fails the conversion instead of
 being dropped silently, and a chunk that carries no entity omits the record
-field entirely. What the client receives from these records is covered in
+field entirely. The generated structure starts and references are persisted
+with the column as well. The bridge turns the starts the column owns and the
+references it carries into the vanilla chunk `structures` compound: a `starts`
+compound keyed by structure id that carries the structure id, the chunk
+position and one vanilla piece tag per piece, and a `References` compound of
+packed chunk positions, with the reference multiplicity kept. A column with no structure data keeps the
+field empty, and a record the compound cannot represent fails the conversion
+instead of losing a start silently. An Anvil export of a generated world
+therefore declares the structures the reference reader expects. Restoring
+persisted starts into generation is a separate capability: a loaded column
+does not take part in structure continuation because the stored compound does
+not carry the generation step of a structure or the template-derived placement
+state the restore direction needs from the caller.
+What the client receives from these records is covered in
 [architecture](architecture.md#generated-entities). Capped processor lists decode and run their
 delegate over the whole piece; every positive integer provider type of 26.3
 drives the limit, and an unknown limit type is rejected with its name. Rule
