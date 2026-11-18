@@ -4,6 +4,7 @@
 
 #include "structure_nbt_internal.hpp"
 
+#include <refrain/data/json.hpp>
 #include <refrain/data/nbt.hpp>
 #include <refrain/world/model.hpp>
 #include <refrain/worldgen/structure/placement_types.hpp>
@@ -15,6 +16,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <limits>
 #include <map>
 #include <optional>
 #include <string>
@@ -41,6 +43,12 @@ constexpr std::size_t max_pieces_per_column = 32768;
 constexpr std::size_t max_references_per_column = 65536;
 constexpr std::size_t max_piece_depth = 16;
 constexpr std::size_t max_nested_elements = 4096;
+/// The inline processor list is the one part of a piece tag that carries a
+/// datapack document rather than a decoded record, so its conversion walks the
+/// document and is bounded separately. A processor entry nests a handful of
+/// levels; the node bound is generous for a rule list of a few thousand rules.
+constexpr std::size_t max_processor_depth = 64;
+constexpr std::size_t max_processor_nodes = 65536;
 
 auto parse_failure(std::string message) -> std::unexpected<error> {
     return std::unexpected{
@@ -548,6 +556,170 @@ auto encode_fortress(nbt::compound &tag,
     return status_ok();
 }
 
+/// Converts one JSON node of an inline processor list into the NBT value the
+/// reference codec writes for it. The document is the datapack's codec form,
+/// so its JSON kinds map onto the codec's value kinds: booleans are bytes,
+/// integers are ints while they fit and longs beyond, reals are doubles, and
+/// arrays become lists of one element type. A JSON value the NBT tag model
+/// cannot express (a null, or an array mixing tag types) fails instead of
+/// being coerced.
+auto processor_value(const data::json::value &node, std::size_t depth,
+                     std::size_t &budget) -> result<value> {
+    if (depth > max_processor_depth) {
+        return parse_failure("inline processor list nesting exceeds its bound");
+    }
+    if (budget == 0) {
+        return parse_failure(
+            fmt::format("inline processor list has more than {} values",
+                        max_processor_nodes));
+    }
+    --budget;
+    switch (node.kind()) {
+    case data::json::type::boolean: {
+        const auto flag = node.as_bool();
+        if (!flag) {
+            return parse_failure(
+                "inline processor value has an invalid boolean");
+        }
+        return nbt::make_byte(*flag ? 1 : 0);
+    }
+    case data::json::type::integer: {
+        const auto number = node.as_int64();
+        if (!number) {
+            return parse_failure(
+                "inline processor value has an invalid integer");
+        }
+        if (*number < std::numeric_limits<std::int32_t>::min() ||
+            *number > std::numeric_limits<std::int32_t>::max()) {
+            return nbt::make_long(*number);
+        }
+        return nbt::make_int(static_cast<std::int32_t>(*number));
+    }
+    case data::json::type::real: {
+        const auto number = node.as_double();
+        if (!number) {
+            return parse_failure("inline processor value has an invalid real");
+        }
+        return nbt::make_double(*number);
+    }
+    case data::json::type::string: {
+        const auto text = node.as_string();
+        if (!text) {
+            return parse_failure(
+                "inline processor value has an invalid string");
+        }
+        return nbt::make_string(std::string{*text});
+    }
+    case data::json::type::array: {
+        const auto items = node.as_array();
+        if (!items) {
+            return parse_failure("inline processor value is not an array");
+        }
+        if (items->empty()) {
+            return nbt::make_list(tag_type::end);
+        }
+        std::vector<value> converted;
+        converted.reserve(items->size());
+        for (const auto &item : *items) {
+            auto encoded = processor_value(item, depth + 1, budget);
+            if (!encoded) {
+                return std::unexpected{std::move(encoded.error())};
+            }
+            converted.push_back(std::move(*encoded));
+        }
+        const auto element_type = converted.front().type();
+        auto list = nbt::make_list(element_type);
+        for (auto &item : converted) {
+            if (item.type() != element_type) {
+                return parse_failure(
+                    fmt::format("inline processor array mixes {} and {} values",
+                                nbt::tag_type_name(element_type),
+                                nbt::tag_type_name(item.type())));
+            }
+            if (auto pushed = list.push(std::move(item)); !pushed) {
+                return std::unexpected{std::move(pushed.error())};
+            }
+        }
+        return list;
+    }
+    case data::json::type::object: {
+        const auto members = node.as_object();
+        if (!members) {
+            return parse_failure("inline processor value is not a compound");
+        }
+        nbt::compound entries{};
+        for (const auto &[key, child] : members->get()) {
+            auto encoded = processor_value(child, depth + 1, budget);
+            if (!encoded) {
+                return std::unexpected{std::move(encoded.error())};
+            }
+            entries.emplace(key, std::move(*encoded));
+        }
+        return nbt::make_compound(std::move(entries));
+    }
+    case data::json::type::null:
+        break;
+    }
+    return parse_failure("inline processor list contains a null value");
+}
+
+/// Encodes the reference's `processors` field for a template-backed pool
+/// element. A named processor list is stored as its id; an inline list is
+/// stored as the direct codec's object form `{"processors": [...]}`, which is
+/// the shape the reference writes and reads back. The datapack field the
+/// decoder kept is either that object or the bare list its alternative codec
+/// accepts, so a bare list normalises to the object form on save.
+auto inline_processors_value(const data::json::value &document)
+    -> result<value> {
+    const data::json::value *entries = nullptr;
+    if (document.is_array()) {
+        entries = &document;
+    } else if (document.is_object()) {
+        entries = document.find("processors");
+        if (entries == nullptr) {
+            return parse_failure(
+                "inline processor list has no processors field");
+        }
+        if (!entries->is_array()) {
+            return parse_failure(
+                "inline processor list's processors field is not an array");
+        }
+    } else {
+        return parse_failure(
+            "inline processor list is neither a list nor a processors object");
+    }
+    const auto items = entries->as_array();
+    if (!items) {
+        return parse_failure("inline processor list is not an array");
+    }
+    std::vector<value> converted;
+    converted.reserve(items->size());
+    std::size_t budget = max_processor_nodes;
+    for (const auto &item : *items) {
+        if (!item.is_object()) {
+            return parse_failure(
+                "inline processor entry is not a processor object");
+        }
+        auto encoded = processor_value(item, 1, budget);
+        if (!encoded) {
+            return std::unexpected{std::move(encoded.error())};
+        }
+        converted.push_back(std::move(*encoded));
+    }
+    // An empty list keeps TAG_End as its element type, the form the reference
+    // writes for an empty codec list; a non-empty one is a compound list.
+    auto list = converted.empty() ? nbt::make_list(tag_type::end)
+                                  : nbt::make_list(tag_type::compound);
+    for (auto &item : converted) {
+        if (auto pushed = list.push(std::move(item)); !pushed) {
+            return std::unexpected{std::move(pushed.error())};
+        }
+    }
+    nbt::compound out{};
+    out["processors"] = std::move(list);
+    return nbt::value{std::move(out)};
+}
+
 auto encode_pool_element(const structure::jigsaw_element_info &element,
                          std::size_t depth, std::size_t &budget)
     -> result<value> {
@@ -555,10 +727,14 @@ auto encode_pool_element(const structure::jigsaw_element_info &element,
         return parse_failure("jigsaw pool element nesting exceeds its bound");
     }
     --budget;
-    if (element.inline_processors != nullptr) {
-        return parse_failure(
-            "jigsaw pool element carries an inline processor list, which the "
-            "chunk structure compound cannot represent");
+    if (element.inline_processors != nullptr &&
+        element.kind != structure::pool_element_kind::single &&
+        element.kind != structure::pool_element_kind::legacy_single) {
+        // Only the template-backed elements carry a processor field in the
+        // reference codec; an inline list on any other kind has no stored
+        // place and must not be dropped silently.
+        return parse_failure("jigsaw pool element kind cannot carry an inline "
+                             "processor list");
     }
     static constexpr std::array<
         std::pair<structure::pool_element_kind, std::string_view>, 5>
@@ -605,9 +781,18 @@ auto encode_pool_element(const structure::jigsaw_element_info &element,
     case structure::pool_element_kind::single:
     case structure::pool_element_kind::legacy_single:
         out["location"] = nbt::make_string(element.template_id);
-        out["processors"] = nbt::make_string(element.processor_list.empty()
-                                                 ? "minecraft:empty"
-                                                 : element.processor_list);
+        if (element.inline_processors != nullptr) {
+            auto processors =
+                inline_processors_value(*element.inline_processors);
+            if (!processors) {
+                return std::unexpected{std::move(processors.error())};
+            }
+            out["processors"] = std::move(*processors);
+        } else {
+            out["processors"] = nbt::make_string(element.processor_list.empty()
+                                                     ? "minecraft:empty"
+                                                     : element.processor_list);
+        }
         out["projection"] = nbt::make_string(projection);
         with_liquid(out, element.liquid_override);
         return nbt::value{std::move(out)};
