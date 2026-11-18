@@ -630,27 +630,39 @@ generated world.
 
 Generation produces blocks, not light. A column is lit when the runtime adopts
 it into the loaded set, after feature placement, and the chunk record is saved
-with the computed arrays. The record also carries a light-correct flag, set only
-when the stored arrays are the complete layer set the column's block sections
-require: one layer per block section plus the padding layers below `yPos` and
-above the top section, with both nibble arrays at full length. A record written
-before the field existed, an imported Anvil column and a column whose light a
-block edit changed all carry the conservative value.
+with the computed arrays. The record also carries a light-correct flag and the
+fingerprint of the light table the arrays were computed with. The flag is set
+only when the stored arrays are the complete layer set the column's block
+sections require - one layer per block section plus the padding layers below
+`yPos` and above the top section, with both nibble arrays at full length - and
+the fingerprint matches the runtime table. A record written before the fields
+existed, an imported Anvil column, a column whose light a block edit changed and
+a column saved under different light content all carry the conservative values.
 
-A load reuses the saved arrays when the flag is set and the layer set verifies.
-The initial light pass does not run; the engine only rebuilds the sky-source
-index that later edits need. Any other record is relit from its blocks, which
-is what a user of an older world or a freshly imported one sees. A block edit
-clears the flag, and only a drain that leaves no queued update sets it again, so
-a record saved in the middle of a light update never claims its arrays are
-complete. Trusting the flag assumes the save wrote arrays that were consistent
-with the neighbours it recorded: a column whose neighbour is edited while the
-column itself is not resident keeps the light it was saved with, exactly like
-the reference, until an edit or a relight recomputes it.
+A load reuses the saved arrays when the flag is set, the layer set verifies and
+the fingerprint matches. The initial light pass does not run; the engine only
+rebuilds the sky-source index that later edits need. Any other record is relit
+from its blocks, which is what a user of an older world or a freshly imported
+one sees, and the relit column is marked for saving so the upgraded arrays reach
+the store on the next save.
 
-The flag is an appended field of the RWF chunk record. A reader that predates it
-skips the unknown field and relights the column, so the chunk field-set version
-stays 1.
+A block edit clears the flag and marks for saving every column the update
+writes, including the neighbours a propagation crosses into. Only a drain that
+leaves no queued update sets the flag again, so a save taken while a drain is
+pending stores the touched columns as not correct and the next load relights
+them; a save taken after the drain stores the corrected arrays. Trusting the
+flag assumes the save wrote arrays consistent with the neighbours it recorded:
+a column saved before a later neighbour edit keeps the border light of its own
+save until an edit or a relight recomputes it, exactly like the reference. The
+flag and the fingerprint are appended fields of the RWF chunk record, and a
+reader that predates them skips the unknown fields and relights the column, so
+the chunk field-set version stays 1.
+
+A light table installed at runtime relights the loaded columns and marks them to
+be saved, and a record read back under another table fails the fingerprint check
+and relights on its first load. A world saved with one content version and
+opened with another therefore shows the light the current table produces
+instead of arrays from the old one.
 
 ## Verification status
 

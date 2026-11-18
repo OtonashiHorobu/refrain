@@ -26,7 +26,7 @@ namespace {
 
 constexpr std::size_t field_header_bytes = 16;
 constexpr std::uint16_t highest_field_id =
-    static_cast<std::uint16_t>(chunk_field::light_correct);
+    static_cast<std::uint16_t>(chunk_field::light_table);
 
 /// 4096 entries at 32 bits per entry (the maximum supported width).
 constexpr std::size_t max_packed_words = 2048;
@@ -337,6 +337,16 @@ class cursor {
 [[nodiscard]] auto encode_light_correct(const chunk &value)
     -> std::vector<std::byte> {
     return {static_cast<std::byte>(value.light_correct ? 1 : 0)};
+}
+
+/// Payload of the light-table field: the little-endian u64 content fingerprint
+/// of the light table the arrays were lit under. Zero means "unknown" and is
+/// omitted like every conservative value.
+[[nodiscard]] auto encode_light_table(const chunk &value)
+    -> std::vector<std::byte> {
+    std::vector<std::byte> payload(8, std::byte{0});
+    rwf::detail::put_u64(payload, 0, value.light_table);
+    return payload;
 }
 
 [[nodiscard]] auto encode_heightmaps(const chunk &value)
@@ -866,7 +876,10 @@ auto encode_chunk(const chunk &value, palette_table *palette,
          !append_field(out, chunk_field::entities, 7, entities)) ||
         (canonical.light_correct &&
          !append_field(out, chunk_field::light_correct, 0,
-                       encode_light_correct(canonical)))) {
+                       encode_light_correct(canonical))) ||
+        (canonical.light_table != 0 &&
+         !append_field(out, chunk_field::light_table, 0,
+                       encode_light_table(canonical)))) {
         return std::unexpected{make_error(
             error_code::invalid_argument,
             fmt::format("chunk payload exceeds the {} byte record limit",
@@ -1049,6 +1062,14 @@ auto decode_chunk(std::span<const std::byte> payload,
         }
         out.light_correct = value == 1;
     }
+    if (present[static_cast<std::size_t>(chunk_field::light_table)]) {
+        cursor field{
+            fields[static_cast<std::size_t>(chunk_field::light_table)]};
+        out.light_table = field.u64();
+        if (field.failed() || field.remaining() != 0) {
+            return parse_failure("light-table field is malformed");
+        }
+    }
     if (auto valid{validate(out)}; !valid) {
         return std::unexpected{valid.error()};
     }
@@ -1119,12 +1140,14 @@ namespace {
 
 auto semantic_hash(const chunk &value) -> result<std::string> {
     chunk normalized{value};
-    // The light-correct flag records what the writer proved about the stored
-    // arrays, not the light they carry; the arrays themselves are hashed. A
-    // column therefore hashes the same whether or not its writer marked the
-    // light correct, so comparing a world in either layout does not report a
-    // difference the player cannot observe.
+    // The light-correct flag and the light-table fingerprint record what the
+    // writer proved about the stored arrays, not the light they carry; the
+    // arrays themselves are hashed. A column therefore hashes the same whether
+    // or not its writer marked the light correct or recorded a table, so
+    // comparing a world in either layout does not report a difference the
+    // player cannot observe.
     normalized.light_correct = false;
+    normalized.light_table = 0;
     if (auto status{normalize_packing(normalized)}; !status) {
         return std::unexpected{status.error()};
     }

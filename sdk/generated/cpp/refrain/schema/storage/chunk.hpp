@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 53e461f034ccb281
+// Schema hash: b995a7348a18db2f
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_STORAGE_CHUNK_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_STORAGE_CHUNK_HPP
@@ -207,6 +207,14 @@ struct chunk {
     /// set was defined, so the chunk field-set version stays 1: an older
     /// reader skips the unknown TLV field and relights like it always did.
     bool light_correct; // default: false
+    /// Fingerprint of the light table the arrays were lit under: every block
+    /// state's emission, dampening and occlusion shape, hashed independently
+    /// of the table's iteration order. A load only trusts a correct-light
+    /// record whose fingerprint matches the runtime table, because a world
+    /// saved under different light content would otherwise show light the
+    /// current table no longer produces. 0 is "unknown" and never matches a
+    /// real table, so a record without the field relights once.
+    std::uint64_t light_table; // default: 0
 };
 [[nodiscard]] inline auto encode_block_pos(::refrain::net::writer &out, const block_pos &value) -> ::refrain::status {
   static_cast<void>(out);
@@ -751,6 +759,9 @@ struct chunk {
   {
     out.write_bool(value.light_correct);
   }
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.light_table));
+  }
   return ::refrain::status_ok();
 }
 
@@ -926,6 +937,11 @@ struct chunk {
     auto value_0 = in.read_bool();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.light_correct = *value_0;
+  }
+  {
+    auto value_0 = in.read_varint();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.light_table = static_cast<decltype(value.light_table)>(*value_0);
   }
   return ::refrain::status_ok();
 }

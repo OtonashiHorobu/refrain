@@ -226,4 +226,13 @@ record chunk {
     /// set was defined, so the chunk field-set version stays 1: an older
     /// reader skips the unknown TLV field and relights like it always did.
     light_correct: bool = false;
+
+    /// Fingerprint of the light table the arrays were lit under: every block
+    /// state's emission, dampening and occlusion shape, hashed independently
+    /// of the table's iteration order. A load only trusts a correct-light
+    /// record whose fingerprint matches the runtime table, because a world
+    /// saved under different light content would otherwise show light the
+    /// current table no longer produces. 0 is "unknown" and never matches a
+    /// real table, so a record without the field relights once.
+    light_table: u64 = 0;
 }

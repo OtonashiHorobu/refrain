@@ -199,7 +199,8 @@ struct pending_snapshot {
 /// One loaded column that holds no ticket, as seen by a residency sweep.
 struct resident_column {
     chunk_pos pos{};
-    /// True when the column holds edits that are not in the store yet.
+    /// True when the column holds edits or light changes that are not in the
+    /// store yet.
     bool dirty{false};
 
     friend auto operator==(const resident_column &, const resident_column &)

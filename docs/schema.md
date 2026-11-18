@@ -310,9 +310,11 @@ The RWF chunk record evolves by appending fields at the end of its field set.
 An absent field decodes to a conservative default, so a record written before
 the field existed stays readable without a version bump; the field-set version
 moves only when an older record cannot be read as the current layout. The
-light-correct flag was added that way: a record without it reads as "light not
-correct", and the loader relights the column instead of trusting arrays the
-record does not describe.
+light-correct flag and the light-table fingerprint were added that way: a record
+without the flag reads as "light not correct", and a record without the
+fingerprint reads as "unknown table", so the loader relights the column instead
+of trusting arrays the record does not describe or arrays another content
+version produced.
 
 ### Version record
 

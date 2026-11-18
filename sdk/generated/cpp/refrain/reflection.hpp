@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 53e461f034ccb281
+// Schema hash: b995a7348a18db2f
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
@@ -3373,7 +3373,8 @@ template <> struct custom_traits<::refrain::storage::chunk> {
         refrain::reflect::custom_field{"y_pos", &::refrain::storage::chunk::y_pos},
         refrain::reflect::custom_field{"light_sections", &::refrain::storage::chunk::light_sections},
         refrain::reflect::custom_field{"entities", &::refrain::storage::chunk::entities},
-        refrain::reflect::custom_field{"light_correct", &::refrain::storage::chunk::light_correct});
+        refrain::reflect::custom_field{"light_correct", &::refrain::storage::chunk::light_correct},
+        refrain::reflect::custom_field{"light_table", &::refrain::storage::chunk::light_table});
 };
 
 /// Generated RIDL extension 'refrain:net.protocol/tab_codec'.

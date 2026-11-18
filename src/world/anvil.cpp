@@ -826,10 +826,12 @@ struct staged_section {
     }
     // The source `isLightOn` claim describes the reference engine's arrays, not
     // this engine's: the import kept every layer it could represent, but a
-    // column is only marked correct after this engine lit it itself. Importing
-    // a world therefore never produces a record that claims its light is
-    // correct, and the first load relights it.
+    // column is only marked correct after this engine lit it itself under the
+    // runtime light table it records. Importing a world therefore never
+    // produces a record that claims its light is correct, and the first load
+    // relights it.
     out.light_correct = false;
+    out.light_table = 0;
     if (auto valid{validate(out)}; !valid) {
         return std::unexpected{valid.error()};
     }
@@ -1017,11 +1019,13 @@ void append_light(value &target, const light_section &light) {
                                            chunk_status_name(state.status))));
     set_child(root, "LastUpdate", nbt::make_long(state.last_update));
     set_child(root, "InhabitedTime", nbt::make_long(state.inhabited_time));
-    // The reference trusts saved light only when the chunk says it is on; write
-    // the same claim this engine makes about the stored arrays. A record whose
-    // light was never lit by this engine - an unmodified import - exports as
-    // off, so the reference relights it instead of trusting arrays this engine
-    // did not verify.
+    // The reference reads the saved light arrays of every chunk and records
+    // `isLightOn` as the chunk's light-correct claim; its light task skips the
+    // source propagation only for a chunk whose persisted status already
+    // includes light and whose claim is set. Write the same claim this engine
+    // makes about the stored arrays: a record whose light was never lit by this
+    // engine - an unmodified import - exports as off, so the reference
+    // propagates light instead of trusting arrays this engine did not verify.
     set_child(root, "isLightOn", nbt::make_byte(state.light_correct ? 1 : 0));
 
     value sections{nbt::make_list(tag_type::compound)};

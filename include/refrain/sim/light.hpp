@@ -155,6 +155,17 @@ class block_light_table {
         return shapes_.size();
     }
 
+    /// Stable content fingerprint of the table, or 0 for an empty table.
+    ///
+    /// The value identifies the light behaviour a table defines: every state
+    /// key with its emission, dampening and occlusion shape. It is
+    /// order-independent, so the table's iteration order cannot change it, and
+    /// two tables with the same content produce the same value in any process.
+    /// The chunk record stores the fingerprint its arrays were lit under; a
+    /// mismatch on load means the stored light was computed with different
+    /// content and cannot be trusted.
+    [[nodiscard]] auto fingerprint() const noexcept -> std::uint64_t;
+
     /// Append one occlusion shape and return it. The pointer stays valid for
     /// the lifetime of the table.
     auto append_shape(block_light_shape shape) -> const block_light_shape *;
@@ -232,18 +243,22 @@ class light_engine {
     auto operator=(light_engine &&other) noexcept -> light_engine &;
     ~light_engine();
 
-    /// Rebuild the internal index after the owned `world` moved. The light
-    /// arrays travel with the storage records, so nothing is recomputed.
+    /// Rebuild the internal index after the owned `world` moved. Columns whose
+    /// stored arrays are complete and were lit under the current light table
+    /// keep their light; any other column is relit, because the queue that
+    /// carried its pending update does not survive the move.
     void attach(world &owner);
 
     /// A column joined the loaded set. When the storage record marks its light
-    /// correct and the stored layer set is complete, the persisted nibble
-    /// arrays are adopted and no light is propagated; any other record is
-    /// zeroed and lit from its blocks, and the column's light-correct marker is
-    /// set once that pass has completed.
+    /// correct, the stored layer set is complete and the record was lit under
+    /// the current light table, the persisted nibble arrays are adopted and no
+    /// light is propagated; any other record is zeroed and lit from its blocks,
+    /// and the column's light-correct marker is set once that pass has
+    /// completed.
     void column_loaded(chunk &column);
 
-    /// The world's light table changed: drop the cached per-state properties.
+    /// The world's light table changed: drop the cached per-state properties,
+    /// refresh the table fingerprint and mark the loaded columns for relight.
     /// Light arrays are not recomputed by this call; `world` relights its
     /// columns after installing a table.
     void reload_properties();

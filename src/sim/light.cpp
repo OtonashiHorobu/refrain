@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -356,10 +357,16 @@ constexpr std::size_t peak_sample_interval = 1024;
 } // namespace
 
 struct light_engine::impl {
-    explicit impl(world &owner) : owner_{&owner} {}
+    explicit impl(world &owner) : owner_{&owner} {
+        light_table_fingerprint_ = owner.block_light().fingerprint();
+    }
 
     world *owner_{nullptr};
     std::map<chunk_pos, column_state> columns_{};
+    /// Fingerprint of the light table the loaded arrays were lit under. A
+    /// stored record carries the fingerprint it was written with; a mismatch
+    /// means the arrays describe different light content and cannot be reused.
+    std::uint64_t light_table_fingerprint_{0};
 
     /// Most recently used column, so propagation within one column does not
     /// repeat the map lookup for every cell.
@@ -503,22 +510,31 @@ struct light_engine::impl {
         if (suppressed_origin_ && *suppressed_origin_ == pos) {
             return;
         }
+        // Every column an update writes becomes stale, not only the edited
+        // one: a propagation across a border changes the neighbour's arrays
+        // without changing its blocks.
+        mark_light_dirty(pos);
         changes_.insert(light_section_change{
             .pos = pos, .section_y = static_cast<std::int8_t>(section_y)});
     }
 
-    /// Record that an edit made `pos`'s light stale: the storage record must
-    /// not claim correctness until a drain finishes the incremental relight.
+    /// Record that a light write or edit made `pos`'s stored arrays stale. The
+    /// column must not claim correctness until a drain finishes the update,
+    /// and it must be saved again so the record the store holds reflects the
+    /// change: a save taken while the drain is pending writes the conservative
+    /// flag, a save after it writes the corrected arrays.
     void mark_light_dirty(const chunk_pos &pos) {
         if (auto *column{find_column(pos.x, pos.z)}; column != nullptr) {
             column->record->storage.light_correct = false;
+            column->record->dirty = true;
         }
         dirty_columns_.insert(pos);
     }
 
     /// A drain that leaves nothing queued has applied every light change, so
-    /// the columns an edit marked stale hold consistent arrays again and the
-    /// storage records may claim correctness once more.
+    /// the columns an edit or a propagation marked stale hold consistent arrays
+    /// again; their records may claim correctness and need the corrected arrays
+    /// saved.
     void finish_drain() {
         if (queue_size() != 0) {
             return;
@@ -526,7 +542,10 @@ struct light_engine::impl {
         for (const auto &pos : dirty_columns_) {
             const auto found{columns_.find(pos)};
             if (found != columns_.end() && found->second.record != nullptr) {
-                found->second.record->storage.light_correct = true;
+                auto &column{*found->second.record};
+                column.storage.light_correct = true;
+                column.storage.light_table = light_table_fingerprint_;
+                column.dirty = true;
             }
         }
         dirty_columns_.clear();
@@ -1290,14 +1309,17 @@ light_engine::~light_engine() = default;
 
 void light_engine::reload_properties() {
     impl_->properties_.clear();
+    impl_->light_table_fingerprint_ =
+        impl_->owner_->block_light().fingerprint();
     // Every stored array was computed with the previous table, so no loaded
     // column is correct under the new one; `world` relights them right after
-    // installing the table, and this keeps a later `column_loaded` from
-    // adopting arrays the new table did not produce.
+    // installing the table, and the loaded records are dirty so the corrected
+    // arrays are saved with the new table fingerprint.
     for (auto &[pos, column] : impl_->columns_) {
         static_cast<void>(pos);
         if (column.record != nullptr) {
             column.record->storage.light_correct = false;
+            column.record->dirty = true;
         }
     }
     impl_->dirty_columns_.clear();
@@ -1305,6 +1327,7 @@ void light_engine::reload_properties() {
 
 void light_engine::attach(world &owner) {
     impl_->owner_ = &owner;
+    impl_->light_table_fingerprint_ = owner.block_light().fingerprint();
     impl_->columns_.clear();
     impl_->properties_.clear();
     impl_->clear_cache();
@@ -1326,6 +1349,11 @@ void light_engine::attach(world &owner) {
         state.section_count =
             static_cast<std::uint16_t>(column->sections.size());
         impl_->refresh_floors(state);
+        // The same completeness proof the load path uses: a claim that does not
+        // verify is cleared so the second pass below relights the column.
+        if (column->storage.light_correct && !impl_->adopt_layers(state)) {
+            column->storage.light_correct = false;
+        }
         impl_->columns_.emplace(pos, std::move(state));
     }
     // A column that does not claim correct light was mid-relight when the
@@ -1345,10 +1373,14 @@ void light_engine::column_loaded(chunk &column) {
     auto &state{impl_->columns_[column.pos]};
     state.record = &column;
     // A record that claims correct light is only reused when the stored arrays
-    // are exactly the complete layer set the blocks require. Everything else -
-    // old data without the marker, an imported or edited column, a record whose
-    // arrays were compacted away - cannot be proven correct and is relit.
-    if (column.storage.light_correct && impl_->adopt_layers(state)) {
+    // are exactly the complete layer set the blocks require and were lit under
+    // the current light table. Everything else - old data without the marker,
+    // an imported or edited column, a record whose arrays were compacted away,
+    // a record from a different content version - cannot be proven correct and
+    // is relit.
+    if (column.storage.light_correct &&
+        column.storage.light_table == impl_->light_table_fingerprint_ &&
+        impl_->adopt_layers(state)) {
         impl_->dirty_columns_.erase(column.pos);
         impl_->rebuild_section_lookup(state);
         // The stored light already covers the column; the sky-source index is
@@ -1361,6 +1393,7 @@ void light_engine::column_loaded(chunk &column) {
         impl_->dirty_columns_.erase(column.pos);
         impl_->rebuild_section_lookup(state);
         column.storage.light_correct = true;
+        column.storage.light_table = impl_->light_table_fingerprint_;
         return;
     }
     impl_->rebuild_section_lookup(state);
@@ -1376,6 +1409,10 @@ void light_engine::column_loaded(chunk &column) {
     // same bytes the chunk packet carries. The drain above also cleared the
     // column's stale marker, so a later save writes the correct value.
     column.storage.light_correct = true;
+    column.storage.light_table = impl_->light_table_fingerprint_;
+    // The arrays changed from what the store holds, so the record has to be
+    // written again even when no block was edited.
+    column.dirty = true;
 }
 
 void light_engine::column_unloaded(const chunk_pos &pos) {
@@ -1465,6 +1502,49 @@ auto light_engine::sky_light_at(const block_pos &pos) const -> std::uint8_t {
 auto light_engine::block_light_at(const block_pos &pos) const -> std::uint8_t {
     return impl_->level_at(node_pos{.x = pos.x, .y = pos.y, .z = pos.z},
                            light_layer::block);
+}
+
+auto block_light_table::fingerprint() const noexcept -> std::uint64_t {
+    if (properties_.empty()) {
+        return 0;
+    }
+    constexpr std::uint64_t offset{1469598103934665603ULL};
+    constexpr std::uint64_t prime{1099511628211ULL};
+    const auto mix = [](std::uint64_t &state, std::uint64_t value) {
+        for (unsigned shift{0}; shift < 64; shift += 8) {
+            state ^= (value >> shift) & 0xFFU;
+            state *= prime;
+        }
+    };
+    std::uint64_t combined{0};
+    for (const auto &[key, property] : properties_) {
+        std::uint64_t entry{offset};
+        for (const char character : key) {
+            mix(entry, static_cast<std::uint8_t>(character));
+        }
+        mix(entry, property.emission);
+        mix(entry, property.dampening);
+        mix(entry, property.shape != nullptr ? 1U : 0U);
+        if (property.shape != nullptr) {
+            for (const auto &face : property.shape->faces) {
+                mix(entry, face.size());
+                for (const auto &box : face) {
+                    for (const auto bound : box.bounds) {
+                        mix(entry, std::bit_cast<std::uint64_t>(bound));
+                    }
+                }
+            }
+        }
+        // Order-independent combine: the table is a hash map, so its iteration
+        // order must not decide the value. A sum and a rotated xor of the
+        // per-state hashes sort out every permutation.
+        combined += entry;
+        combined ^= std::rotl(entry, 17);
+    }
+    combined ^= static_cast<std::uint64_t>(properties_.size()) * prime;
+    // Zero is the conservative "unknown table" value, so a real table never
+    // folds onto it.
+    return combined == 0 ? prime : combined;
 }
 
 } // namespace refrain::sim

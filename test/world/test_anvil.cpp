@@ -6,6 +6,7 @@
 
 #include <refrain/core/io.hpp>
 #include <refrain/data/nbt.hpp>
+#include <refrain/sim/world.hpp>
 #include <refrain/world/anvil.hpp>
 #include <refrain/world/chunk_codec.hpp>
 #include <refrain/world/datafix.hpp>
@@ -21,6 +22,7 @@
 
 #include <lz4.h>
 #include <xxhash.h>
+#include <zlib.h>
 
 #include <cstdio>
 
@@ -345,6 +347,78 @@ void write_region_file(
     std::vector<std::byte> file{header.begin(), header.end()};
     file.insert(file.end(), body.begin(), body.end());
     expect(static_cast<bool>(io::write_file(path, file)));
+}
+
+/// Read one exported chunk document back. `export_world` writes the vanilla
+/// region layout with zlib-compressed payloads, so the test reuses the same
+/// decompression the reference client applies.
+[[nodiscard]] auto read_exported_chunk(const std::string &exported,
+                                       world::chunk_pos pos) -> value {
+    const auto path{exported + "/dimensions/minecraft/overworld/region/r." +
+                    std::to_string(pos.x >> 5) + "." +
+                    std::to_string(pos.z >> 5) + ".mca"};
+    auto file{io::read_file(path)};
+    expect(static_cast<bool>(file));
+    if (!file || file->size() < 8192U) {
+        return nbt::make_compound();
+    }
+    const auto slot{static_cast<std::size_t>((pos.x & 31) + (pos.z & 31) * 32)};
+    const auto location{get_be32(*file, slot * 4U)};
+    const auto sector{location >> 8U};
+    const auto sectors{location & 0xFFU};
+    expect(sector >= 2U && sectors > 0U);
+    if (sector < 2U || sectors == 0) {
+        return nbt::make_compound();
+    }
+    const auto offset{static_cast<std::size_t>(sector) * 4096U};
+    expect(file->size() >= offset + 5U);
+    if (file->size() < offset + 5U) {
+        return nbt::make_compound();
+    }
+    const auto length{get_be32(*file, offset)};
+    expect(length > 1U);
+    if (length <= 1U) {
+        return nbt::make_compound();
+    }
+    const auto compression{static_cast<std::uint8_t>((*file)[offset + 4U])};
+    expect(compression == 2U);
+    if (compression != 2U) {
+        return nbt::make_compound();
+    }
+    const auto payload{std::span<const std::byte>{*file}.subspan(
+        offset + 5U, static_cast<std::size_t>(length) - 1U)};
+    std::vector<std::byte> raw(4U * 1024U * 1024U);
+    auto raw_size{static_cast<uLongf>(raw.size())};
+    const auto rc{uncompress(reinterpret_cast<Bytef *>(raw.data()), &raw_size,
+                             reinterpret_cast<const Bytef *>(payload.data()),
+                             static_cast<uLong>(payload.size()))};
+    expect(rc == Z_OK);
+    if (rc != Z_OK) {
+        return nbt::make_compound();
+    }
+    raw.resize(static_cast<std::size_t>(raw_size));
+    auto document{nbt::read(raw)};
+    expect(static_cast<bool>(document));
+    if (!document) {
+        return nbt::make_compound();
+    }
+    return std::move(*document);
+}
+
+/// The `isLightOn` byte of one exported chunk, or null when absent.
+[[nodiscard]] auto exported_is_light_on(const std::string &exported,
+                                        world::chunk_pos pos)
+    -> std::optional<int> {
+    const auto document{read_exported_chunk(exported, pos)};
+    const auto *flag{document.get("isLightOn")};
+    if (flag == nullptr) {
+        return std::nullopt;
+    }
+    const auto byte{flag->as_byte()};
+    if (!byte) {
+        return std::nullopt;
+    }
+    return static_cast<int>(*byte);
 }
 
 [[nodiscard]] auto raw_document_bytes(const value &document)
@@ -824,6 +898,11 @@ suite world_storage = [] {
             expect(*icon == "PNGDATA");
         }
 
+        // The import kept the reference light arrays but never marked them
+        // correct, so the export tells the reference to relight them.
+        expect(exported_is_light_on(exported, {.x = 1, .z = 0}) ==
+               std::optional<int>{0});
+
         const auto reimported{directory.sub("rwf2")};
         auto again{anvil::import_world(exported, reimported, false)};
         expect(static_cast<bool>(again));
@@ -857,6 +936,48 @@ suite world_storage = [] {
             expect(stats->poi_chunks == 1U);
             expect(stats->playerdata == 1U);
         }
+    };
+
+    "export claims reference light only for chunks this engine lit"_test = [] {
+        const temp_directory directory;
+        const auto source{build_world(directory)};
+        const auto rwf{directory.sub("rwf-light-on")};
+        auto imported{anvil::import_world(source, rwf, false)};
+        expect(static_cast<bool>(imported));
+        if (!imported) {
+            return;
+        }
+        const auto idle_export{directory.sub("exported-idle")};
+        auto idle{anvil::export_world(rwf, idle_export, false)};
+        expect(static_cast<bool>(idle));
+        if (!idle) {
+            return;
+        }
+        // The source claimed `isLightOn`, but the arrays now belong to an
+        // imported record this engine never lit.
+        expect(exported_is_light_on(idle_export, {.x = 1, .z = 0}) ==
+               std::optional<int>{0});
+        {
+            auto runtime{refrain::sim::world::open(rwf)};
+            expect(static_cast<bool>(runtime))
+                << (runtime ? "" : runtime.error().message);
+            if (!runtime) {
+                return;
+            }
+            expect(runtime->ensure_chunk(world::chunk_pos{.x = 1, .z = 0})
+                       .has_value());
+            // The load relit and marked the column for saving, so the flush
+            // persists light this engine computed and marked correct.
+            expect(runtime->flush().has_value());
+        }
+        const auto lit_export{directory.sub("exported-lit")};
+        auto lit{anvil::export_world(rwf, lit_export, false)};
+        expect(static_cast<bool>(lit));
+        if (!lit) {
+            return;
+        }
+        expect(exported_is_light_on(lit_export, {.x = 1, .z = 0}) ==
+               std::optional<int>{1});
     };
 
     "world_import_export_reject_source_target_overlap"_test = [] {
