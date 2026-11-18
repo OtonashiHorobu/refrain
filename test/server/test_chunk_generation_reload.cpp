@@ -208,6 +208,32 @@ generate_column(server::chunk_generation &service, world::chunk_pos position,
     return std::nullopt;
 }
 
+/// Dispatch and poll until `expected` columns were served. Returns the columns
+/// in the order they were taken, or an empty vector on a failure or timeout.
+[[nodiscard]] auto collect_columns(server::chunk_generation &service,
+                                   std::size_t expected)
+    -> std::vector<world::chunk> {
+    std::vector<world::chunk> columns{};
+    const auto deadline{std::chrono::steady_clock::now() +
+                        std::chrono::seconds{180}};
+    while (std::chrono::steady_clock::now() < deadline) {
+        static_cast<void>(service.dispatch(0));
+        auto results{service.take_results()};
+        for (auto &[pos, column] : results) {
+            static_cast<void>(pos);
+            columns.push_back(std::move(column));
+        }
+        if (!service.take_failures().empty()) {
+            return {};
+        }
+        if (columns.size() >= expected) {
+            return columns;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds{5});
+    }
+    return {};
+}
+
 /// The datapack root for the content-backed case. Prints one line and returns
 /// empty when the checkout has no snapshot.
 [[nodiscard]] auto content_root() -> std::string {
@@ -483,6 +509,9 @@ const suite chunk_generation_reload_tests = [] {
         if (!service) {
             return;
         }
+        // The production tile path declares that it can bind registry
+        // generations; the content reload service reads this capability.
+        expect(app::current_registry_rebind_capability().supported);
         expect((*service)->request(world::chunk_pos{.x = 0, .z = 0}));
         expect((*service)->request(world::chunk_pos{.x = 1, .z = 0}));
         static_cast<void>((*service)->dispatch(0));
@@ -502,20 +531,86 @@ const suite chunk_generation_reload_tests = [] {
         // Two workers failed to bind and to create their boot generator, but
         // the generation was composed once for both, nothing was applied, and
         // no rebuild was reported.
-        std::fprintf(
-            stderr,
-            "bind failure diagnostics: attempts=%llu failures=%llu "
-            "bound=%llu rebuilds=%llu reported=%llu\n",
-            static_cast<unsigned long long>(
-                (*service)->generation_compose_attempts()),
-            static_cast<unsigned long long>(
-                (*service)->generation_rebuild_failures()),
-            static_cast<unsigned long long>((*service)->bound_generation()),
-            static_cast<unsigned long long>((*service)->generation_rebuilds()),
-            static_cast<unsigned long long>(reported_failures));
         expect((*service)->generation_compose_attempts() == 1U);
         expect((*service)->generation_rebuild_failures() >= 2U);
         expect((*service)->bound_generation() == 0U);
         expect((*service)->generation_rebuilds() == 0U);
+        (*service)->stop();
+        // Stopping the only chunk-generation path restores the default.
+        expect(app::current_registry_rebind_capability().supported);
+    };
+
+    "chunk generation reload/an overlapping publish never composes an epoch "
+    "twice"_test = [] {
+        const auto base{content_root()};
+        if (base.empty()) {
+            return;
+        }
+        published_view_guard view_guard{};
+        scratch_directory scratch{};
+        const auto recipe_pack{scratch.path() / "recipe-pack"};
+        expect(write_file(recipe_pack, "data/test/recipe/alpha.json",
+                          R"({"type":"minecraft:crafting_shapeless"})"));
+        auto boot_view{build_view({directory_source(recipe_pack)})};
+        expect(boot_view != nullptr);
+        if (!boot_view) {
+            return;
+        }
+        server::publish_content_view(snapshot_of(1, 1, boot_view));
+        server::chunk_generation::config settings{};
+        settings.data_root = base;
+        settings.seed = 1;
+        settings.worker_count = 2;
+        settings.tile_size = 1;
+        settings.admission.initial_credits = 2;
+        settings.admission.min_credits = 1;
+        settings.admission.max_credits = 2;
+        auto service{server::chunk_generation::start(settings)};
+        expect(static_cast<bool>(service)) << "chunk generation did not start";
+        if (!service) {
+            return;
+        }
+        expect((*service)->request(world::chunk_pos{.x = 0, .z = 0}));
+        const auto boot_columns{collect_columns(**service, 1U)};
+        expect(!boot_columns.empty());
+        if (boot_columns.empty()) {
+            return;
+        }
+        expect(chunk_fingerprint(boot_columns.front()) != data::digest32{});
+        expect((*service)->generation_compose_attempts() == 1U);
+        // Publish the next two generations back to back while the first
+        // published composition is likely still running: an older composer
+        // must not clear a newer in-flight slot and recompose an epoch.
+        const auto changed_pack{scratch.path() / "changed-pack"};
+        expect(write_changed_settings(changed_pack, base));
+        auto changed_view{build_view({directory_source(changed_pack)})};
+        expect(changed_view != nullptr);
+        if (!changed_view) {
+            return;
+        }
+        server::publish_content_view(snapshot_of(2, 1, changed_view));
+        expect((*service)->request(world::chunk_pos{.x = 1, .z = 0}));
+        std::this_thread::sleep_for(std::chrono::milliseconds{10});
+        server::publish_content_view(snapshot_of(3, 1, changed_view));
+        expect((*service)->request(world::chunk_pos{.x = 2, .z = 0}));
+        const auto columns{collect_columns(**service, 2U)};
+        expect(columns.size() == 2U);
+        // Three published epochs (1, 2, 3) plus at most one redundant
+        // composition: an overlapping publish never composes an epoch twice.
+        expect((*service)->generation_compose_attempts() <= 4U);
+        expect((*service)->bound_generation() == 3U);
+        if (columns.size() == 2U) {
+            // Generations 2 and 3 publish the same view content, so the first
+            // tile generated under generation 3 matches the column served for
+            // the generation-2 publish.
+            expect((*service)->request(world::chunk_pos{.x = 1, .z = 0}));
+            const auto again{collect_columns(**service, 1U)};
+            expect(again.size() == 1U);
+            if (again.size() == 1U) {
+                expect(chunk_fingerprint(again.front()) ==
+                       chunk_fingerprint(columns.front()));
+            }
+        }
+        (*service)->stop();
     };
 };

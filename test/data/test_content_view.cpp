@@ -637,7 +637,14 @@ const suite content_view_tests = [] {
                     data::classify_registry_change(*current, *stray_view)};
                 expect(change.restart_required());
                 expect(!change.hot_appliable());
+                expect(change.unsupported.size() == 1U);
+                expect(!change.unsupported.empty() &&
+                       change.unsupported.front() == "data/test/block/notes");
+                expect(change.container_paths().empty());
                 expect(change.description().find("data/test/block/notes") !=
+                       std::string::npos);
+                expect(change.description().find(
+                           "unsupported registry document") !=
                        std::string::npos);
                 auto notes{data::resource_location::parse("test:notes")};
                 expect(notes.has_value());

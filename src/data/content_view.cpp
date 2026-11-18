@@ -380,6 +380,7 @@ auto registry_change::description() const -> std::string {
     append("added", added);
     append("removed", removed);
     append("changed", changed);
+    append("unsupported registry document", unsupported);
     return text;
 }
 
@@ -420,12 +421,13 @@ auto classify_registry_change(const content_view &current,
                 // A document that cannot name a registry entry (a stray file
                 // under a registry directory, or a malformed path) would change
                 // the input fingerprint without changing the generation
-                // mapping. Refuse it as restart-required instead of publishing
-                // an unchanged mapping.
+                // mapping. Refuse it as restart-required and report it as an
+                // unsupported document path instead of as a container.
                 if (registry_entry_path(path).has_value()) {
                     has_document = true;
                 } else {
                     has_container = true;
+                    change.unsupported.push_back(path);
                 }
                 break;
             case registry_input_class::container:

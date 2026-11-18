@@ -508,19 +508,24 @@ const suite content_reload_tests = [] {
 
     "content reload/refuses a registry generation the active path cannot "
     "bind"_test = [] {
+        // The chunk-generation service reports what its path can bind; a
+        // composition that selects the experimental scheduler publishes an
+        // unsupported capability, and a document reload is refused.
+        app::publish_registry_rebind_capability(app::registry_rebind_capability{
+            .supported = false,
+            .reason = "the experimental chunk scheduler keeps its boot content",
+        });
         fixture f{};
         auto initial{f.initial_view()};
         expect(initial != nullptr);
         if (!initial) {
+            app::clear_registry_rebind_capability();
             return;
         }
-        auto options{f.enabled_options()};
-        options.registry_generations = false;
-        options.registry_generation_unsupported_reason =
-            "the experimental chunk scheduler keeps its boot content";
         app::content_reload service{
             app::content_view_snapshot{.generation = 1, .view = initial},
-            options, [dir = f.pack_dir] { return build_view(dir); }};
+            f.enabled_options(),
+            [dir = f.pack_dir] { return build_view(dir); }};
         expect(write_file(f.pack_dir, "data/test/block/ruby.json",
                           R"({"type":"minecraft:block"})"));
         expect(static_cast<bool>(service.request()));
@@ -538,6 +543,35 @@ const suite content_reload_tests = [] {
                 line.find("experimental chunk scheduler") != std::string::npos;
         }
         expect(named_reason);
+        expect(service.generation() == 1U);
+        expect(service.registry_generation() == 1U);
+        app::clear_registry_rebind_capability();
+    };
+
+    "content reload/refuses a changed registry document that cannot define an "
+    "entry"_test = [] {
+        fixture f{};
+        auto initial{f.initial_view()};
+        expect(initial != nullptr);
+        if (!initial) {
+            return;
+        }
+        app::content_reload service{
+            app::content_view_snapshot{.generation = 1, .view = initial},
+            f.enabled_options(),
+            [dir = f.pack_dir] { return build_view(dir); }};
+        // A non-JSON file under a registry directory cannot name an entry. The
+        // refusal says so instead of calling the path a registry container.
+        expect(write_file(f.pack_dir, "data/test/block/notes", "notes"));
+        expect(static_cast<bool>(service.request()));
+        const auto committed{wait_for_commit(service)};
+        expect(committed.failed);
+        expect(committed.restart_required);
+        expect(!committed.published);
+        expect(committed.error.find("cannot define a registry entry") !=
+               std::string::npos);
+        expect(committed.error.find("data/test/block/notes") !=
+               std::string::npos);
         expect(service.generation() == 1U);
         expect(service.registry_generation() == 1U);
     };

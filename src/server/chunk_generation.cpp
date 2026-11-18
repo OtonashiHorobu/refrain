@@ -4,6 +4,7 @@
 
 #include <refrain/server/chunk_generation.hpp>
 
+#include <refrain/app/content_reload.hpp>
 #include <refrain/core/log.hpp>
 #include <refrain/platform/thread.hpp>
 #include <refrain/server/content_reload_inputs.hpp>
@@ -361,6 +362,19 @@ auto chunk_generation::start(config settings)
             fmt::format("chunk generation could not start its workers: {}",
                         error.what()))};
     }
+    // Tell the content reload service what this path can bind. The production
+    // tile path can publish a registry generation; the experimental scheduler
+    // keeps its boot content and must refuse a document reload instead of
+    // reporting a publish that nothing rebinds.
+    app::publish_registry_rebind_capability(
+        service->settings_.experimental_chunk_pipeline
+            ? app::registry_rebind_capability{
+                  .supported = false,
+                  .reason = "the experimental chunk scheduler keeps its boot "
+                            "content, so applying a registry generation needs a "
+                            "restart",
+              }
+            : app::registry_rebind_capability{});
     log_generation.info(
         "started chunk generation with {} workers, credit {} and the {} path",
         service->settings_.worker_count, service->admission_.credits(),
@@ -750,22 +764,20 @@ auto chunk_generation::bind_generation(
             return std::unexpected{
                 make_error(error_code::unknown, generation_failure_reason_)};
         }
-        if (generation_in_flight_epoch_ != snapshot.generation) {
+        if (!generation_composing_) {
             break;
         }
-        generation_cv_.wait(lock, [this, &snapshot] {
-            return (generation_cache_ != nullptr &&
-                    generation_cache_epoch_ == snapshot.generation) ||
-                   generation_failed_epoch_ == snapshot.generation ||
-                   generation_in_flight_epoch_ != snapshot.generation;
-        });
+        // Another worker composes an epoch. Wait, then re-check: the result may
+        // be this epoch's, another epoch may have been published meanwhile, or
+        // the slot may be free again.
+        generation_cv_.wait(lock);
     }
-    generation_in_flight_epoch_ = snapshot.generation;
+    generation_composing_ = true;
     ++generation_compose_attempts_;
     lock.unlock();
     auto built{build_generation(settings_, snapshot)};
     lock.lock();
-    generation_in_flight_epoch_ = 0;
+    generation_composing_ = false;
     if (built) {
         // A late composition of an older epoch must not overwrite the newer
         // cached one, so the store is epoch-ordered.
@@ -816,6 +828,9 @@ void chunk_generation::stop() {
     if (scheduler_ != nullptr) {
         scheduler_->clear();
     }
+    // No chunk-generation path is running after this point; the default
+    // capability matches a server without one.
+    app::clear_registry_rebind_capability();
 }
 
 void chunk_generation::run(std::size_t worker) {

@@ -34,6 +34,13 @@ constexpr refrain::log::logger log_content{"content"};
     };
 }
 
+/// Process-wide chunk-generation capability, published by the service that
+/// starts the generation path. Supported by default: an embedding without a
+/// chunk-generation service never rebinds registry generations, and a server
+/// with the production tile path rebinds them.
+std::mutex g_rebind_capability_mutex{};
+registry_rebind_capability g_rebind_capability{};
+
 /// Fill in the registry generation a caller left out. A snapshot that names a
 /// view but no mapping means "the view's own mapping"; a boot view is registry
 /// generation 1 so a later document change makes it 2.
@@ -55,6 +62,21 @@ constexpr refrain::log::logger log_content{"content"};
 }
 
 } // namespace
+
+void publish_registry_rebind_capability(registry_rebind_capability capability) {
+    const std::lock_guard lock{g_rebind_capability_mutex};
+    g_rebind_capability = std::move(capability);
+}
+
+auto current_registry_rebind_capability() -> registry_rebind_capability {
+    const std::lock_guard lock{g_rebind_capability_mutex};
+    return g_rebind_capability;
+}
+
+void clear_registry_rebind_capability() noexcept {
+    const std::lock_guard lock{g_rebind_capability_mutex};
+    g_rebind_capability = registry_rebind_capability{};
+}
 
 content_reload::content_reload(content_view_snapshot initial,
                                content_reload_options options, builder build)
@@ -172,8 +194,10 @@ auto content_reload::commit() -> content_reload_commit_result {
         if (live_.view) {
             change = data::classify_registry_change(*live_.view, **built);
         }
-        const bool rebind_missing{change.hot_appliable() &&
-                                  !options_.registry_generations};
+        const auto capability{current_registry_rebind_capability()};
+        const bool rebind_missing{
+            change.hot_appliable() &&
+            (!options_.registry_generations || !capability.supported)};
         if (change.restart_required() || rebind_missing) {
             // A registry container changed while the document class may have
             // changed too. The reload is refused as one unit: applying only the
@@ -181,16 +205,34 @@ auto content_reload::commit() -> content_reload_commit_result {
             // different content set than the published generation.
             result.failed = true;
             result.restart_required = true;
-            if (rebind_missing) {
+            const auto &unsupported{change.unsupported};
+            if (!unsupported.empty() && change.container_paths().empty()) {
+                result.error = fmt::format(
+                    "registry document path cannot define a registry entry: {}",
+                    change.description());
+                result.lines = {
+                    fmt::format("refused the content reload because {}",
+                                result.error),
+                    "a changed file under a registry directory that is not a "
+                    "JSON entry document cannot be applied as a registry "
+                    "generation, so this change needs a restart",
+                    fmt::format("the running view stays at generation {}",
+                                live_.generation),
+                };
+            } else if (rebind_missing) {
+                const auto &reason{
+                    options_.registry_generations
+                        ? capability.reason
+                        : options_.registry_generation_unsupported_reason};
                 result.error = fmt::format("registry document data changed: {}",
                                            change.description());
                 result.lines = {
                     fmt::format("refused the content reload because {}",
                                 result.error),
-                    options_.registry_generation_unsupported_reason.empty()
+                    reason.empty()
                         ? "the running chunk-generation path cannot bind a new "
                           "registry generation, so this change needs a restart"
-                        : options_.registry_generation_unsupported_reason,
+                        : reason,
                     fmt::format("the running view stays at generation {}",
                                 live_.generation),
                 };
@@ -252,12 +294,14 @@ auto content_reload::commit() -> content_reload_commit_result {
                     mapping.size(data::registry_kind::item),
                     mapping.size(data::registry_kind::entity_type),
                     live_.registry_generation - 1U));
-                if (!change.entry_names_changed()) {
-                    result.lines.push_back(
-                        "the registry entry names are unchanged, so chunk "
-                        "generation output is unchanged; the new generation "
-                        "records only the changed entry document digests");
-                }
+                result.lines.push_back(
+                    change.entry_names_changed()
+                        ? "the registry entry name set changed"
+                        : "the registry entry names are unchanged");
+                result.lines.push_back(
+                    "the registry mapping is a data-layer identity; generated "
+                    "chunk content changes only through reloadable worldgen "
+                    "documents and tag documents");
             }
             warnings.assign(live_.view->warnings().begin(),
                             live_.view->warnings().end());

@@ -155,10 +155,11 @@ enum class registry_input_class : std::uint8_t {
 /// `namespace:path` key of the entries in ascending order. The assignment is a
 /// pure function of the view content, so two builds of the same content assign
 /// the same ids and two different views never share an id space. The id is an
-/// identity for consumers of the data layer; chunk generation resolves entries
-/// by name, and a stored chunk palette keeps canonical block-state keys rather
-/// than numeric ids, so a document digest change that keeps the name set does
-/// not change generated chunk content.
+/// identity for consumers of the data layer; chunk generation resolves block
+/// names on demand and a stored palette keeps canonical block-state keys rather
+/// than numeric ids, so no registry document change is generation-observable by
+/// itself. Generated chunk content changes only through reloadable worldgen
+/// documents and tag documents.
 struct registry_entry {
     registry_kind kind{registry_kind::block};
     registry_id id{};
@@ -183,11 +184,11 @@ struct registry_entry {
 /// mutates a generation, so a consumer that captured a generation keeps it and
 /// new chunks can be bound to the newest one.
 ///
-/// The mapping covers the three registry kinds uniformly. Chunk generation
-/// consumes the entry *names* (it resolves block names through the generation's
-/// state table; item and entity kinds are carried for consumers that read the
-/// data layer), so a document edit that keeps the entry names changes this
-/// generation's fingerprint but not generated chunk content. A document that
+/// The mapping covers the three registry kinds uniformly and is a data-layer
+/// identity: it records the entry name set and each defining document digest.
+/// Chunk generation resolves block names on demand from the reloadable worldgen
+/// documents and tag documents, not from this mapping, so a changed registry
+/// document does not change generated chunk content by itself. A document that
 /// cannot define an entry (a non-JSON file under a registry directory, for
 /// example) is not part of a mapping; a reload that changes such a path is
 /// refused as restart-required instead of publishing an unchanged mapping.
@@ -258,6 +259,11 @@ struct registry_change {
     std::vector<std::string> removed{};
     /// Paths of registry inputs whose content digest changed, sorted.
     std::vector<std::string> changed{};
+    /// Changed paths that are registry documents in form but cannot define a
+    /// registry entry (a non-JSON file under a registry directory, or a
+    /// malformed entry path), sorted. Such a change is restart-required: it
+    /// would alter the input fingerprint without changing the mapping.
+    std::vector<std::string> unsupported{};
 
     [[nodiscard]] auto empty() const noexcept -> bool {
         return kind == registry_change_kind::none;
@@ -283,10 +289,11 @@ struct registry_change {
     /// Changed paths that are registry containers, sorted.
     [[nodiscard]] auto container_paths() const -> std::vector<std::string>;
 
-    /// True when the change adds or removes a registry entry name. Only such a
-    /// change can alter what chunk generation resolves; a change that only
-    /// edits document digests keeps every name and therefore leaves generated
-    /// chunk content unchanged.
+    /// True when the change adds or removes a registry entry name. The mapping
+    /// records the name set; chunk generation resolves block names on demand,
+    /// so this is a data-layer classification and not a claim that generated
+    /// chunk content changes. Only reloadable worldgen documents and tag
+    /// documents change generated content.
     [[nodiscard]] auto entry_names_changed() const noexcept -> bool {
         return !added.empty() || !removed.empty();
     }

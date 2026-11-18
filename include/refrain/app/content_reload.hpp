@@ -44,11 +44,11 @@ namespace refrain::app {
 // - A change to per-entry block/item/entity registry documents is published
 //   as a new immutable `data::registry_generation` together with the view. The
 //   previous snapshot keeps the generation it started with, so a reader that
-//   took the snapshot earlier keeps its mapping. Only an entry-name change
-//   (an added or removed document) can alter what chunk generation resolves; a
-//   change that only edits document digests changes the generation fingerprint
-//   but not generated chunk content, and the commit reports that distinction.
-//   A document that cannot name a registry entry is refused as
+//   took the snapshot earlier keeps its mapping. The mapping is a data-layer
+//   identity: generated chunk content changes only through reloadable worldgen
+//   documents and tag documents, so the commit says which class changed and
+//   does not claim that a registry document change alone is generation
+//   observability. A document that cannot name a registry entry is refused as
 //   restart-required instead of publishing an unchanged mapping.
 // - A change to a registry container (`tables.rvtb`, `protocol_registry.json`)
 //   is refused as restart-required with the changed files named: the runtime
@@ -107,15 +107,43 @@ struct content_reload_options {
     /// File the gate was read from (diagnostics). Empty means the built-in
     /// default.
     std::string gate_source{};
-    /// Whether the running chunk-generation path can bind a published registry
-    /// generation. The production tile path can; the experimental per-chunk
-    /// scheduler keeps its boot content, so a composition that selects that
-    /// path sets this false. A registry-document reload is then refused as
-    /// restart-required with `registry_generation_unsupported_reason` named,
-    /// instead of reporting a publish that no consumer rebinds.
+    /// Operator-policy override for binding a published registry generation.
+    /// True by default; `current_registry_rebind_capability()` reports what the
+    /// running chunk-generation path can actually do and is consulted as well,
+    /// so a composition that selects the experimental scheduler refuses a
+    /// document reload automatically. A refusal names
+    /// `registry_generation_unsupported_reason` when this flag is false, or the
+    /// running path's reason otherwise.
     bool registry_generations{true};
     std::string registry_generation_unsupported_reason{};
 };
+
+/// Whether the running chunk-generation path can bind a published registry
+/// generation. The production tile path can. The experimental per-chunk
+/// scheduler keeps its boot content, so a composition that selects it declares
+/// that it cannot bind registry generations and a document reload is refused as
+/// restart-required with the reason named, instead of reporting a publish that
+/// nothing rebinds.
+///
+/// `app::content_reload` reads this process-wide capability when it commits a
+/// document-class change; `chunk_generation::start` publishes it from the
+/// chunk-generation configuration, so enabling the scheduler cannot silently
+/// violate the reload contract through an embedder mistake. The default is
+/// supported, matching a server without a chunk-generation service.
+struct registry_rebind_capability {
+    bool supported{true};
+    std::string reason{};
+};
+
+/// Publish the capability of the chunk-generation path that is running.
+void publish_registry_rebind_capability(registry_rebind_capability capability);
+
+/// The capability the current process published; supported by default.
+[[nodiscard]] auto current_registry_rebind_capability()
+    -> registry_rebind_capability;
+
+/// Forget the published capability (test hygiene: the handoff is process-wide).
+void clear_registry_rebind_capability() noexcept;
 
 class content_reload {
   public:

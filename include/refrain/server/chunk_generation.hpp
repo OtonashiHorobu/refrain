@@ -469,13 +469,15 @@ class chunk_generation {
     /// worker.
     std::atomic<std::uint64_t> rebind_failure_reported_{0};
 
-    /// Single-flight generation composition. One worker composes a published
-    /// epoch; the others wait for its result or its failure, so a publish never
-    /// composes the datapack tree once per worker. A late composition of an
-    /// older epoch never overwrites the cached newer one.
+    /// Single-flight generation composition. One worker composes at a time;
+    /// every other request waits for the running composition and then re-checks
+    /// whether its own epoch is already cached or failed, so a published epoch
+    /// is composed once even when a newer publish overlaps an older
+    /// composition. A late composition of an older epoch never overwrites the
+    /// cached newer one.
     mutable std::mutex generation_mutex_{};
     std::condition_variable generation_cv_{};
-    std::uint64_t generation_in_flight_epoch_{0};
+    bool generation_composing_{false};
     std::uint64_t generation_cache_epoch_{0};
     std::uint64_t generation_failed_epoch_{0};
     std::string generation_failure_reason_{};

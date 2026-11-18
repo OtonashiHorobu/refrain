@@ -778,7 +778,8 @@ already written keep their content. A view that changes nothing chunk
 generation reads costs no copy and produces byte-identical chunks, which is the
 ordinary recipe or loot reload. The merged tree of a generation is a temporary
 directory removed when the last generator that captured it is destroyed; a
-leftover tree from a crashed process is swept at the next start.
+leftover tree from a crashed process is swept when a process first materializes
+a content generation.
 
 Registry data follows the same rule with two boundaries:
 
@@ -788,13 +789,14 @@ Registry data follows the same rule with two boundaries:
   generation together with the view. Its entry ids are assigned per registry
   kind in content-key order and every entry records its document digest, so the
   mapping is a pure function of the content and a snapshot keeps the generation
-  it started with. Chunk generation resolves block entries by name and a stored
-  palette keeps canonical block-state keys rather than numeric ids, so no remap
-  is needed; an added or removed entry name changes what generation can
-  resolve, while an edit that keeps the entry names changes only the generation
-  fingerprint and not generated chunk content, and the commit reports that
-  distinction. A registry document path that cannot define an entry is refused
-  as restart-required instead of publishing an unchanged mapping;
+  it started with. The mapping is a data-layer identity: chunk generation
+  resolves block names on demand from the reloadable worldgen documents and
+  tag documents, and a stored palette keeps canonical block-state keys rather
+  than numeric ids, so no remap is needed and no registry document change is
+  generation-observable by itself. The commit names the changed class and says
+  that generated chunk content changes only through worldgen and tag
+  documents. A registry document path that cannot define an entry is refused as
+  restart-required instead of publishing an unchanged mapping;
 - A change to a registry container (`tables.rvtb` or
   `protocol_registry.json`) is refused with `restart required`, naming the
   changed files. The server froze the numeric identities of those tables and

@@ -196,9 +196,11 @@ class generation_data {
 };
 
 /// Materialized content trees of this process that could not be removed when
-/// their last generator released them. A non-zero count means the temporary
-/// directory still holds a tree; the path was logged by the caller and an
-/// operator can remove it. Diagnostics for operators and tests.
+/// their last generator released them. The destructor cannot return or log,
+/// so the count is the only report: a non-zero value means a directory named
+/// `refrain-content-generation-<pid>-<sequence>` under the system temporary
+/// directory survived. A later process sweeps trees whose owner no longer
+/// runs. Diagnostics for operators and tests.
 [[nodiscard]] auto materialization_cleanup_failures() noexcept -> std::uint64_t;
 
 /// Loaded dimension data that does not change during generation: the noise
