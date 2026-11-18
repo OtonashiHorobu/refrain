@@ -151,6 +151,17 @@ struct chunk_generator_config {
     /// because they carry the feature writes their neighbours already made,
     /// so a caller sizes the bound above a viewport's working set.
     jint proto_cache_capacity{256};
+    /// Content generation the generator is bound to. Null keeps the boot
+    /// behaviour: worldgen data is read from `data_root` and `templates_root`
+    /// for the life of the generator.
+    ///
+    /// A non-null generation replaces both roots with the generation's merged
+    /// tree, applies the generation's merged block tags and seeds the
+    /// per-generator state table from its registry mapping in content-key
+    /// order. The generator captures this snapshot when it is created and never
+    /// reads a newer published generation, so every chunk it produces belongs
+    /// to one generation; a server rebinds by constructing a new generator.
+    std::shared_ptr<const generation_data> generation{};
 };
 
 /// The chunks a force-load of `box` runs features for, in the order the
@@ -167,6 +178,19 @@ struct chunk_generator_config {
 /// independent instance per worker, so no random stream, block-state registry,
 /// biome search or template cache is shared between workers. The loaded,
 /// immutable datapack data is shared by reference.
+///
+/// A generator created with a `generation_data` is bound to that content
+/// generation for its whole lifetime: the roots, block tags and registry
+/// mapping are captured at creation and every chunk it produces uses them. A
+/// server that reloads content publishes a new generation and builds a new
+/// generator for it; the generator of the previous generation keeps serving
+/// the work it was given and its chunks keep their block-state keys. This is
+/// the per-chunk capture rule: no chunk ever switches data mid-generation.
+///
+/// The experimental scheduler keeps its boot-time shared content: its frozen
+/// shared block-state table cannot be rebuilt without invalidating the ids the
+/// worker generators already resolved, so it is not rebound to a published
+/// generation. The tile path is the production path and is rebound.
 class chunk_generator {
   public:
     [[nodiscard]] static auto create(chunk_generator_config config)
@@ -293,6 +317,26 @@ class chunk_generator {
     /// Edge in chunks of the square the reference tile path generates.
     [[nodiscard]] auto tile_size() const noexcept -> jint {
         return config_.tile_size;
+    }
+
+    /// The content generation this generator captured, or null for a boot
+    /// generator. Immutable for the generator's lifetime.
+    [[nodiscard]] auto generation() const noexcept
+        -> const std::shared_ptr<const generation_data> & {
+        return config_.generation;
+    }
+    /// Published view epoch of the captured generation, zero for a boot
+    /// generator.
+    [[nodiscard]] auto view_generation() const noexcept -> std::uint64_t {
+        return config_.generation != nullptr
+                   ? config_.generation->view_generation()
+                   : 0U;
+    }
+    /// Registry epoch of the captured generation, zero for a boot generator.
+    [[nodiscard]] auto registry_generation() const noexcept -> std::uint64_t {
+        return config_.generation != nullptr
+                   ? config_.generation->registry_generation()
+                   : 0U;
     }
 
     /// Records the wall-clock time of every stage of the chunks generated

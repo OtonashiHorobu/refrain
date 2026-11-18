@@ -24,9 +24,14 @@
 #include <utility>
 #include <vector>
 
+namespace refrain::app {
+struct content_view_snapshot;
+} // namespace refrain::app
+
 namespace refrain::worldgen {
 class chunk_scheduler;
-}
+class generation_data;
+} // namespace refrain::worldgen
 
 namespace refrain::server {
 
@@ -183,6 +188,9 @@ struct generation_failure {
 class chunk_generation {
   public:
     struct config {
+        /// Installed datapack `data` root. It stays the boot content root; a
+        /// published content view that changes documents this generator reads
+        /// is composed on top of it by the bound generation.
         std::string data_root{};
         std::string templates_root{};
         std::int64_t seed{0};
@@ -347,6 +355,21 @@ class chunk_generation {
     [[nodiscard]] auto in_flight() const -> std::size_t;
     [[nodiscard]] auto worker_count() const noexcept -> std::size_t;
 
+    /// Published content-view epoch the tile workers are bound to. It is
+    /// recorded when a worker creates its first generator and advances when a
+    /// worker rebuilds that generator for a newer published generation.
+    [[nodiscard]] auto bound_generation() const -> std::uint64_t;
+
+    /// Registry epoch of the content the tile workers are bound to.
+    [[nodiscard]] auto bound_registry_generation() const -> std::uint64_t;
+
+    /// Generators rebuilt for a newer published content generation since
+    /// start. Zero while the server runs without a reload.
+    [[nodiscard]] auto generation_rebuilds() const -> std::uint64_t;
+
+    /// Rebuild attempts that failed and kept the previous generator serving.
+    [[nodiscard]] auto generation_rebuild_failures() const -> std::uint64_t;
+
     /// Stop every worker and join them.
     void stop();
 
@@ -400,6 +423,45 @@ class chunk_generation {
     /// Only the first worker that cannot create its generator reports it;
     /// the rest fail the same way and would only repeat the line.
     std::atomic<bool> generator_failure_reported_{false};
+
+    /// Bind a published snapshot to the installed roots, reusing the compose
+    /// result when another worker already built the same published generation.
+    /// The compose copies the installed datapack once per generation instead of
+    /// once per worker.
+    [[nodiscard]] auto
+    bind_generation(const app::content_view_snapshot &snapshot)
+        -> result<std::shared_ptr<const worldgen::generation_data>>;
+
+    /// Content generation binding. Every tile worker records the published
+    /// epoch its generator was built from and rebuilds it on its next task
+    /// after a tick-boundary publish advanced the epoch; the swap happens on
+    /// the worker thread between tasks, so a tick never waits for a rebuild,
+    /// the old generator finishes the chunk it is producing and queued tiles
+    /// wait in the work queue until a worker picks them up with the new
+    /// generation.
+    std::atomic<std::uint64_t> bound_generation_{0};
+    std::atomic<std::uint64_t> bound_registry_generation_{0};
+    std::atomic<std::uint64_t> generation_rebuilds_{0};
+    std::atomic<std::uint64_t> generation_rebuild_failures_{0};
+
+    /// Set once when the experimental scheduler observes a published content
+    /// generation: it keeps its boot content, so a reload only reaches it
+    /// after a restart.
+    std::atomic<bool> scheduler_reload_notice_{false};
+    bool scheduler_baseline_recorded_{false};
+    std::uint64_t scheduler_observed_generation_{0};
+
+    /// Published view epoch of the last generation rebuild that failed and was
+    /// reported; later failures of the same epoch are not repeated by every
+    /// worker.
+    std::atomic<std::uint64_t> rebind_failure_reported_{0};
+
+    /// The compose result of the newest published generation. Worker
+    /// generators capture the shared pointer; an older generation stays alive
+    /// through the generator that still uses it.
+    mutable std::mutex generation_mutex_{};
+    std::uint64_t generation_cache_epoch_{0};
+    std::shared_ptr<const worldgen::generation_data> generation_cache_{};
 };
 
 } // namespace refrain::server

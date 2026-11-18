@@ -34,12 +34,32 @@ constexpr refrain::log::logger log_content{"content"};
     };
 }
 
+/// Fill in the registry generation a caller left out. A snapshot that names a
+/// view but no mapping means "the view's own mapping"; a boot view is registry
+/// generation 1 so a later document change makes it 2.
+[[nodiscard]] auto normalize_snapshot(content_view_snapshot snapshot)
+    -> content_view_snapshot {
+    if (!snapshot.view) {
+        snapshot.registries.reset();
+        snapshot.registry_generation = 0;
+        return snapshot;
+    }
+    if (!snapshot.registries) {
+        snapshot.registries = std::make_shared<const data::registry_generation>(
+            snapshot.view->registries());
+    }
+    if (snapshot.registry_generation == 0) {
+        snapshot.registry_generation = 1;
+    }
+    return snapshot;
+}
+
 } // namespace
 
 content_reload::content_reload(content_view_snapshot initial,
                                content_reload_options options, builder build)
-    : live_{std::move(initial)}, options_{std::move(options)},
-      build_{std::move(build)} {}
+    : live_{normalize_snapshot(std::move(initial))},
+      options_{std::move(options)}, build_{std::move(build)} {}
 
 content_reload::~content_reload() {
     std::future<result<std::shared_ptr<const data::content_view>>> pending{};
@@ -148,45 +168,73 @@ auto content_reload::commit() -> content_reload_commit_result {
     std::vector<std::string> warnings{};
     {
         const std::lock_guard lock{mutex_};
+        data::registry_change change{};
         if (live_.view) {
-            const auto change{
-                data::describe_registry_change(*live_.view, **built)};
-            // TODO: immutable registry generations are not implemented. A
-            // running server freezes the block/item/entity registries when it
-            // starts and every existing chunk keeps the palette generation it
-            // was written with, so a registry change is refused here instead of
-            // being half-applied. When generations land, this refusal becomes
-            // the switch point: existing chunks stay on the old generation,
-            // newly generated chunks bind to the new one and only a remap that
-            // is explicitly supported may rewrite old palettes.
-            if (!change.empty()) {
-                result.failed = true;
-                result.restart_required = true;
-                result.error =
-                    fmt::format("block, item or entity registry data changed: "
-                                "{}",
-                                change);
-                result.lines = {
-                    fmt::format("refused the content reload because {}",
-                                result.error),
-                    "a running server cannot change a frozen registry and "
-                    "existing chunks keep the generation they were written "
-                    "with, so this change needs a restart",
-                    fmt::format("the running view stays at generation {}",
-                                live_.generation),
-                };
-            }
+            change = data::classify_registry_change(*live_.view, **built);
         }
-        if (!result.failed) {
+        if (change.restart_required()) {
+            // A registry container changed while the document class may have
+            // changed too. The reload is refused as one unit: applying only the
+            // documents would leave the frozen containers describing a
+            // different content set than the published generation.
+            result.failed = true;
+            result.restart_required = true;
+            result.error = fmt::format("registry container data changed: {}",
+                                       change.description());
+            result.lines = {
+                fmt::format("refused the content reload because {}",
+                            result.error),
+                "the running server froze the numeric identities of the block, "
+                "item and entity tables and of the wire registry catalog at "
+                "startup, so replacing 'tables.rvtb' or "
+                "'protocol_registry.json' needs a restart",
+                fmt::format("the running view stays at generation {}",
+                            live_.generation),
+            };
+        } else {
+            auto registries{
+                change.hot_appliable()
+                    ? std::make_shared<const data::registry_generation>(
+                          (*built)->registries())
+                    : live_.registries};
+            if (registries == nullptr) {
+                // The live snapshot started without a mapping (an embedding
+                // that published a bare view); the published one always names
+                // the mapping of the view it describes.
+                registries = std::make_shared<const data::registry_generation>(
+                    (*built)->registries());
+            }
+            auto registry_generation{live_.registry_generation};
+            if (change.hot_appliable()) {
+                ++registry_generation;
+            } else if (registry_generation == 0) {
+                registry_generation = 1;
+            }
             live_ = content_view_snapshot{
                 .generation = live_.generation + 1U,
                 .view = std::move(*built),
+                .registry_generation = registry_generation,
+                .registries = std::move(registries),
             };
             result.published = true;
+            result.registry_generation_published = change.hot_appliable();
             result.lines.push_back(
                 fmt::format("published content view generation {} with {}",
                             live_.generation,
                             data::format_content_view_summary(*live_.view)));
+            if (result.registry_generation_published) {
+                const auto &mapping{*live_.registries};
+                result.lines.push_back(fmt::format(
+                    "published registry generation {} with {} block, {} item "
+                    "and {} entity entries; chunks generated before it keep "
+                    "registry generation {} and the block states they wrote "
+                    "stay as they are",
+                    live_.registry_generation,
+                    mapping.size(data::registry_kind::block),
+                    mapping.size(data::registry_kind::item),
+                    mapping.size(data::registry_kind::entity_type),
+                    live_.registry_generation - 1U));
+            }
             warnings.assign(live_.view->warnings().begin(),
                             live_.view->warnings().end());
             if (!warnings.empty()) {
@@ -231,6 +279,11 @@ auto content_reload::pending() const -> bool {
 auto content_reload::generation() const -> std::uint64_t {
     const std::lock_guard lock{mutex_};
     return live_.generation;
+}
+
+auto content_reload::registry_generation() const -> std::uint64_t {
+    const std::lock_guard lock{mutex_};
+    return live_.registry_generation;
 }
 
 auto make_content_reload_port(content_reload &service) -> content_reload_port {
