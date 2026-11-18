@@ -667,6 +667,12 @@ class host {
         provider_api api{};
     };
 
+    /// Package root handed to the loader contract: the installed package's
+    /// receipt directory for an installed package, empty for a manifest read
+    /// from the built-in image. A loader reads its guest members through
+    /// `<root>/<version>.json` and the content store.
+    [[nodiscard]] auto loader_package_root() const -> std::string;
+
     /// Resolve `loader_id` to its active provider. Fails closed with
     /// `not_found` or `unsupported` naming the loader and the active loader
     /// ids when the host has no such loader.

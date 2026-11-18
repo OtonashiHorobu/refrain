@@ -886,6 +886,54 @@ list = ["refrain.content.vanilla@1.0.0"]
         }
     };
 
+    "gamepack/unquoted loader ids are reported as a quoting mistake"_test = [] {
+        auto text{std::string{R"([gamepack]
+id = "refrain.test.loaders"
+version = "1.0.0"
+side = "server"
+abi = "1"
+auto_scan = false
+
+[mods]
+list = ["refrain.content.vanilla@1.0.0"]
+
+[loaders]
+com.example.loader = "refrain.content.vanilla@^1.0.0"
+)"}};
+        const auto spec{parse_spec(text)};
+        expect(!spec);
+        if (!spec) {
+            expect(spec.error().code == refrain::error_code::parse_error);
+            expect(spec.error().message.find("dotted key") !=
+                   std::string::npos);
+            expect(spec.error().message.find("quote the full loader id") !=
+                   std::string::npos);
+        }
+    };
+
+    "gamepack/loader entries require a requirement string"_test = [] {
+        auto text{std::string{R"([gamepack]
+id = "refrain.test.loaders"
+version = "1.0.0"
+side = "server"
+abi = "1"
+auto_scan = false
+
+[mods]
+list = ["refrain.content.vanilla@1.0.0"]
+
+[loaders]
+"com.example.loader" = 7
+)"}};
+        const auto spec{parse_spec(text)};
+        expect(!spec);
+        if (!spec) {
+            expect(spec.error().code == refrain::error_code::parse_error);
+            expect(spec.error().message.find("mod requirement string") !=
+                   std::string::npos);
+        }
+    };
+
     "gamepack/the provider table cannot bind the loader service"_test = [] {
         auto text{std::string{R"([gamepack]
 id = "refrain.test.loaders"

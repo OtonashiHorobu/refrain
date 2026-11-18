@@ -125,6 +125,45 @@ const suite loader_plan_tests = [] {
                index_of(*plan, "refrain.test.guest"));
     };
 
+    "loader_plan/one provider mod may provide several loader ids"_test = [] {
+        auto spec{
+            parse_spec(gamepack_text("\"refrain.test.guest.one@1.0.0\", "
+                                     "\"refrain.test.guest.two@1.0.0\", "
+                                     "\"refrain.test.provider@1.0.0\"",
+                                     "\"com.test.loader.one\" = "
+                                     "\"refrain.test.provider@^1.0.0\"\n"
+                                     "\"com.test.loader.two\" = "
+                                     "\"refrain.test.provider@^1.0.0\"\n"))};
+        expect(static_cast<bool>(spec));
+        if (!spec) {
+            return;
+        }
+        std::vector<mod::candidate> catalog{};
+        catalog.push_back(
+            make_guest("refrain.test.guest.one", "com.test.loader.one"));
+        catalog.push_back(
+            make_guest("refrain.test.guest.two", "com.test.loader.two"));
+        catalog.push_back(make_provider("refrain.test.provider"));
+        const auto plan{mod::resolve(*spec, catalog)};
+        expect(static_cast<bool>(plan))
+            << (plan ? std::string{"resolve ok"} : plan.error().message);
+        if (!plan) {
+            return;
+        }
+        expect(plan->loaders.size() == 2U);
+        if (plan->loaders.size() == 2U) {
+            expect(plan->loaders[0].id == "com.test.loader.one");
+            expect(plan->loaders[0].provider == "refrain.test.provider@1.0.0");
+            expect(plan->loaders[1].id == "com.test.loader.two");
+            expect(plan->loaders[1].provider == "refrain.test.provider@1.0.0");
+        }
+        // The provider is ordered before both guests.
+        expect(index_of(*plan, "refrain.test.provider") <
+               index_of(*plan, "refrain.test.guest.one"));
+        expect(index_of(*plan, "refrain.test.provider") <
+               index_of(*plan, "refrain.test.guest.two"));
+    };
+
     "loader_plan/rejects a cycle between loader providers and guests"_test =
         [] {
             auto spec{parse_spec(

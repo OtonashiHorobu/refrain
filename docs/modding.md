@@ -173,7 +173,8 @@ declarations are required and both are validated before any guest code runs:
    ```
 
    ```cpp
-   // static mod factory; the loader table is the provider's own vtable
+   // statically linked mod factory; the table is the provider's own generated
+   // `refrain_services_mod_loader_vtable` and its state pointer
    auto on_load(refrain::mod::host &host) -> refrain::status {
        const refrain::mod::provider_api api{
            .vtable = &loader_vtable,
@@ -185,8 +186,23 @@ declarations are required and both are validated before any guest code runs:
    }
    ```
 
-   A native mod reaches the same call through
-   `refrain:host.core::register_provider`.
+   An installed native package has no C++ host symbol: its entry point
+   (`include/refrain/mod/entry.h`) receives the sealed `refrain:host.core`
+   table and registers through the stable C surface of that contract.
+
+   ```c
+   refrain_host_core_provider_ref api = {
+       .struct_size = REFRAIN_HOST_CORE_PROVIDER_REF_SIZE,
+       .vtable = &loader_vtable,   /* the loader's own generated vtable */
+       .self = &loader_state,
+       .abi_major = REFRAIN_SERVICES_MOD_LOADER_ABI_MAJOR,
+   };
+   const refrain_str service = {(const uint8_t *)"refrain:mod.loader",
+                                sizeof("refrain:mod.loader") - 1};
+   const refrain_str instance = {(const uint8_t *)"com.example.loader",
+                                 sizeof("com.example.loader") - 1};
+   host_core->register_provider(host_core_self, service, instance, &api);
+   ```
 
 The host loads loader providers in a bootstrap phase before the rest of the
 composition: the declared providers and their transitive hard dependencies are
@@ -195,17 +211,20 @@ manifests and does not depend on discovery or hash-map order. A loader provider
 itself must run through the host-owned `builtin` or `native` loader: a
 sandboxed guest (`wasm`, `lua`) can never become a loader, and a
 package-provided loader cannot host another package-provided loader. The host
-refuses a provider mod that is not installed as a package (a directory tree is
-not an install), so the signature and install policy has already decided the
-package is trusted before it is loaded.
+refuses a provider mod whose package source is neither the built-in image nor
+an installed, receipt-checked package: a directory tree is not an install, so
+the signature and install policy has already decided the package is trusted
+before it is loaded.
 
 The registration is gated by the same checks first-party loaders get: the
 capability table must name the instance it is registered on, report the loader
 ABI major the host implements, declare a known unload guarantee and name the
 providing mod in the `provider` field of the capability struct. The loader
 service is sealed after the first composition epoch, so a loader instance is
-registered once per process: a second registration is `already_exists` and the
-plan cannot add, remove or repoint a loader at runtime.
+registered once per process: a second registration of the same id is
+`already_exists` and the plan cannot add, remove or repoint a loader at
+runtime. One provider mod may register several loader ids; each registration
+carries its own capability table and names its own instance.
 
 A package naming a declared loader loads after the provider: resolution adds a
 dependency edge from the provider to every package that names its loader, so
@@ -224,11 +243,20 @@ running epoch is untouched. A loader that changes its capabilities after
 registration is detected on the next dispatch and the load fails with
 `version_mismatch`, naming the loader and the provider mod.
 
-The loader contract hands the provider the guest manifest subset and the
-package root only. Reading the guest payload is the loader's own format: an
-installed package keeps its members in the content store, so the loader reads
-them through the install receipt and the store, exactly like the `native`
-loader does.
+The loader contract hands the provider the guest manifest subset and a package
+root; it does not forward a package's custom `[entry]` payload keys, because
+the parser keeps only the shared entry fields and the loader validates its own
+layout. A loader therefore defines a fixed member layout for its guests, for
+example a `data/payload.bin` member that the package walker records.
+
+`package_root` is empty for a manifest read from the built-in image. For an
+installed package it is the directory that holds the install receipt, so
+`<package_root>/<version>.json` is the receipt and the guest members are the
+receipt-checked content-store blobs. Host-linked code reads them through the
+package API (`make_receipt_package_source()` in `refrain/mod/package.hpp`,
+which verifies the receipt and the member hashes); an external native loader
+receives the path only and implements the read against the receipt and the
+content store itself.
 
 ### Loader boundaries
 
@@ -414,11 +442,13 @@ data = "refrain.data.vanilla@^1.0.0"
 ```
 
 `[mods].list` pins the composition. `[providers]` maps a service name to the mod
-that provides it, using a version range; `[loaders]` declares the
-package-provided loader instances a composition trusts, keyed by loader id and
-pointing at the providing mod. Both are optional. With `auto_scan = true` the
-resolved composition also includes every mod installed in the server's content
-store
+that provides it, using a version range; it cannot bind the loader service
+(`refrain:mod.loader`), because package-provided loaders are declared in
+`[loaders]` and the host-owned ones come from the host bootstrap. `[loaders]`
+declares the package-provided loader instances a composition trusts, keyed by
+loader id and pointing at the providing mod. Both are optional. With
+`auto_scan = true` the resolved composition also includes every mod installed
+in the server's content store
 (`--content-store`, plus any `--mods` store roots); with `auto_scan = false` the
 gamepack is the only source of truth and every required version must be listed.
 

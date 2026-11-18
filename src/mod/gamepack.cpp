@@ -728,24 +728,38 @@ constexpr std::size_t k_max_mod_count{4096};
 
     spec.loaders.clear();
     for (const auto &loader_id : doc.keys("loaders")) {
-        if (auto checked{check_mod_loader_id(loader_id)}; !checked) {
-            return std::unexpected{
-                fail(checked.error().code,
-                     fmt::format("gamepack: [loaders] '{}': {}", loader_id,
-                                 checked.error().message))};
-        }
-        // The loader id is a TOML literal key inside the table, so it is never
-        // split on dots; an unquoted key arrives here as its first path
-        // segment, for which there is no string value.
         const std::array<std::string_view, 2> value_path{"loaders", loader_id};
-        auto text{doc.get_string_at(value_path)};
-        if (!text) {
+        // A loader id contains dots, so it must be a quoted literal key. An
+        // unquoted key is a TOML dotted path and reaches this loop as its
+        // first segment with a nested table underneath: point the operator at
+        // the quoting mistake instead of validating the fragment as an id.
+        const auto value_kind{doc.kind_at(value_path)};
+        if (value_kind == config::value_kind::table) {
+            return std::unexpected{fail(
+                error_code::parse_error,
+                fmt::format("gamepack: [loaders] key '{}' is a TOML dotted "
+                            "key; quote the full loader id, for example "
+                            "\"com.example.loader\" = "
+                            "\"<mod-id>@<range>\"",
+                            loader_id))};
+        }
+        if (value_kind != config::value_kind::string) {
             return std::unexpected{
                 fail(error_code::parse_error,
                      fmt::format("gamepack: [loaders] entry '{}' must map the "
                                  "quoted loader id to a mod requirement string "
                                  "'<mod-id>@<range>'",
                                  loader_id))};
+        }
+        if (auto checked{check_mod_loader_id(loader_id)}; !checked) {
+            return std::unexpected{
+                fail(checked.error().code,
+                     fmt::format("gamepack: [loaders] '{}': {}", loader_id,
+                                 checked.error().message))};
+        }
+        auto text{doc.get_string_at(value_path)};
+        if (!text) {
+            return std::unexpected{text.error()};
         }
         auto requirement{parse_mod_requirement(*text)};
         if (!requirement) {

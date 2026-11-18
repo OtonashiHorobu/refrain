@@ -1443,8 +1443,11 @@ auto host::add_loader_instance(std::string_view loader_id,
 
     const auto effective_version{version.empty() ? std::string{"1.0.0"}
                                                  : std::string{version}};
-    const auto provider_id{host_owned ? std::string{loader_id}
-                                      : std::string{provider}};
+    // The registry candidate key is (service, provider id, version), so the
+    // candidate identity is the loader instance id: it is unique per process
+    // and lets one provider mod register several loader ids. The providing mod
+    // is recorded on the loader record and in the candidate source instead.
+    const std::string provider_id{loader_id};
     provider_apis_.push_back(std::make_unique<provider_api>(copy));
     provider_info info{};
     info.service = std::string{loader_abi::service_id};
@@ -1603,6 +1606,21 @@ auto host::find_loader(std::string_view loader_id) const noexcept
     return match == loaders_.end() ? nullptr : &*match;
 }
 
+/// Package root handed to a loader contract call: the installed package's
+/// receipt directory, or empty for a manifest read from the built-in image.
+/// The contract documents the installed case as the directory that holds the
+/// receipt, so `<root>/<version>.json` names the install record a loader reads
+/// its guest members through.
+auto host::loader_package_root() const -> std::string {
+    if (current_candidate_ == nullptr ||
+        current_candidate_->kind == package_kind::builtin) {
+        return {};
+    }
+    const auto parent{
+        std::filesystem::path{current_candidate_->path}.parent_path()};
+    return parent.empty() ? std::string{} : parent.string();
+}
+
 auto host::resolve_loader(std::string_view loader_id) const
     -> result<loader_binding> {
     const auto active{
@@ -1631,17 +1649,14 @@ auto host::resolve_loader(std::string_view loader_id) const
                              "loader registration; active mod loaders: {}",
                              loader_id, registered_loader_ids()))};
     }
-    // A host-owned loader is registered under the loader id; a package-provided
-    // loader is registered under the providing mod id. A mismatch means the
-    // registry slot was replaced behind the loader record.
-    const auto expected_provider{record->host_owned ? record->id
-                                                    : record->provider};
-    if (active->id != expected_provider) {
+    // Every loader instance is registered under its loader id; a mismatch
+    // means the registry slot was replaced behind the loader record.
+    if (active->id != record->id) {
         return std::unexpected{fail(
             error_code::version_mismatch,
             fmt::format("mod loader '{}' is active but its provider slot names "
                         "'{}' instead of '{}'",
-                        loader_id, active->id, expected_provider))};
+                        loader_id, active->id, record->id))};
     }
     const auto *api{static_cast<const provider_api *>(active->instance)};
     if (api == nullptr || api->vtable == nullptr || api->self == nullptr) {
@@ -1718,12 +1733,9 @@ auto host::validate_with_loader(const loader_binding &binding,
             fail(error_code::unknown,
                  "mod loader dispatch has no candidate context")};
     }
-    auto package_root{std::string{}};
-    if (const auto parent{
-            std::filesystem::path{current_candidate_->path}.parent_path()};
-        !parent.empty()) {
-        package_root = parent.string();
-    }
+    // The contract borrows the package root for the duration of the call, so
+    // it must stay alive across `provider.validate()`.
+    const auto package_root{loader_package_root()};
     const auto entry{make_loader_entry(manifest, activate_code, package_root)};
     clear_loader_diagnostic();
     try {
@@ -1763,12 +1775,7 @@ auto host::load_with_loader(const loader_binding &binding,
             fail(error_code::unknown,
                  "mod loader dispatch has no candidate context")};
     }
-    auto package_root{std::string{}};
-    if (const auto parent{
-            std::filesystem::path{current_candidate_->path}.parent_path()};
-        !parent.empty()) {
-        package_root = parent.string();
-    }
+    const auto package_root{loader_package_root()};
     loader_abi::mod_load_request request{};
     request.struct_size = REFRAIN_SERVICES_MOD_LOADER_MOD_LOAD_REQUEST_SIZE;
     request.manifest = make_loader_entry(manifest, activate_code, package_root);
@@ -1828,12 +1835,7 @@ auto host::reload_with_loader(const loader_binding &binding,
             fail(error_code::unknown,
                  "mod loader dispatch has no candidate context")};
     }
-    auto package_root{std::string{}};
-    if (const auto parent{
-            std::filesystem::path{current_candidate_->path}.parent_path()};
-        !parent.empty()) {
-        package_root = parent.string();
-    }
+    const auto package_root{loader_package_root()};
     loader_abi::mod_load_request request{};
     request.struct_size = REFRAIN_SERVICES_MOD_LOADER_MOD_LOAD_REQUEST_SIZE;
     request.manifest = make_loader_entry(manifest, activate_code, package_root);
