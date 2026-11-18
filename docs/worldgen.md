@@ -873,14 +873,20 @@ with the column as well. The bridge turns the starts the column owns and the
 references it carries into the vanilla chunk `structures` compound: a `starts`
 compound keyed by structure id that carries the structure id, the chunk
 position and one vanilla piece tag per piece, and a `References` compound of
-packed chunk positions, with the reference multiplicity kept. A column with no structure data keeps the
-field empty, and a record the compound cannot represent fails the conversion
-instead of losing a start silently. An Anvil export of a generated world
-therefore declares the structures the reference reader expects. Restoring
-persisted starts into generation is a separate capability: a loaded column
-does not take part in structure continuation because the stored compound does
-not carry the generation step of a structure or the template-derived placement
-state the restore direction needs from the caller.
+packed chunk positions, with the reference multiplicity kept. A jigsaw pool
+element stores its processor list the way the reference does: a named list as
+its id string and an inline list as the direct codec's object form
+(`{"processors": [...]}`), so a generated piece whose datapack document lists
+its processors inline round-trips. The inline document is converted under depth
+and value-count bounds, and a value the tag model cannot carry fails the
+conversion. A column with no structure data keeps the field empty, and any
+other record the compound cannot represent fails the conversion instead of
+losing a start silently. An Anvil export of a generated world therefore
+declares the structures the reference reader expects. Restoring persisted
+starts into generation is a separate capability: a loaded column does not take
+part in structure continuation because the stored compound does not carry the
+generation step of a structure or the template-derived placement state the
+restore direction needs from the caller.
 What the client receives from these records is covered in
 [architecture](architecture.md#generated-entities). Capped processor lists decode and run their
 delegate over the whole piece; every positive integer provider type of 26.3
