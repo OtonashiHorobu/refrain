@@ -46,3 +46,36 @@ built yet.
 - [NOTICE](../NOTICE.md) — third-party components and the terms of the
   game-derived data.
 - [Code of Conduct](../CODE_OF_CONDUCT.md) — expected behaviour and enforcement.
+
+## Wiki
+
+The guides in this directory are published to the repository
+[wiki](https://github.com/OtonashiHorobu/refrain/wiki) by
+`scripts/dev/sync-wiki.sh`. The files under `docs/` are the source of truth:
+every wiki page names the repository file it comes from in a banner, so edits
+belong in the repository and never on the wiki.
+
+The wiki is a separate git repository, `refrain.wiki.git`. GitHub creates it
+with the first wiki page, which has to be saved once in the web interface;
+until then there is no repository to clone. After that first page, run the sync
+from the repository root:
+
+```bash
+scripts/dev/sync-wiki.sh
+```
+
+The script writes one page per file under `docs/`, rebuilds the `Home` index,
+commits only when the content changed and pushes. The check mode generates the
+pages in a temporary directory and compares them with a local wiki checkout
+(`--wiki-dir` or `REFRAIN_WIKI_DIR`); it never uses the network:
+
+```bash
+scripts/dev/sync-wiki.sh --check --wiki-dir ../refrain.wiki
+```
+
+Pushing needs a credential that may write the wiki repository. The
+`GITHUB_TOKEN` a workflow receives is scoped to the source repository and
+cannot push the wiki, so an unattended sync needs a user access token with
+write access to the repository, or an equivalent credential, stored as a
+repository secret. Pass it through `REFRAIN_WIKI_TOKEN`; the script never
+writes it into a page or a remote URL.
