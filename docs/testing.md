@@ -109,15 +109,58 @@ Tests that cover the simulation compare the state hash across two runs, or
 across an encode and a decode. A change that alters the hash must come with a
 format or behavior change that explains it.
 
-A test does not derive its expected result from wall-clock time. A subsystem
+A test's pass/fail must not depend on a measured duration; waits are bounds. A
+test waits for a worker to reach an observable state or for a deadline to pass,
+then asserts the state it found, never that a duration was reached. A subsystem
 whose behavior is governed by a time budget exposes that budget's clock to
 tests: the chunk streamer accepts an injected drain clock, a test that is not
 about the budget freezes it so the observed drain depends on the queued work,
 and the dedicated budget test drives a logical clock advanced by its encoder
-instead of sleeping. Where a worker pool produces the results, a test looks a
-result up by its key (a chunk position, an entity id) instead of assuming the
-order the workers finished in, and synchronizes on an observable state
-transition rather than sleeping for the operation to complete.
+instead of sleeping. The chunk service forwards the same clock to its streamer,
+so a service-level test can force the budget to expire between the deadline and
+the first packet and still assert the queued column is deferred to the next
+tick rather than dropped. Where a worker pool produces the results, a test
+looks a result up by its key (a chunk position, an entity id) instead of
+assuming the order the workers finished in, and synchronizes on the observable
+state transition rather than sleeping for the operation to complete.
+
+Two documented exceptions use a real interval on purpose, and each says so
+next to the call:
+
+- the prefetch tests space accepted centre updates by at least the chunk
+  tracker's movement-history window (100 ms), because the look-ahead estimate is
+  defined over samples separated by that span; the test asserts the band that
+  spacing produces, not the spacing itself;
+- a test that waits on a background worker polls until a deadline and fails
+  with the last observed state; the deadline bounds the wait and is not the
+  expected result.
+
+## Repeat runs
+
+A single pass cannot rule out a scheduling-dependent failure. Repeat the
+datapack-free chunk streaming, cache and service suites under CPU load with:
+
+```bash
+scripts/dev/repeat-chunk-tests.sh --repeats 20 --full-suite
+```
+
+The script keeps the spare cores busy, discovers the cases of the streamer,
+cache and service suites from the binary, runs every one of them twenty times
+and fails on the first failing repetition, then runs the whole binary once
+under the same load. The scheduled `chunk-repeat` workflow runs the same
+command nightly on the default branch.
+
+The content reload suite needs the locally generated datapack snapshot and
+returns early in CI without it, so a green CI run says nothing about it. After
+staging the snapshot with `scripts/fetch-content.sh <server.jar>`, run the same
+loop with the reload suite added:
+
+```bash
+scripts/dev/repeat-chunk-tests.sh --reload --repeats 20
+```
+
+`--reload` fails when the snapshot is missing. That suite is a local gate: the
+pipeline never stages the user-owned server jar.
 
 ## Fuzz smoke
 
