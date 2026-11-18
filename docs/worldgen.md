@@ -470,10 +470,10 @@ a known property of that staging.
 The production tile path is accepted on a dedicated 12-thread x86-64 machine
 (six physical cores, AVX-512) with a Release build at `x86-64-v4`, link-time
 optimisation enabled and the CPU governor fixed at `performance`.
-[Building](building.md#benchmarks) documents the remote benchmark target and
-its host lock, which keeps runs from overlapping. The runs use the generated
-datapack without an extracted template cache, so template-backed structure
-pieces are not placed in the full-target numbers.
+[Building](building.md#benchmarking-on-a-separate-host) documents the remote
+benchmark target and its host lock, which keeps runs from overlapping. The runs
+use the generated datapack without an extracted template cache, so
+template-backed structure pieces are not placed in the full-target numbers.
 
 The runtime generates tiles: a `chunk_generation` worker produces one whole
 `tile_size` tile for the columns the runtime needs, and
