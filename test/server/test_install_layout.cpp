@@ -218,6 +218,29 @@ suite<"server/layout"> layout_tests = [] {
                              install / "tools" / "content" / "generate.sh"));
         };
 
+    "layout/a Windows binary does not discover the POSIX generation entry"_test =
+        [] {
+            refrain::test_support::scratch_directory scratch{};
+            const auto install = scratch.path() / "install";
+            make_gamepack(install);
+            make_content(install);
+            fs::create_directories(install / "bin");
+            fs::create_directories(install / "tools" / "content");
+            write_file(install / "bin" / "refrain-tools.exe");
+            write_file(install / "tools" / "content" / "generate.sh");
+            const auto layout = discover_install_layout(install_layout_options{
+                .working_directory = (scratch.path() / "instance").string(),
+                .executable =
+                    (install / "bin" / "refrain-server.exe").string()});
+            expect(layout.has_value());
+            if (!layout) {
+                return;
+            }
+            expect(same_path(layout->tools_program,
+                             install / "bin" / "refrain-tools.exe"));
+            expect(layout->generation_script.empty());
+        };
+
     "layout/a packaged install carries the tools but no generation entry"_test =
         [] {
             refrain::test_support::scratch_directory scratch{};

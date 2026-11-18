@@ -151,6 +151,46 @@ constexpr std::uint64_t max_data_file_bytes = 64ULL * 1024ULL * 1024ULL;
     return false;
 }
 
+/// A datapack is complete when the worldgen tree and a marker are present and
+/// the marker's entry count matches the files below `data/`. A generation run
+/// interrupted while it writes the datapack leaves a partial tree with a
+/// stale or missing marker; that must fail closed instead of reaching world
+/// generation. A marker that does not record a count (a hand-staged directory)
+/// still has to match the worldgen tree.
+[[nodiscard]] auto datapack_is_complete(std::string_view root) -> bool {
+    const auto data_root{join(root, "data")};
+    if (!has_worldgen_documents(data_root)) {
+        return false;
+    }
+    auto files{list_files(data_root)};
+    if (!files || files->empty()) {
+        return false;
+    }
+    const auto marker_path{join(root, game_data_marker_name)};
+    if (!io::is_regular_file(marker_path)) {
+        return false;
+    }
+    auto text{io::read_text(marker_path,
+                            io::read_options{.max_bytes = max_marker_bytes,
+                                             .allow_symlink = false})};
+    if (!text) {
+        return false;
+    }
+    auto document{json::value::parse(*text)};
+    if (!document || !document->is_object()) {
+        return false;
+    }
+    if (const auto *entry_count{document->find("entry_count")};
+        entry_count != nullptr) {
+        const auto expected{entry_count->as_int64()};
+        if (!expected || *expected <= 0 ||
+            static_cast<std::uint64_t>(*expected) != files->size()) {
+            return false;
+        }
+    }
+    return true;
+}
+
 /// Digest of a datapack tree: BLAKE3 over the sorted `path\0file-digest\0`
 /// listing, so a moved or renamed file changes the digest while the directory
 /// iteration order never does.
@@ -945,10 +985,31 @@ struct generation_plan {
     // The server only generates when a required artifact is missing, so an
     // earlier partial run must be repairable without an operator flag.
     arguments.emplace_back("--force");
+    // A fixed scratch directory makes an interrupted run recoverable: it is
+    // swept before the next attempt and removed after every attempt, including
+    // the one the timeout kills.
+    const auto work{join(root, ".data-generation.tmp")};
+    arguments.push_back("--work");
+    arguments.push_back(work);
     if (!plan.java.empty()) {
         arguments.push_back("--java");
         arguments.push_back(plan.java);
     }
+    std::error_code sweep_error;
+    std::filesystem::remove_all(std::string{work}, sweep_error);
+    struct work_cleaner {
+        std::string path;
+        ~work_cleaner() {
+            std::error_code error;
+            std::filesystem::remove_all(path, error);
+            if (error) {
+                log_game_data.warn(
+                    "failed to remove the generation scratch directory '{}': "
+                    "{}",
+                    path, error.message());
+            }
+        }
+    } cleaner{std::string{work}};
     log_game_data.info(
         "generating the tracked game data from '{}' into '{}', this can take "
         "a few minutes",
@@ -969,7 +1030,8 @@ struct generation_plan {
             error_code::io_error,
             fmt::format(
                 "data generation for Minecraft {} did not finish "
-                "within {}s and was stopped",
+                "within {}s; it was stopped and its scratch directory was "
+                "removed",
                 game_data_version,
                 std::chrono::duration_cast<std::chrono::seconds>(plan.timeout)
                     .count()))};
@@ -1182,11 +1244,11 @@ auto ensure_game_data(const game_data_options &options,
             // as the tracked data, so the generation fallback is the only way
             // to start offline without a staged directory.
             if (attempt_generation()) {
-                if (!has_worldgen_documents(join(*root, "data"))) {
+                if (!datapack_is_complete(*root)) {
                     return std::unexpected{make_error(
                         error_code::io_error,
                         fmt::format("the data generation entry point produced "
-                                    "no datapack in '{}'",
+                                    "an incomplete datapack in '{}'",
                                     join(*root, "data")))};
                 }
                 auto marker{read_marker(*root)};
@@ -1301,6 +1363,18 @@ auto ensure_game_data(const game_data_options &options,
         }
         artifacts = std::move(*refreshed);
         missing = missing_artifacts(*artifacts, *root);
+        // A failed run that still wrote the tracked artifacts must not leave
+        // an incomplete datapack behind; when artifacts are still missing the
+        // error below names them instead.
+        if ((generated || missing.empty()) && !datapack_is_complete(*root)) {
+            remove_downloaded();
+            return std::unexpected{make_error(
+                error_code::io_error,
+                fmt::format("the game data in '{}' holds an incomplete "
+                            "datapack; remove '{}' and retry so generation "
+                            "can unpack it again",
+                            *root, join(*root, "data")))};
+        }
     }
     remove_downloaded();
     if (!missing.empty() && options.require_tracked_artifacts) {
@@ -1317,7 +1391,6 @@ auto ensure_game_data(const game_data_options &options,
         io::is_directory(templates) ? templates : std::string{};
     paths.tables_path = std::move(artifacts->tables);
     paths.protocol_registry_path = std::move(artifacts->protocol_registry);
-    paths.reports_root = std::move(artifacts->reports_root);
     paths.game_version = target_version();
     paths.data_version = game_data_data_version;
     paths.detail = source_detail(source, *root);

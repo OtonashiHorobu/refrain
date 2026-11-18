@@ -71,8 +71,12 @@ files are missing or a fresh copy is needed:
 
 ```bash
 tools/content/generate.sh --server-jar /path/to/server.jar \
-    --out content/vanilla/26.3
+    --out content/vanilla/26.3 --force
 ```
+
+A checkout's `content/vanilla/26.3` already carries the tracked tables and
+reports, so the documented command passes `--force`; without it the entry
+point refuses before running the pipeline and says so.
 
 The entry point runs the vanilla data generator and the light, mining and
 climate probes through the existing tools, then imports the reports into

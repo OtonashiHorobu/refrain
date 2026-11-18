@@ -37,6 +37,14 @@ def run_tool(datagen: pathlib.Path, out: pathlib.Path) -> subprocess.CompletedPr
     )
 
 
+def run_check(directory: pathlib.Path) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [sys.executable, str(TOOL), "--check", str(directory)],
+        capture_output=True,
+        text=True,
+    )
+
+
 def write_datagen(root: pathlib.Path, overworld: dict, nether: dict) -> pathlib.Path:
     root.mkdir(parents=True, exist_ok=True)
     (root / "overworld.json").write_text(json.dumps(overworld), encoding="utf-8")
@@ -92,6 +100,29 @@ class BiomeParametersTest(unittest.TestCase):
             self.assertEqual(entry["continentalness"], [4000, 4000])
             self.assertEqual(entry["weirdness"], [-5000, -5000])
             self.assertEqual(entry["offset"], 1750)
+
+    def test_quantizes_in_single_precision(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            datagen = write_datagen(
+                root / "generated",
+                {
+                    "biomes": [
+                        point_biome(
+                            "minecraft:plains",
+                            temperature=[-1.05, -1.05],
+                        )
+                    ]
+                },
+                {"biomes": [point_biome("minecraft:nether_wastes")]},
+            )
+            result = run_tool(datagen, root / "packed")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            document = json.loads(
+                (root / "packed" / "overworld.json").read_text(encoding="utf-8")
+            )
+            # Double-precision arithmetic would truncate to -10499 here.
+            self.assertEqual(document["entries"][0]["temperature"], [-10500, -10500])
 
     def test_moves_the_nether_offset_into_weirdness(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -167,6 +198,40 @@ class BiomeParametersTest(unittest.TestCase):
             result = run_tool(datagen, root / "packed")
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("interval", result.stderr)
+
+    def test_check_accepts_a_packed_report(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            datagen = write_datagen(
+                root / "generated",
+                {"biomes": [point_biome("minecraft:plains")]},
+                {"biomes": [point_biome("minecraft:nether_wastes")]},
+            )
+            packed = root / "packed"
+            self.assertEqual(run_tool(datagen, packed).returncode, 0)
+            result = run_check(packed)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_check_detects_packed_report_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            datagen = write_datagen(
+                root / "generated",
+                {"biomes": [point_biome("minecraft:plains")]},
+                {"biomes": [point_biome("minecraft:nether_wastes")]},
+            )
+            packed = root / "packed"
+            self.assertEqual(run_tool(datagen, packed).returncode, 0)
+            overworld = packed / "overworld.json"
+            overworld.write_text(
+                overworld.read_text(encoding="utf-8").replace(
+                    '"offset": 0', '"offset": 1750'
+                ),
+                encoding="utf-8",
+            )
+            result = run_check(packed)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("does not match", result.stderr)
 
 
 if __name__ == "__main__":

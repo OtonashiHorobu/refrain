@@ -25,6 +25,7 @@ Usage:
     biome_parameters.py --datagen generated/reports/biome_parameters/minecraft \
         --out content/vanilla/26.3/reports/biome_parameters \
         --game-version 26.3 --data-version 5023
+    biome_parameters.py --check content/vanilla/26.3/reports/biome_parameters
 """
 
 from __future__ import annotations
@@ -158,14 +159,92 @@ def render(document: dict) -> bytes:
     return (header + "".join(lines) + "]\n}\n").encode("utf-8")
 
 
+def check_report(directory: pathlib.Path) -> int:
+    """Validate a packed report directory against its own manifest."""
+    manifest_path = directory / "MANIFEST.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise SystemExit(f"cannot read {manifest_path}: {error}")
+    if manifest.get("kind") != "biome_parameters":
+        raise SystemExit(f"{manifest_path}: kind is not biome_parameters")
+    files = manifest.get("files")
+    expected = {"overworld.json", "nether.json"}
+    if not isinstance(files, dict) or set(files) != expected:
+        raise SystemExit(
+            f"{manifest_path}: expected entries {sorted(expected)}"
+        )
+    game_version = manifest.get("game_version")
+    data_version = manifest.get("data_version")
+    total_entries = 0
+    for name in sorted(expected):
+        path = directory / name
+        try:
+            data = path.read_bytes()
+        except OSError as error:
+            raise SystemExit(f"cannot read {path}: {error}")
+        metadata = files[name]
+        if metadata.get("bytes") != len(data):
+            raise SystemExit(f"{path}: size does not match its manifest")
+        if metadata.get("sha256") != hashlib.sha256(data).hexdigest():
+            raise SystemExit(f"{path}: digest does not match its manifest")
+        document = json.loads(data)
+        if document.get("format") != 1:
+            raise SystemExit(f"{path}: format is not supported")
+        if document.get("game_version") != game_version:
+            raise SystemExit(f"{path}: game_version does not match the manifest")
+        if document.get("data_version") != data_version:
+            raise SystemExit(f"{path}: data_version does not match the manifest")
+        dimension = DIMENSIONS[name.removesuffix(".json")]
+        if document.get("dimension") != dimension:
+            raise SystemExit(f"{path}: dimension is not {dimension}")
+        entries = document.get("entries")
+        if not isinstance(entries, list) or document.get("entry_count") != len(
+            entries
+        ):
+            raise SystemExit(f"{path}: entry_count does not match entries")
+        if metadata.get("entry_count") != len(entries):
+            raise SystemExit(f"{path}: manifest entry_count does not match")
+        if metadata.get("dimension") != dimension:
+            raise SystemExit(f"{path}: manifest dimension does not match")
+        total_entries += len(entries)
+        for entry in entries:
+            for field in (*PARAMETERS, "offset"):
+                value = entry.get(field)
+                if field == "offset":
+                    if not isinstance(value, int) or isinstance(value, bool):
+                        raise SystemExit(f"{path}: offset is not an integer")
+                    continue
+                if (
+                    not isinstance(value, list)
+                    or len(value) != 2
+                    or any(
+                        not isinstance(item, int) or isinstance(item, bool)
+                        for item in value
+                    )
+                ):
+                    raise SystemExit(
+                        f"{path}: {field} is not an integer interval"
+                    )
+    if not (directory / "NOTICE.md").is_file():
+        raise SystemExit(f"{directory}: NOTICE.md is missing")
+    print(f"{directory}: {total_entries} entries OK")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--datagen", required=True, type=pathlib.Path)
-    parser.add_argument("--out", required=True, type=pathlib.Path)
+    parser.add_argument("--datagen", type=pathlib.Path)
+    parser.add_argument("--out", type=pathlib.Path)
+    parser.add_argument("--check", type=pathlib.Path)
     parser.add_argument("--game-version", default=VERSION)
     parser.add_argument("--data-version", type=int, default=DATA_VERSION)
     args = parser.parse_args()
 
+    if args.check is not None:
+        return check_report(args.check.resolve())
+    if args.datagen is None or args.out is None:
+        parser.error("--datagen and --out are required unless --check is used")
     datagen = args.datagen.resolve()
     if not datagen.is_dir():
         raise SystemExit(f"data generator reports not found: {datagen}")

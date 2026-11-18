@@ -18,6 +18,10 @@
 # The output is game-derived data: it is not covered by the repository license,
 # carries its own notice and is regenerated from the jar, never from memory.
 #
+# The Java runtime defaults to `java` on PATH; set JAVA to use
+# another one (the data generation entry point does this when it
+# is given --java).
+#
 # Usage: tools/light/extract.sh /path/to/server.jar /path/to/generated/reports
 #
 # Then copy `reports/block_light` into the tracked content snapshot and import
@@ -64,7 +68,7 @@ classpath=$(tr ';' ':' < "$work/META-INF/classpath-joined")
 
 (
     cd "$work"
-    java -cp "$classpath" "$script_dir/BlockLightProbe.java" \
+    "${JAVA:-java}" -cp "$classpath" "$script_dir/BlockLightProbe.java" \
         "$work/block-light-probe.json"
 )
 

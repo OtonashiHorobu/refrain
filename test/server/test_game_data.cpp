@@ -280,6 +280,9 @@ printf 'tables' > "$out/tables.rvtb"
 printf '{}' > "$out/protocol_registry.json"
 printf '{}\n' > "$out/reports/biome_parameters/overworld.json"
 printf '{}\n' > "$out/reports/biome_parameters/nether.json"
+files=$(find "$out/data" -type f | wc -l)
+printf '{"game_version":"26.3","data_version":5023,"datapack":"data","entry_count":%s}\n' \
+    "$files" > "$out/MANIFEST.json"
 )SH");
     std::error_code error;
     fs::permissions(path,
@@ -785,6 +788,12 @@ suite<"server/game-data"> game_data_tests = [] {
                 expect(message.find("biome_parameters/overworld.json") !=
                        std::string::npos)
                     << message;
+                expect(message.find("biome_parameters/nether.json") !=
+                       std::string::npos)
+                    << message;
+                expect(message.find("protocol_registry.json") !=
+                       std::string::npos)
+                    << message;
                 expect(message.find("tools/content/generate.sh") !=
                        std::string::npos)
                     << message;
@@ -805,7 +814,7 @@ suite<"server/game-data"> game_data_tests = [] {
             if (paths) {
                 expect(paths->source == game_data_source::pre_staged);
                 expect(paths->tables_path.empty());
-                expect(paths->reports_root.empty());
+                expect(!fs::exists(data_dir / "reports"));
             }
         };
 
@@ -830,9 +839,10 @@ suite<"server/game-data"> game_data_tests = [] {
         expect(same_path(paths->tables_path, installed / "tables.rvtb"));
         expect(same_path(paths->protocol_registry_path,
                          installed / "protocol_registry.json"));
-        expect(same_path(paths->reports_root, data_dir / "reports"));
         expect(fs::is_regular_file(data_dir /
                                    "reports/biome_parameters/overworld.json"));
+        expect(fs::is_regular_file(data_dir /
+                                   "reports/biome_parameters/nether.json"));
     };
 
     "game-data/generation fills the missing tracked data"_test = [] {
@@ -860,7 +870,8 @@ suite<"server/game-data"> game_data_tests = [] {
         expect(same_path(paths->tables_path, data_dir / "tables.rvtb"));
         expect(same_path(paths->protocol_registry_path,
                          data_dir / "protocol_registry.json"));
-        expect(same_path(paths->reports_root, data_dir / "reports"));
+        expect(fs::is_regular_file(data_dir /
+                                   "reports/biome_parameters/overworld.json"));
         expect(fs::is_regular_file(data_dir /
                                    "reports/biome_parameters/nether.json"));
         const auto arguments{read_text(data_dir / "generation-args.txt")};
@@ -904,6 +915,106 @@ suite<"server/game-data"> game_data_tests = [] {
                     << message;
             }
         };
+
+    "game-data/a generation that leaves a partial datapack fails closed"_test =
+        [] {
+            if (on_windows()) {
+                return;
+            }
+            refrain::test_support::scratch_directory scratch{};
+            const auto data_dir{scratch.path() / "data"};
+            stage_datapack(data_dir);
+            const auto script{scratch.path() / "generate.sh"};
+            write_text(script, R"SH(#!/bin/sh
+out=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --out) out="$2"; shift 2 ;;
+        *) shift ;;
+    esac
+done
+mkdir -p "$out/reports/biome_parameters"
+printf 'tables' > "$out/tables.rvtb"
+printf '{}' > "$out/protocol_registry.json"
+printf '{}\n' > "$out/reports/biome_parameters/overworld.json"
+printf '{}\n' > "$out/reports/biome_parameters/nether.json"
+printf '{"game_version":"26.3","data_version":5023,"datapack":"data","entry_count":999}\n' \
+    > "$out/MANIFEST.json"
+)SH");
+            std::error_code permissions_error;
+            fs::permissions(script,
+                            fs::perms::owner_read | fs::perms::owner_write |
+                                fs::perms::owner_exec,
+                            fs::perm_options::add, permissions_error);
+            expect(!permissions_error);
+            const auto jar{scratch.path() / "server.jar"};
+            const auto tools{scratch.path() / "refrain-tools"};
+            write_text(jar, "jar");
+            write_text(tools, "tools");
+            auto options = data_options(scratch.path(), data_dir);
+            options.download_allowed = false;
+            options.require_tracked_artifacts = true;
+            options.generation =
+                generation_options(script, jar, tools).generation;
+            const auto paths = ensure_game_data(options, nullptr);
+            expect(!paths.has_value());
+            if (!paths) {
+                expect(paths.error().message.find("incomplete datapack") !=
+                       std::string::npos)
+                    << paths.error().message;
+            }
+        };
+
+    "game-data/a generation that exceeds its timeout fails closed"_test = [] {
+        if (on_windows()) {
+            return;
+        }
+        refrain::test_support::scratch_directory scratch{};
+        const auto data_dir{scratch.path() / "data"};
+        stage_datapack(data_dir);
+        const auto script{scratch.path() / "generate.sh"};
+        write_text(script, R"SH(#!/bin/sh
+work=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --work) work="$2"; shift 2 ;;
+        *) shift ;;
+    esac
+done
+if [ -n "$work" ]; then
+    mkdir -p "$work"
+    printf 'started' > "$work/marker.txt"
+fi
+sleep 30
+)SH");
+        std::error_code permissions_error;
+        fs::permissions(script,
+                        fs::perms::owner_read | fs::perms::owner_write |
+                            fs::perms::owner_exec,
+                        fs::perm_options::add, permissions_error);
+        expect(!permissions_error);
+        const auto jar{scratch.path() / "server.jar"};
+        const auto tools{scratch.path() / "refrain-tools"};
+        write_text(jar, "jar");
+        write_text(tools, "tools");
+        auto options = data_options(scratch.path(), data_dir);
+        options.download_allowed = false;
+        options.require_tracked_artifacts = true;
+        options.generation = generation_options(script, jar, tools).generation;
+        options.generation.timeout = std::chrono::milliseconds{200};
+        const auto started{std::chrono::steady_clock::now()};
+        const auto paths = ensure_game_data(options, nullptr);
+        const auto elapsed{std::chrono::steady_clock::now() - started};
+        expect(!paths.has_value());
+        if (!paths) {
+            expect(paths.error().message.find("did not finish") !=
+                   std::string::npos)
+                << paths.error().message;
+        }
+        expect(!fs::exists(data_dir / ".data-generation.tmp"))
+            << "the generation scratch directory was not removed";
+        expect(elapsed < std::chrono::seconds{10});
+    };
 
     "game-data/a verified download feeds the generation fallback"_test = [] {
         if (on_windows()) {

@@ -56,8 +56,8 @@ first source that provides it:
 1. the data directory named by `--data-dir`, or `./data` when it holds a valid
    marker or a staged datapack;
 2. the content snapshot shipped next to the binary
-   (`content/vanilla/<version>/`), which is how the release archive starts
-   without a first-run fetch;
+   (`content/vanilla/<version>/`), which supplies the tracked data even when
+   the datapack itself has to be fetched or staged;
 3. the official server archive, downloaded and verified on the first accepted
    start, unless `--no-data-download` disables the network;
 4. generation from an operator-owned server archive with `--server-jar`, when
@@ -66,8 +66,10 @@ first source that provides it:
 A world cannot be generated or served without the tracked table container,
 the climate reports and the protocol registry. When no source provides them,
 startup stops before creating or opening a world with one message that names
-the missing file and the command that generates it. It never starts with an
-empty block light table or a missing climate report.
+the missing file and the command that generates it. The check covers the
+artifact files: a table container that exists but carries no block light data
+is still reported by the runtime warning and falls back to the documented
+opaque default.
 
 The first start prints a one-screen summary at info level: the version it
 serves, the world and seed, where the game data came from, the generated
@@ -86,9 +88,13 @@ checkout:
 
 ```bash
 tools/content/generate.sh --server-jar /path/to/server.jar \
-    --out content/vanilla/26.3
+    --out content/vanilla/26.3 --force
 refrain-server --data-dir content/vanilla/26.3 --no-data-download
 ```
+
+A checkout's `content/vanilla/26.3` already holds the tracked tables and
+reports, so replacing that snapshot requires `--force`; the entry point
+refuses before running the pipeline without it.
 
 The generation entry point runs the vanilla data generator and the light,
 mining and climate probes through the existing tools, so it needs a Java
@@ -133,9 +139,10 @@ downloaded datapack receives the reports from there on first start. The tracked
 tables carry the block light table, so the runtime warns at startup when the
 tables it loaded carry no light data: every block state then falls back to
 opaque and emitting nothing, and lighting stays dark until a table with the
-block light report is staged. A start instead refuses to proceed until the
-tracked artifacts resolve, so a missing light table or climate report cannot
-silently reach a generated world.
+block light report is staged. A start instead refuses to proceed while a
+tracked artifact file is missing, so the failure is reported before world
+generation rather than inside it; a file that exists without light data still
+takes the documented warning path.
 
 The release archive layout is:
 

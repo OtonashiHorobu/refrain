@@ -135,7 +135,11 @@ auto discover_install_layout(const install_layout_options &options)
             layout.content_root = content_root;
             layout.content_source = content_source(candidate.path, roots);
         }
-        if (layout.generation_script.empty()) {
+        // The generation entry point is a POSIX shell script: a Windows
+        // binary must not discover it and fail later inside the process
+        // launcher, so the `.exe` suffix disables the fallback.
+        if (layout.generation_script.empty() &&
+            executable_suffix(executable).empty()) {
             const auto script{candidate.path + "/tools/content/generate.sh"};
             if (regular_file(script)) {
                 layout.generation_script = script;

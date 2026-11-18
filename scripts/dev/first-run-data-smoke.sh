@@ -17,8 +17,12 @@
 #      world or configuration directory is created;
 #   3. a complete content snapshot starts and becomes ready;
 #   4. with REFRAIN_SERVER_JAR pointing at a Minecraft 26.3 server archive the
-#      generation entry point produces the tables and reports and the server
-#      starts. Without a jar, or without Java, this step skips with one line.
+#      generation entry point repairs a half-staged datapack, produces the
+#      tables, reports and registry, and the server starts; the documented
+#      replacement command also succeeds on a pre-populated snapshot;
+#   5. a broken archive fails generation before a world is created and leaves
+#      no scratch directory behind. Without a jar, or without Java, these steps
+#      skip with one line.
 #
 # Usage:
 #   scripts/dev/first-run-data-smoke.sh
@@ -125,7 +129,7 @@ else
     run_case complete "$COMPLETE" zero \
         --no-data-download --data-dir "$ROOT/content/vanilla/26.3" \
         --world "$COMPLETE/world" --config-dir "$COMPLETE/config" \
-        --ticks 2 --port 0
+        --ticks 2 --port 0 --seed 1
     expect_log "$COMPLETE/complete.log" 'ready for Minecraft 26.3 clients'
     if grep -q 'vanilla tables are unavailable' "$COMPLETE/complete.log"; then
         cat "$COMPLETE/complete.log" >&2
@@ -163,7 +167,8 @@ cp "$BIN_DIR/refrain-server" "$BIN_DIR/refrain-tools" "$SOURCE_INSTALL/bin/"
 if [[ -x "$BIN_DIR/crashpad_handler" ]]; then
     cp "$BIN_DIR/crashpad_handler" "$SOURCE_INSTALL/bin/"
 fi
-mkdir -p "$SOURCE_INSTALL/tools"
+mkdir -p "$SOURCE_INSTALL/tools" "$SOURCE_INSTALL/build/Release/bin"
+cp "$BIN_DIR/refrain-tools" "$SOURCE_INSTALL/build/Release/bin/"
 cp -R "$ROOT/tools/content" "$ROOT/tools/light" "$ROOT/tools/block" \
     "$SOURCE_INSTALL/tools/"
 mkdir -p "$SOURCE_INSTALL/tools/worldgen"
@@ -175,6 +180,11 @@ cp "$ROOT/content/vanilla/NOTICE.md" "$SOURCE_INSTALL/content/vanilla/"
 cp "$ROOT/content/vanilla/26.3/protocol_registry.json" \
     "$SOURCE_INSTALL/content/vanilla/26.3/"
 GENERATED="$WORK/generated"
+# A datapack directory is not enough: the worldgen tree here is half-written,
+# so a generation run that only checks for the directory would report success
+# over a partial datapack and the server would fail inside world generation.
+mkdir -p "$GENERATED/data/data/minecraft/worldgen/biome"
+printf '{}\n' > "$GENERATED/data/data/minecraft/worldgen/biome/plains.json"
 # The generation entry point and the tools binary are discovered relative to
 # the running binary, so the source install is the one under test here.
 SERVER="$SOURCE_INSTALL/bin/refrain-server"
@@ -182,18 +192,65 @@ GAMEPACK="$SOURCE_INSTALL/gamepack/gamepack.toml"
 run_case generated "$GENERATED" zero \
     --no-data-download --server-jar "$SERVER_JAR" \
     --data-dir "$GENERATED/data" --world "$GENERATED/world" \
-    --config-dir "$GENERATED/config" --ticks 2 --port 0
-if [[ ! -f "$GENERATED/data/tables.rvtb" ]]; then
-    cat "$GENERATED/generated.log" >&2
-    die "generated: the tracked tables were not written"
-fi
-[[ -f "$GENERATED/data/reports/biome_parameters/overworld.json" ]] \
-    || die "generated: the climate reports were not written"
+    --config-dir "$GENERATED/config" --ticks 2 --port 0 --seed 1
+python3 - "$GENERATED/data" <<'PY'
+import json
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+manifest = json.loads((root / "MANIFEST.json").read_text(encoding="utf-8"))
+files = sum(1 for path in (root / "data").rglob("*") if path.is_file())
+if manifest.get("entry_count") != files:
+    raise SystemExit(
+        "datapack incomplete: manifest says "
+        f"{manifest.get('entry_count')}, found {files} files"
+    )
+for name in ("tables.rvtb", "protocol_registry.json"):
+    if not (root / name).is_file():
+        raise SystemExit(f"{name} was not generated")
+for name in ("overworld.json", "nether.json"):
+    if not (root / "reports" / "biome_parameters" / name).is_file():
+        raise SystemExit(f"biome parameter report {name} was not generated")
+PY
 expect_log "$GENERATED/generated.log" 'ready for Minecraft 26.3 clients'
 if grep -q 'vanilla tables are unavailable' "$GENERATED/generated.log"; then
     cat "$GENERATED/generated.log" >&2
     die "generated: the runtime did not load the generated tables"
 fi
-echo "  generated the tables and reports from the server archive and started"
+echo "  repaired the half-staged datapack and generated the tracked data"
+
+echo "first-run data: the documented replacement command"
+DOCUMENTED="$WORK/documented"
+mkdir -p "$DOCUMENTED"
+cp "$ROOT/content/vanilla/26.3/tables.rvtb" \
+    "$ROOT/content/vanilla/26.3/protocol_registry.json" "$DOCUMENTED/"
+cp -R "$ROOT/content/vanilla/26.3/reports" "$DOCUMENTED/reports"
+if ! "$SOURCE_INSTALL/tools/content/generate.sh" \
+    --server-jar "$SERVER_JAR" --out "$DOCUMENTED" --force; then
+    die "documented generation command failed on a pre-populated snapshot"
+fi
+[[ -f "$DOCUMENTED/tables.rvtb" ]] \
+    || die "documented command left no tables"
+[[ -f "$DOCUMENTED/reports/biome_parameters/overworld.json" ]] \
+    || die "documented command left no climate reports"
+echo "  replaced a pre-populated snapshot with the documented command"
+
+echo "first-run data: a broken archive fails generation before a world"
+FAILED="$WORK/failed-generation"
+mkdir -p "$FAILED"
+printf 'not a server archive\n' > "$FAILED/server.jar"
+run_case failing "$FAILED/run" nonzero \
+    --no-data-download --server-jar "$FAILED/server.jar" \
+    --data-dir "$FAILED/data" --world "$FAILED/run/world" \
+    --config-dir "$FAILED/run/config" --ticks 1 --port 0
+expect_log "$FAILED/run/failing.log" 'generation'
+[[ ! -e "$FAILED/run/world" ]] \
+    || die "failing generation: a world was created before the data was ready"
+[[ ! -e "$FAILED/run/config" ]] \
+    || die "failing generation: configuration was written before the data was ready"
+[[ ! -e "$FAILED/data/.data-generation.tmp" ]] \
+    || die "failing generation: the scratch directory was not removed"
+echo "  failed closed without creating a world or leaking the scratch directory"
 
 echo "first-run data smoke: OK"

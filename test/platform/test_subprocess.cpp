@@ -54,6 +54,7 @@ using boost::ut::suite;
 
 namespace platform = refrain::platform;
 namespace test_support = refrain::test_support;
+namespace fs = std::filesystem;
 
 /// The platform layer has no portable compile-time OS query, and this file may
 /// not branch on a platform macro. The executable suffix distinguishes the
@@ -298,6 +299,58 @@ suite<"platform/subprocess"> subprocess_tests = [] {
             }
             expect(elapsed < std::chrono::seconds{4});
         };
+
+    "platform/subprocess: a timeout kills the whole process group"_test = [] {
+        if (on_windows()) {
+            // The POSIX backend is the one that starts the child in its own
+            // process group and drains it; Win32 terminates only the child.
+            return;
+        }
+        const test_support::scratch_directory directory{};
+        const auto script{directory.path() / "wrapper.sh"};
+        {
+            std::ofstream wrapper{script};
+            wrapper << "#!/bin/sh\nsleep 300 &\necho $! > \"$1\"\nwait\n";
+            expect(static_cast<bool>(wrapper));
+        }
+        std::error_code error;
+        fs::permissions(script,
+                        fs::perms::owner_read | fs::perms::owner_write |
+                            fs::perms::owner_exec,
+                        fs::perm_options::add, error);
+        expect(!error);
+        const auto pid_file{directory.path() / "grandchild.pid"};
+        const auto started{std::chrono::steady_clock::now()};
+        const auto result{platform::run_process(platform::subprocess_options{
+            .program = script.string(),
+            .arguments = {pid_file.string()},
+            .timeout = std::chrono::milliseconds{300},
+        })};
+        const auto elapsed{std::chrono::steady_clock::now() - started};
+        expect(static_cast<bool>(result))
+            << (result ? "" : result.error().message);
+        if (!result) {
+            return;
+        }
+        expect(result->timed_out);
+        unsigned long long grandchild{0};
+        {
+            std::ifstream input{pid_file};
+            input >> grandchild;
+        }
+        expect(grandchild > 0);
+        // The group kill must leave no process behind that can still touch the
+        // files the generator was writing.
+        bool gone{false};
+        for (int attempt{0}; attempt < 200 && !gone; ++attempt) {
+            gone = !platform::process_alive(grandchild);
+            if (!gone) {
+                std::this_thread::sleep_for(std::chrono::milliseconds{10});
+            }
+        }
+        expect(gone) << "the grandchild outlived the timeout";
+        expect(elapsed < std::chrono::seconds{4});
+    };
 
     "platform/subprocess: invocation from a multithreaded caller"_test = [] {
         // Other threads allocate while the process is spawned: the spawn path

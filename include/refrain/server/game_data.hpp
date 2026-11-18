@@ -158,10 +158,6 @@ struct game_data_paths {
     std::string tables_path{};
     /// Protocol registry, resolved like `tables_path`.
     std::string protocol_registry_path{};
-    /// Reports directory holding the climate, default-state, light and mining
-    /// reports; the data directory's when present, else the installed content
-    /// root's copied next to the datapack, else empty.
-    std::string reports_root{};
     /// Game version recorded in the cache marker (build target otherwise).
     std::string game_version{};
     /// Data version recorded in the cache marker (build target otherwise).
