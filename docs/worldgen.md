@@ -758,7 +758,20 @@ they are written, so the same seed and template always produce the same
 record bytes and a reload keeps the entity once. A tag the bridge cannot
 interpret (no type id or a malformed position) fails the conversion instead of
 being dropped silently, and a chunk that carries no entity omits the record
-field entirely. What the client receives from these records is covered in
+field entirely. The generated structure starts and references are persisted
+with the column as well. The bridge turns the starts the column owns and the
+references it carries into the vanilla chunk `structures` compound: a `starts`
+compound keyed by structure id that carries the structure id, the chunk
+position and one vanilla piece tag per piece, and a `References` compound of
+packed chunk positions, with the reference multiplicity kept. A column with no structure data keeps the
+field empty, and a record the compound cannot represent fails the conversion
+instead of losing a start silently. An Anvil export of a generated world
+therefore declares the structures the reference reader expects. Restoring
+persisted starts into generation is a separate capability: a loaded column
+does not take part in structure continuation because the stored compound does
+not carry the generation step of a structure or the template-derived placement
+state the restore direction needs from the caller.
+What the client receives from these records is covered in
 [architecture](architecture.md#generated-entities). Capped processor lists decode and run their
 delegate over the whole piece; every positive integer provider type of 26.3
 drives the limit, and an unknown limit type is rejected with its name. Rule
