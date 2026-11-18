@@ -308,9 +308,16 @@ suite<"platform/subprocess"> subprocess_tests = [] {
         }
         const test_support::scratch_directory directory{};
         const auto script{directory.path() / "wrapper.sh"};
+        const auto late_file{directory.path() / "late.txt"};
+        const auto pid_file{directory.path() / "grandchild.pid"};
         {
+            // The grandchild writes after the timeout would have expired: if
+            // the group was not killed it keeps running and the write appears.
             std::ofstream wrapper{script};
-            wrapper << "#!/bin/sh\nsleep 300 &\necho $! > \"$1\"\nwait\n";
+            wrapper << "#!/bin/sh\n"
+                    << "( sleep 1; printf late > \"$1\" ) &\n"
+                    << "echo $! > \"$2\"\n"
+                    << "wait\n";
             expect(static_cast<bool>(wrapper));
         }
         std::error_code error;
@@ -319,11 +326,10 @@ suite<"platform/subprocess"> subprocess_tests = [] {
                             fs::perms::owner_exec,
                         fs::perm_options::add, error);
         expect(!error);
-        const auto pid_file{directory.path() / "grandchild.pid"};
         const auto started{std::chrono::steady_clock::now()};
         const auto result{platform::run_process(platform::subprocess_options{
             .program = script.string(),
-            .arguments = {pid_file.string()},
+            .arguments = {late_file.string(), pid_file.string()},
             .timeout = std::chrono::milliseconds{300},
         })};
         const auto elapsed{std::chrono::steady_clock::now() - started};
@@ -339,16 +345,36 @@ suite<"platform/subprocess"> subprocess_tests = [] {
             input >> grandchild;
         }
         expect(grandchild > 0);
-        // The group kill must leave no process behind that can still touch the
-        // files the generator was writing.
-        bool gone{false};
-        for (int attempt{0}; attempt < 200 && !gone; ++attempt) {
-            gone = !platform::process_alive(grandchild);
-            if (!gone) {
+        // Past the grandchild's write deadline: the group kill must have
+        // stopped it before it could touch the file.
+        std::this_thread::sleep_for(std::chrono::milliseconds{1500});
+        expect(!fs::exists(late_file))
+            << "the grandchild outlived the timeout and wrote after it";
+        // The host may keep the killed grandchild as an unreaped zombie until
+        // PID 1 reaps it; both a missing process and a zombie mean it is no
+        // longer running.
+        const auto is_zombie = [](unsigned long long pid) {
+            std::ifstream stat{"/proc/" + std::to_string(pid) + "/stat"};
+            std::string line;
+            std::getline(stat, line);
+            if (!stat) {
+                return false;
+            }
+            const auto close{line.rfind(')')};
+            if (close == std::string::npos || close + 2 >= line.size()) {
+                return false;
+            }
+            return line[close + 2] == 'Z';
+        };
+        bool stopped{false};
+        for (int attempt{0}; attempt < 500 && !stopped; ++attempt) {
+            stopped =
+                !platform::process_alive(grandchild) || is_zombie(grandchild);
+            if (!stopped) {
                 std::this_thread::sleep_for(std::chrono::milliseconds{10});
             }
         }
-        expect(gone) << "the grandchild outlived the timeout";
+        expect(stopped) << "the grandchild outlived the timeout";
         expect(elapsed < std::chrono::seconds{4});
     };
 

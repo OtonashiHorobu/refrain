@@ -29,9 +29,10 @@ struct subprocess_options {
     /// Wall-clock bound for the child after its stdin has been written; a
     /// value of zero waits without a limit. A child that exceeds the bound is
     /// killed and the result reports `timed_out`. On POSIX the child runs in
-    /// its own process group and the whole group is killed and reaped before
-    /// the call returns, so no grandchild can outlive the timeout and keep
-    /// writing; Win32 terminates the started process.
+    /// its own process group and the whole group is killed and drained before
+    /// the call returns, so no grandchild can keep running or writing; a host
+    /// whose PID 1 does not reap orphans may keep a killed member as a zombie.
+    /// Win32 terminates the started process.
     std::chrono::milliseconds timeout{0};
 };
 
