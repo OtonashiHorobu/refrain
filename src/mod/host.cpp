@@ -27,6 +27,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cassert>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -279,6 +280,9 @@ struct provider_ref {
 } // namespace
 
 auto chain_wrapper_instance(std::size_t position) -> std::string {
+    // The plan verification refuses a chain that declares more wrappers than
+    // the bound, so a position outside it never reaches a published slot.
+    assert(position < max_chain_wrappers);
     return fmt::format("{}{}", chain_wrapper_instance_prefix, position);
 }
 
@@ -288,7 +292,9 @@ auto chain_wrapper_position(std::string_view instance) noexcept
         return std::nullopt;
     }
     auto text{instance.substr(chain_wrapper_instance_prefix.size())};
-    if (text.empty() || text.size() > 9U) {
+    // `max_chain_wrappers` has seven decimal digits, so a longer suffix cannot
+    // encode a valid position and must not overflow the accumulator below.
+    if (text.empty() || text.size() > 7U) {
         return std::nullopt;
     }
     std::size_t position{0};
@@ -297,6 +303,9 @@ auto chain_wrapper_position(std::string_view instance) noexcept
             return std::nullopt;
         }
         position = position * 10U + static_cast<std::size_t>(digit - '0');
+    }
+    if (position >= max_chain_wrappers) {
+        return std::nullopt;
     }
     return position;
 }
@@ -2726,7 +2735,8 @@ auto host::verify_plan_activation(const composition &plan, bool staged) const
         }};
     const auto verify_active{[this, &find_mod, &active_view](
                                  std::string_view slot, std::string_view ref,
-                                 std::string_view instance) -> status {
+                                 std::string_view instance,
+                                 bool allow_data_only) -> status {
         const auto [id, version] = split_provider_ref(ref);
         if (id.empty()) {
             return status_ok();
@@ -2740,9 +2750,20 @@ auto host::verify_plan_activation(const composition &plan, bool staged) const
                                  slot, id))};
         }
         if (mod->provides_summary.empty()) {
-            // Data-only binding (`content = ...`): the mod declares no
-            // contract, so there is no provider instance to activate.
-            return status_ok();
+            if (allow_data_only) {
+                // Data-only binding (`content = ...`): the mod declares no
+                // contract, so there is no provider instance to activate.
+                return status_ok();
+            }
+            // A chain wrapper is a provider by definition: a data-only package
+            // that cannot fill the slot would silently drop its decisions from
+            // the composed chain.
+            return std::unexpected{fail(
+                error_code::not_found,
+                fmt::format("provider activation for service '{}' instance "
+                            "'{}': planned mod '{}' declares no provider "
+                            "contract, so it cannot occupy this provider slot",
+                            slot, instance, id))};
         }
         for (const auto &service : services_.services()) {
             if (!matches_slot(service, slot)) {
@@ -2777,24 +2798,32 @@ auto host::verify_plan_activation(const composition &plan, bool staged) const
     // shadow the base, and a wrapper that never activated still fails closed.
     for (const auto &resolved : plan.providers) {
         if (!resolved.provider.empty()) {
-            if (auto checked{
-                    verify_active(resolved.service, resolved.provider, {})};
+            if (auto checked{verify_active(resolved.service, resolved.provider,
+                                           {}, true)};
                 !checked) {
                 return checked;
             }
         }
         for (const auto &instance : resolved.instances) {
             if (auto checked{verify_active(resolved.service, instance.provider,
-                                           instance.name)};
+                                           instance.name, true)};
                 !checked) {
                 return checked;
             }
         }
+        if (resolved.wrappers.size() > max_chain_wrappers) {
+            return std::unexpected{fail(
+                error_code::unsupported,
+                fmt::format("chain binding for service '{}' declares {} "
+                            "wrappers, more than the supported bound of {}",
+                            resolved.service, resolved.wrappers.size(),
+                            max_chain_wrappers))};
+        }
         for (std::size_t position{0}; position < resolved.wrappers.size();
              ++position) {
-            if (auto checked{verify_active(resolved.service,
-                                           resolved.wrappers[position],
-                                           chain_wrapper_instance(position))};
+            if (auto checked{
+                    verify_active(resolved.service, resolved.wrappers[position],
+                                  chain_wrapper_instance(position), false)};
                 !checked) {
                 return checked;
             }

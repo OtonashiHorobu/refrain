@@ -32,8 +32,9 @@
 // per wrapper before the walk and releases the leases when the answer is
 // complete, so a commit that retires a wrapper drains the walk before unloading
 // the table. A link whose slot is already quiescing cannot be leased, and the
-// owner then answers from the base resolver alone for that one walk instead of
-// calling a table the commit is retiring.
+// owner then answers `denied` for that one walk instead of calling a table the
+// commit is retiring: a partially applied chain could drop a wrapper's deny and
+// widen permissions, so an incompletely walked chain fails closed.
 //
 // Revision and reload: the chain revision is the base revision plus the sum of
 // the wrapper revisions. Every link's revision is monotonic by contract, so the

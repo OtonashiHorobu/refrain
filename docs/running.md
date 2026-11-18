@@ -489,8 +489,8 @@ deny, which is how an external policy extends the built-in one. The served
 revision is the base revision plus every wrapper revision, so a change in a
 wrapper invalidates the command tree exactly like a policy change, and
 `permissions reload` reloads the base and every wrapper. A wrapper the
-gamepack names but the host did not register fails composition, so the running
-server always has a complete chain.
+gamepack names but the host did not register, or names without a provider
+contract, fails composition, so the running server always has a complete chain.
 
 A wrapper is hot-changeable, the base resolver is not. Every wrapper occupies
 its own provider slot next to the base's, so with the hot lifecycle gate
@@ -509,9 +509,12 @@ takes an in-flight lease on every wrapper slot it will consult and releases the
 leases when the answer is complete. A commit that retires or replaces a wrapper
 waits for those leases to drain before the loader's unload hook runs, so a query
 racing the commit finishes on the previous table instead of calling a retired
-one. A query that starts while the commit is switching the slots answers from
-the base resolver alone for that one call; the next epoch publishes the composed
-chain again. A failed stage changes neither the running chain nor the registry.
+one. A query that starts while the commit is switching the slots cannot lease
+the quiescing wrapper and is answered `denied` rather than from the base policy
+alone: dropping a wrapper's deny for the duration of the drain would widen
+permissions, so an incompletely applied chain fails closed. The next epoch
+publishes the composed chain again. A failed stage changes neither the running
+chain nor the registry.
 
 The service publishes a monotonic revision for caches. The administration
 commands below re-read the file or change one rule at runtime, and every policy

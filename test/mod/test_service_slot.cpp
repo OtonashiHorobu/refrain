@@ -7,6 +7,8 @@
 
 #include <boost/ut.hpp>
 
+#include <fmt/format.h>
+
 #include <optional>
 #include <span>
 #include <string>
@@ -91,6 +93,20 @@ const suite service_slot_tests = [] {
         expect(!mod::chain_wrapper_position("chain:x").has_value());
         expect(!mod::chain_wrapper_position("chain:1x").has_value());
         expect(!mod::chain_wrapper_position("chain:1234567890").has_value());
+    };
+
+    "mod/chain wrapper positions share one bound with the slot name"_test = [] {
+        // The last valid position is the bound minus one; the bound itself
+        // and anything larger cannot decode, so a published slot always has
+        // a position the registry reader understands.
+        const auto last{mod::max_chain_wrappers - 1U};
+        expect(mod::chain_wrapper_position(mod::chain_wrapper_instance(last)) ==
+               std::optional<std::size_t>{last});
+        expect(!mod::chain_wrapper_position(
+                    fmt::format("chain:{}", mod::max_chain_wrappers))
+                    .has_value());
+        expect(!mod::chain_wrapper_position("chain:9999999").has_value());
+        expect(!mod::chain_wrapper_position("chain:12345678").has_value());
     };
 
     "mod/declares_service applies the short-slot rule to a declaration"_test =

@@ -67,12 +67,20 @@ namespace kernel = refrain::kernel;
 /// wrapper position.
 inline constexpr std::string_view chain_wrapper_instance_prefix{"chain:"};
 
+/// Largest number of wrapper positions one `chain` binding may declare, and the
+/// bound the wrapper slot name parser enforces: a position is valid only when
+/// it is smaller than this value. A composition that declares more wrappers is
+/// refused by the plan verification, so a position the host can publish is
+/// always a position the registry reader can decode.
+inline constexpr std::size_t max_chain_wrappers{1'000'000};
+
 /// Instance name of the chain wrapper at `position` in the declared wrapper
-/// list.
+/// list. `position` must be smaller than `max_chain_wrappers`.
 [[nodiscard]] auto chain_wrapper_instance(std::size_t position) -> std::string;
 
 /// Position encoded in `instance`, or nullopt when the name is not a chain
-/// wrapper slot (in particular for the reserved default instance).
+/// wrapper slot (in particular for the reserved default instance) or encodes a
+/// position outside `[0, max_chain_wrappers)`.
 [[nodiscard]] auto chain_wrapper_position(std::string_view instance) noexcept
     -> std::optional<std::size_t>;
 

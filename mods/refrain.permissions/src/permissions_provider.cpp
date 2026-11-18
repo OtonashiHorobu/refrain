@@ -42,12 +42,13 @@
 // query leases each wrapper slot before walking the chain and holds the leases
 // until the answer is complete, so a commit that retires a wrapper drains the
 // walk before unloading it. A query that races the commit without being able to
-// lease a link answers from the base resolver alone for that one call, and the
-// next epoch rebuilds the chain. A failed stage changes neither the registry
-// nor the running chain. The provider is created during the host load and is
-// first queried after `load()` returns, when the composition is committed. A
-// query issued by a mod factory earlier in the same load answers from the
-// base-only chain and is not cached, so it cannot pin a wrapper-less link set.
+// lease a link is answered `denied`, and the next epoch rebuilds the chain: a
+// partial walk could drop a wrapper's deny and widen permissions, so an
+// incompletely applied chain fails closed. A failed stage changes neither the
+// registry nor the running chain. The provider is created during the host load
+// and is first queried after `load()` returns, when the composition is
+// committed; a query issued by a mod factory earlier in the same load runs
+// before the epoch is published and is also answered `denied`.
 
 #include <refrain/contracts/services/permissions_abi.h>
 #include <refrain/core/config.hpp>
@@ -157,6 +158,14 @@ struct chain_link {
     refrain::kernel::provider_handle handle{};
 };
 
+/// Highest composed revision published or observed for one link set. The mark
+/// lives with the published state, so a rebuild derives its monotonic offset
+/// from the previous published generation even while another thread is still
+/// inside a revision read of it.
+struct revision_mark {
+    std::atomic<std::uint64_t> value{0};
+};
+
 /// One published link set: the composition epoch it was resolved at, the chain
 /// itself, the registry handles its links were read from and a monotonic
 /// offset. The offset keeps the facade revision increasing when a link-set
@@ -170,6 +179,12 @@ struct chain_state {
     std::shared_ptr<const permissions::provider_chain> chain{};
     /// Query order: outermost wrapper first; empty for the base-only chain.
     std::vector<chain_link> links{};
+    /// Composed revision published (or observed) for this link set.
+    std::shared_ptr<revision_mark> revision{};
+    /// False when an active wrapper slot could not be resolved into a callable
+    /// link: the declared chain cannot be applied, so a query must deny instead
+    /// of walking the partial chain.
+    bool usable{true};
 };
 
 class provider_impl final : public permissions::admin {
@@ -206,10 +221,8 @@ class provider_impl final : public permissions::admin {
             return std::unexpected{std::move(fallback.error())};
         }
         provider->fallback_chain_ = std::move(*fallback);
-        provider->fallback_state_ = std::make_shared<const chain_state>(
-            chain_state{.epoch = 0,
-                        .revision_offset = 0,
-                        .chain = provider->fallback_chain_});
+        provider->fallback_state_ = make_state(0, 0, provider->fallback_chain_,
+                                               {}, provider->base_revision());
         provider->chain_.store(provider->fallback_state_,
                                std::memory_order_release);
         const auto published{provider->published()};
@@ -254,9 +267,12 @@ class provider_impl final : public permissions::admin {
         if (!valid_query(value)) {
             return permission_result::denied;
         }
+        if (host_ == nullptr || host_->services().epoch() == 0) {
+            return permission_result::denied;
+        }
         const auto walk{begin_walk()};
-        if (!walk.complete) {
-            return query_base(value);
+        if (!walk.complete || !walk.state->usable) {
+            return permission_result::denied;
         }
         if (permissions::test_seam::query_probe) {
             permissions::test_seam::query_probe();
@@ -280,20 +296,23 @@ class provider_impl final : public permissions::admin {
 
     /// Monotonic composed revision of the base policy, the wrapper revisions
     /// and the link-set changes. A cache keyed by it invalidates on a policy
-    /// change, a wrapper change and a wrapper removal alike. The last published
-    /// value is a floor: a walk that cannot pin its links (a commit is
-    /// replacing one at this instant) reports the floor instead of dropping,
-    /// and a link-set change that lowers the raw sum is offset past it.
+    /// change, a wrapper change and a wrapper removal alike. The published
+    /// state carries the highest value handed out for its link set; a rebuild
+    /// derives its offset from it, so a removal cannot publish a revision at or
+    /// below a value a concurrent reader has already observed. A walk that
+    /// cannot pin its links (a commit is replacing one at this instant) reports
+    /// that published floor without calling a table.
     [[nodiscard]] auto revision() const -> std::uint64_t {
         const auto walk{begin_walk()};
-        if (!walk.complete) {
-            const auto floor{last_revision_.load(std::memory_order_acquire)};
-            return floor != 0 ? floor : base_revision();
+        if (!walk.complete || !walk.state->usable) {
+            const auto floor{
+                walk.state->revision->value.load(std::memory_order_acquire)};
+            return std::max(floor, base_revision());
         }
         const auto raw{walk.state->chain->revision() +
                        walk.state->revision_offset};
-        const auto previous{
-            last_revision_.fetch_max(raw, std::memory_order_acq_rel)};
+        const auto previous{walk.state->revision->value.fetch_max(
+            raw, std::memory_order_acq_rel)};
         return std::max(previous, raw);
     }
 
@@ -305,7 +324,7 @@ class provider_impl final : public permissions::admin {
     [[nodiscard]] auto reload_collect()
         -> refrain::result<permissions::chain_reload_outcome> {
         const auto walk{begin_walk()};
-        if (!walk.complete) {
+        if (!walk.complete || !walk.state->usable) {
             return std::unexpected{make_error(
                 error_code::stale, "the permission chain is being replaced at "
                                    "a composition epoch; "
@@ -315,8 +334,13 @@ class provider_impl final : public permissions::admin {
         if (!result) {
             return std::unexpected{std::move(result.error())};
         }
-        result->previous_revision += walk.state->revision_offset;
-        result->revision += walk.state->revision_offset;
+        const auto mark{walk.state->revision};
+        const auto floor{mark->value.load(std::memory_order_acquire)};
+        result->previous_revision = std::max(
+            result->previous_revision + walk.state->revision_offset, floor);
+        result->revision =
+            std::max(result->revision + walk.state->revision_offset, floor);
+        mark->value.fetch_max(result->revision, std::memory_order_acq_rel);
         return result;
     }
 
@@ -508,9 +532,10 @@ class provider_impl final : public permissions::admin {
     /// named `chain:<position>` are wrappers; the reserved default instance is
     /// the base and stays out of the link set.
     [[nodiscard]] auto
-    compose_links(const refrain::kernel::service_snapshot &snapshot) const
-        -> std::vector<chain_link> {
+    compose_links(const refrain::kernel::service_snapshot &snapshot,
+                  bool &complete) const -> std::vector<chain_link> {
         std::vector<chain_link> links{};
+        complete = true;
         for (const auto &slot : snapshot.slots) {
             const auto position{mod::chain_wrapper_position(slot.instance)};
             if (!position.has_value()) {
@@ -520,10 +545,11 @@ class provider_impl final : public permissions::admin {
                 static_cast<const mod::provider_api *>(slot.provider.instance)};
             if (api == nullptr || api->vtable == nullptr ||
                 api->self == nullptr) {
-                log_permissions.warn(
-                    "permission chain wrapper slot '{}' holds an incomplete "
-                    "provider table; the base resolver answers without it",
-                    slot.instance);
+                // An active wrapper slot the host cannot turn into a callable
+                // link means the declared chain cannot be applied; dropping
+                // the wrapper would widen permissions, so the whole state is
+                // marked unusable and queries deny until the next epoch.
+                complete = false;
                 continue;
             }
             links.push_back(chain_link{
@@ -549,8 +575,8 @@ class provider_impl final : public permissions::admin {
 
     /// Lease every link for the duration of one callback and report its result.
     /// A wrapper whose slot is quiescing or was replaced fails the lease;
-    /// `nullopt` tells the caller to fall back to the base resolver instead of
-    /// calling a table a commit is retiring.
+    /// `nullopt` tells the caller the declared chain cannot be applied right
+    /// now, so it fails the answer closed instead of calling a retired table.
     template <typename Callback>
     [[nodiscard]] auto with_leases(const std::vector<chain_link> &links,
                                    Callback &&callback) const
@@ -589,6 +615,23 @@ class provider_impl final : public permissions::admin {
         return true;
     }
 
+    /// Publish one immutable link set carrying its own revision mark.
+    [[nodiscard]] static auto
+    make_state(std::uint64_t epoch, std::uint64_t revision_offset,
+               std::shared_ptr<const permissions::provider_chain> chain,
+               std::vector<chain_link> links, std::uint64_t revision,
+               bool usable = true) -> std::shared_ptr<const chain_state> {
+        auto state{std::make_shared<chain_state>()};
+        state->epoch = epoch;
+        state->revision_offset = revision_offset;
+        state->chain = std::move(chain);
+        state->links = std::move(links);
+        state->revision = std::make_shared<revision_mark>();
+        state->revision->value.store(revision, std::memory_order_relaxed);
+        state->usable = usable;
+        return state;
+    }
+
     /// Compose the chain from one registry snapshot. A link-set change gets a
     /// monotonic revision offset so the facade revision keeps increasing even
     /// when the raw sum drops (a retired wrapper carried revision too). An
@@ -599,7 +642,27 @@ class provider_impl final : public permissions::admin {
     rebuild_chain(const refrain::kernel::service_snapshot &snapshot,
                   bool forced_instance) const
         -> std::shared_ptr<const chain_state> {
-        auto links{compose_links(snapshot)};
+        auto resolved{true};
+        auto links{compose_links(snapshot, resolved)};
+        const auto previous{chain_.load(std::memory_order_acquire)};
+        if (!resolved) {
+            // A wrapper slot is active but unusable: publish a state that
+            // denies instead of a chain with the wrapper dropped, and keep the
+            // revision monotonic for the caches keyed by it.
+            const auto floor{
+                previous != nullptr
+                    ? previous->revision->value.load(std::memory_order_acquire)
+                    : std::uint64_t{0}};
+            log_permissions.warn(
+                "a permission chain wrapper slot is active but holds no "
+                "usable provider table; queries are denied until the next "
+                "composition epoch, the base resolver is not used as a "
+                "fallback");
+            return make_state(snapshot.epoch,
+                              previous != nullptr ? previous->revision_offset
+                                                  : 0,
+                              fallback_chain_, {}, floor + 1, false);
+        }
         std::vector<permissions::provider_link> wrappers{};
         wrappers.reserve(links.size());
         for (const auto &link : links) {
@@ -616,26 +679,28 @@ class provider_impl final : public permissions::admin {
         }
         auto chain{std::make_shared<const permissions::provider_chain>(
             std::move(*composed))};
-        const auto previous{chain_.load(std::memory_order_acquire)};
         if (!forced_instance && previous != nullptr &&
             same_links(*previous->chain, *chain)) {
-            return std::make_shared<const chain_state>(chain_state{
-                .epoch = snapshot.epoch,
-                .revision_offset = previous->revision_offset,
-                .chain = previous->chain,
-                .links = std::move(links),
-            });
+            // The provider set did not change, so the published revision stays
+            // the same; a concurrent revision read of the previous state is
+            // still the same value because the chain object is shared.
+            return make_state(
+                snapshot.epoch, previous->revision_offset, previous->chain,
+                std::move(links),
+                previous->revision->value.load(std::memory_order_acquire));
         }
         // The raw revision needs the wrapper tables, so lease every new link
         // first: a concurrent commit could otherwise retire a wrapper between
         // resolving the handle and calling it. When a lease is refused, the
-        // chain is being replaced at this instant and the offset is derived
-        // from the last published revision instead of the tables.
+        // chain is being replaced at this instant, so the new revision is put
+        // one past the previous published value instead of reading tables.
         const auto previous_revision{
-            last_revision_.load(std::memory_order_acquire)};
+            previous != nullptr
+                ? previous->revision->value.load(std::memory_order_acquire)
+                : std::uint64_t{0}};
         const auto raw{with_leases(links, [&chain] {
                            return chain->revision();
-                       }).value_or(previous_revision)};
+                       }).value_or(previous_revision + 1)};
         const auto offset{previous_revision >= raw ? previous_revision + 1 - raw
                                                    : std::uint64_t{0}};
         if (!forced_instance) {
@@ -645,12 +710,8 @@ class provider_impl final : public permissions::admin {
                 snapshot.epoch,
                 count_noun(chain->wrappers().size(), "wrapper", "wrappers"));
         }
-        return std::make_shared<const chain_state>(chain_state{
-            .epoch = snapshot.epoch,
-            .revision_offset = offset,
-            .chain = std::move(chain),
-            .links = std::move(links),
-        });
+        return make_state(snapshot.epoch, offset, std::move(chain),
+                          std::move(links), raw + offset);
     }
 
     /// The link set the provider answers through. The committed composition
@@ -658,8 +719,9 @@ class provider_impl final : public permissions::admin {
     /// the links from one registry snapshot, so a retired generation is
     /// replaced instead of being called from a cache and a rebuild can never
     /// resurrect a predecessor. Before the first commit (the host is still
-    /// loading) the base-only chain answers and is never cached, so an early
-    /// query cannot pin a wrapper-less link set.
+    /// loading) the base-only fallback state is returned and never cached; a
+    /// query in that window is denied because the declared wrapper set is not
+    /// published yet.
     [[nodiscard]] auto current_chain_state() const
         -> std::shared_ptr<const chain_state> {
         if (host_ == nullptr) {
@@ -695,9 +757,9 @@ class provider_impl final : public permissions::admin {
 
     /// One walk of the published chain: the epoch-consistent link set plus one
     /// registry lease per wrapper link, held until the guard is destroyed. A
-    /// walk whose links cannot all be leased is `incomplete`; its caller
-    /// answers from the base resolver for that one call, so a query racing a
-    /// commit never calls a retired wrapper table.
+    /// walk whose links cannot all be leased is `incomplete`; its caller fails
+    /// the query closed instead of walking a partial chain, and never calls a
+    /// retired wrapper table.
     struct chain_walk {
         std::shared_ptr<const chain_state> state{};
         std::vector<refrain::kernel::provider_lease> leases{};
@@ -708,8 +770,10 @@ class provider_impl final : public permissions::admin {
     /// set moved at a composition epoch while it was being read; the state is
     /// reloaded once from the new epoch before giving up on the walk.
     [[nodiscard]] auto begin_walk() const -> chain_walk {
+        auto last{fallback_state_};
         for (int attempt{0}; attempt < 2; ++attempt) {
             auto state{current_chain_state()};
+            last = state;
             std::vector<refrain::kernel::provider_lease> leases{};
             leases.reserve(state->links.size());
             auto complete{true};
@@ -727,7 +791,9 @@ class provider_impl final : public permissions::admin {
                                   .complete = true};
             }
         }
-        return chain_walk{.complete = false};
+        // The caller must not call any table of an unpinned link set, but it
+        // may read the published revision of the state it tried to walk.
+        return chain_walk{.state = std::move(last), .complete = false};
     }
 
     /// Consume one forced chain rebuild requested by a test. The
@@ -1066,9 +1132,6 @@ class provider_impl final : public permissions::admin {
     std::shared_ptr<const permissions::provider_chain> fallback_chain_{};
     mutable std::shared_ptr<const chain_state> fallback_state_{};
     mutable std::atomic<std::shared_ptr<const chain_state>> chain_{};
-    /// Highest composed revision published so far; the facade revision never
-    /// drops, including while a composition epoch replaces a chain link.
-    mutable std::atomic<std::uint64_t> last_revision_{0};
 };
 
 auto make_permissions(refrain::mod::host &host) -> refrain::status {

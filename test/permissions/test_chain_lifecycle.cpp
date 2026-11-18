@@ -54,6 +54,7 @@ using namespace boost::ut;
 namespace config = refrain::core::config;
 namespace data = refrain::data;
 namespace io = refrain::core::io;
+namespace kernel = refrain::kernel;
 namespace mod = refrain::mod;
 namespace permissions = refrain::permissions;
 using refrain::error_code;
@@ -63,10 +64,12 @@ using refrain::services::permissions::permission_result;
 constexpr std::string_view player_uuid{"069a79f4-44e9-4726-a5be-fca90e38aaf5"};
 constexpr std::string_view player_name{"Notch"};
 constexpr std::string_view wrapper_id{"refrain.test.permissions_wrapper"};
+constexpr std::string_view wrapper2_id{"refrain.test.permissions_wrapper2"};
 constexpr std::string_view clean_loader_id{"com.example.clean"};
 constexpr std::string_view companion_id{"refrain.test.permissions_companion"};
 constexpr std::string_view owned_home{"com.example.owned.home"};
 constexpr std::string_view owned_second{"com.example.owned.second"};
+constexpr std::string_view owned_outer{"com.example.owned.outer"};
 
 /// Signal used by the concurrent-commit test to hold one wrapper query inside
 /// the table while another thread commits the composition epoch.
@@ -80,9 +83,11 @@ struct wrapper_generation {
     int generation{1};
     std::atomic<int> queries{0};
     std::uint64_t revision{5};
-    /// The node this generation answers `allowed` for; everything else is
-    /// forwarded to the base resolver.
+    /// The node this generation decides; every other node is forwarded to the
+    /// base resolver.
     std::string owned_node{owned_home};
+    /// The decision for `owned_node`: allowed, denied or not-handled.
+    permission_result owned_result{permission_result::allowed};
 };
 
 auto wrapper_query(void *self,
@@ -100,8 +105,9 @@ auto wrapper_query(void *self,
         return REFRAIN_SERVICES_PERMISSIONS_PERMISSION_RESULT_DENIED;
     }
     const auto node{refrain::contracts::as_string_view(query->node)};
-    if (node == generation.owned_node) {
-        return REFRAIN_SERVICES_PERMISSIONS_PERMISSION_RESULT_ALLOWED;
+    if (!generation.owned_node.empty() && node == generation.owned_node) {
+        return static_cast<refrain_services_permissions_permission_result>(
+            generation.owned_result);
     }
     return REFRAIN_SERVICES_PERMISSIONS_PERMISSION_RESULT_NOT_HANDLED;
 }
@@ -151,40 +157,78 @@ struct clean_loader_state {
     int load_calls{0};
     int reload_calls{0};
     int unload_calls{0};
-    /// Node granted by the generation the next load/reload creates.
+    /// Node and decision of the generation the next load/reload creates for
+    /// the primary wrapper.
     std::string next_owned_node{owned_home};
+    permission_result next_owned_result{permission_result::allowed};
+    /// Decision the secondary wrapper generation answers for its own node.
+    permission_result second_owned_result{permission_result::allowed};
     /// A reload whose validate slot fails before any generation is built.
     bool validate_fails{false};
     /// A load that succeeds without registering the provider: the host must
     /// reject the composition because the planned chain wrapper never
     /// activated.
     bool skip_registration{false};
+    /// Registration of a chain wrapper passes the reserved default instance
+    /// explicitly, which the host must refuse.
+    bool explicit_default_instance{false};
     /// Set by the unload slot when it ran while a wrapper query was still
     /// blocked, which would mean the retire path skipped the drain.
     bool unloaded_while_query_blocked{false};
+    /// Detail of the last refused provider registration: the loader contract
+    /// carries a status code only, so a test asserts the host's refusal through
+    /// the error the registration returned.
+    std::string last_registration_error{};
     std::vector<std::unique_ptr<wrapper_generation>> generations{};
+    std::vector<std::unique_ptr<wrapper_generation>> second_generations{};
 
     [[nodiscard]] auto current() const noexcept -> wrapper_generation * {
         return generations.empty() ? nullptr : generations.back().get();
     }
 
-    [[nodiscard]] auto register_guest(bool provides_permissions) -> bool {
-        if (owner == nullptr || !provides_permissions || skip_registration) {
+    [[nodiscard]] auto current_second() const noexcept -> wrapper_generation * {
+        return second_generations.empty() ? nullptr
+                                          : second_generations.back().get();
+    }
+
+    [[nodiscard]] auto register_guest(std::string_view mod_id) -> bool {
+        if (owner == nullptr || skip_registration) {
+            return true;
+        }
+        const auto primary{mod_id == wrapper_id};
+        const auto secondary{mod_id == wrapper2_id};
+        if (!primary && !secondary) {
             return true;
         }
         auto generation{std::make_unique<wrapper_generation>()};
         generation->generation = load_calls + reload_calls;
         generation->revision =
             static_cast<std::uint64_t>(generation->generation) * 5U;
-        generation->owned_node = next_owned_node;
+        if (primary) {
+            generation->owned_node = next_owned_node;
+            generation->owned_result = next_owned_result;
+        } else {
+            generation->owned_node = owned_outer;
+            generation->owned_result = second_owned_result;
+        }
         const mod::provider_api api{
             .vtable = &wrapper_vtable(),
             .self = generation.get(),
             .abi_major = REFRAIN_SERVICES_PERMISSIONS_ABI_MAJOR,
         };
-        generations.push_back(std::move(generation));
-        return owner->register_provider("refrain:permissions", api, "1.0.0")
-            .has_value();
+        auto &slot{primary ? generations : second_generations};
+        slot.push_back(std::move(generation));
+        auto registered{explicit_default_instance
+                            ? owner->register_provider(
+                                  "refrain:permissions",
+                                  kernel::service_registry::default_instance,
+                                  api, "1.0.0")
+                            : owner->register_provider("refrain:permissions",
+                                                       api, "1.0.0")};
+        if (!registered) {
+            last_registration_error = registered.error().message;
+        }
+        return registered.has_value();
     }
 };
 
@@ -221,9 +265,9 @@ auto clean_load(void *self,
         return static_cast<refrain_status>(
             REFRAIN_SERVICES_MOD_LOADER_MOD_LOADER_ERROR_INTERNAL);
     }
-    const auto mod_id{
-        refrain::contracts::as_string_view(request->manifest.mod_id)};
-    if (!state.register_guest(mod_id == wrapper_id)) {
+    if (request->manifest.activate_code != 0U &&
+        !state.register_guest(
+            refrain::contracts::as_string_view(request->manifest.mod_id))) {
         return static_cast<refrain_status>(
             REFRAIN_SERVICES_MOD_LOADER_MOD_LOADER_ERROR_INTERNAL);
     }
@@ -244,9 +288,9 @@ auto clean_reload(void *self,
         return static_cast<refrain_status>(
             REFRAIN_SERVICES_MOD_LOADER_MOD_LOADER_ERROR_INTERNAL);
     }
-    const auto mod_id{
-        refrain::contracts::as_string_view(request->manifest.mod_id)};
-    if (!state.register_guest(mod_id == wrapper_id)) {
+    if (request->manifest.activate_code != 0U &&
+        !state.register_guest(
+            refrain::contracts::as_string_view(request->manifest.mod_id))) {
         return static_cast<refrain_status>(
             REFRAIN_SERVICES_MOD_LOADER_MOD_LOADER_ERROR_INTERNAL);
     }
@@ -316,6 +360,14 @@ struct image_builder {
         wrapper_id, clean_loader_id);
 }
 
+[[nodiscard]] auto wrapper2_manifest() -> std::string {
+    return fmt::format(
+        "[mod]\nid = \"{}\"\nversion = \"1.0.0\"\nabi = \"1\"\nside = "
+        "\"server\"\n\n[provides]\nservices = [\"refrain:permissions\"]"
+        "\n\n[entry]\nloader = \"{}\"\n",
+        wrapper2_id, clean_loader_id);
+}
+
 [[nodiscard]] auto companion_manifest() -> std::string {
     return fmt::format(
         "[mod]\nid = \"{}\"\nversion = \"1.0.0\"\nabi = \"1\"\nside = "
@@ -329,51 +381,89 @@ struct image_builder {
            "[\"refrain:permissions\"]\n";
 }
 
-[[nodiscard]] auto make_spec() -> refrain::result<mod::gamepack_spec> {
-    constexpr std::string_view text{R"([gamepack]
-id = "refrain.test.permissions_lifecycle"
-version = "1.0.0"
-side = "server"
-abi = "1"
-auto_scan = false
+constexpr std::string_view mod_list{
+    "[\"refrain.test.permissions_wrapper@1.0.0\", "
+    "\"refrain.test.permissions_wrapper2@1.0.0\", "
+    "\"refrain.test.permissions_companion@1.0.0\", "
+    "\"refrain.permissions@1.0.0\"]"};
 
-[mods]
-list = ["refrain.test.permissions_wrapper@1.0.0", "refrain.test.permissions_companion@1.0.0", "refrain.permissions@1.0.0"]
-
-[providers]
-permissions = { base = "refrain.permissions@^1.0.0", wrappers = ["refrain.test.permissions_wrapper@^1.0.0"] }
-)"};
-    auto document{
-        config::document::parse_text(std::string{text}, "<gamepack>")};
+/// Parse one synthetic gamepack document with `providers` as its `[providers]`
+/// body.
+[[nodiscard]] auto make_spec_with(std::string_view providers)
+    -> refrain::result<mod::gamepack_spec> {
+    const auto text{fmt::format("[gamepack]\n"
+                                "id = \"refrain.test.permissions_lifecycle\"\n"
+                                "version = \"1.0.0\"\n"
+                                "side = \"server\"\n"
+                                "abi = \"1\"\n"
+                                "auto_scan = false\n\n"
+                                "[mods]\n"
+                                "list = {}\n\n"
+                                "[providers]\n{}",
+                                mod_list, providers)};
+    auto document{config::document::parse_text(text, "<gamepack>")};
     if (!document) {
         return std::unexpected{document.error()};
     }
     return mod::parse_gamepack(*document, "server");
 }
 
+[[nodiscard]] auto make_spec() -> refrain::result<mod::gamepack_spec> {
+    return make_spec_with(
+        "permissions = { base = \"refrain.permissions@^1.0.0\", wrappers = "
+        "[\"refrain.test.permissions_wrapper@^1.0.0\"] }\n");
+}
+
 /// The same composition with the wrapper declaration removed: the package
 /// stays listed but the chain no longer names it.
 [[nodiscard]] auto make_spec_without_wrapper()
     -> refrain::result<mod::gamepack_spec> {
-    constexpr std::string_view text{R"([gamepack]
-id = "refrain.test.permissions_lifecycle"
-version = "1.0.0"
-side = "server"
-abi = "1"
-auto_scan = false
+    return make_spec_with(
+        "permissions = { base = \"refrain.permissions@^1.0.0\" }\n");
+}
 
-[mods]
-list = ["refrain.test.permissions_wrapper@1.0.0", "refrain.test.permissions_companion@1.0.0", "refrain.permissions@1.0.0"]
+/// Two declared wrappers, primary innermost.
+[[nodiscard]] auto make_spec_two_wrappers()
+    -> refrain::result<mod::gamepack_spec> {
+    return make_spec_with(
+        "permissions = { base = \"refrain.permissions@^1.0.0\", wrappers = "
+        "[\"refrain.test.permissions_wrapper@^1.0.0\", "
+        "\"refrain.test.permissions_wrapper2@^1.0.0\"] }\n");
+}
 
-[providers]
-permissions = { base = "refrain.permissions@^1.0.0" }
-)"};
-    auto document{
-        config::document::parse_text(std::string{text}, "<gamepack>")};
-    if (!document) {
-        return std::unexpected{document.error()};
-    }
-    return mod::parse_gamepack(*document, "server");
+/// The same two wrappers with their declared positions swapped.
+[[nodiscard]] auto make_spec_two_wrappers_swapped()
+    -> refrain::result<mod::gamepack_spec> {
+    return make_spec_with(
+        "permissions = { base = \"refrain.permissions@^1.0.0\", wrappers = "
+        "[\"refrain.test.permissions_wrapper2@^1.0.0\", "
+        "\"refrain.test.permissions_wrapper@^1.0.0\"] }\n");
+}
+
+/// A wrapper package that declares no provider contract.
+[[nodiscard]] auto make_spec_data_only_wrapper()
+    -> refrain::result<mod::gamepack_spec> {
+    return make_spec_with(
+        "permissions = { base = \"refrain.permissions@^1.0.0\", wrappers = "
+        "[\"refrain.test.permissions_companion@^1.0.0\"] }\n");
+}
+
+/// The same mod declared as the chain base and as a chain wrapper.
+[[nodiscard]] auto make_spec_base_is_wrapper()
+    -> refrain::result<mod::gamepack_spec> {
+    return make_spec_with(
+        "permissions = { base = "
+        "\"refrain.test.permissions_wrapper@^1.0.0\", wrappers = "
+        "[\"refrain.test.permissions_wrapper@^1.0.0\"] }\n");
+}
+
+/// The same mod declared at two wrapper positions.
+[[nodiscard]] auto make_spec_duplicate_wrapper()
+    -> refrain::result<mod::gamepack_spec> {
+    return make_spec_with(
+        "permissions = { base = \"refrain.permissions@^1.0.0\", wrappers = "
+        "[\"refrain.test.permissions_wrapper@^1.0.0\", "
+        "\"refrain.test.permissions_wrapper@^1.0.0\"] }\n");
 }
 
 /// One loaded composition: the built-in resolver as the chain base and the
@@ -407,22 +497,24 @@ class lifecycle_fixture {
     }
 
     [[nodiscard]] auto load() -> refrain::status {
+        return load_with(make_spec());
+    }
+
+    [[nodiscard]] auto
+    load_with(const refrain::result<mod::gamepack_spec> &spec)
+        -> refrain::status {
         image_builder builder{};
         builder.add(wrapper_id, wrapper_manifest());
+        builder.add(wrapper2_id, wrapper2_manifest());
         builder.add(companion_id, companion_manifest());
         builder.add("refrain.permissions", base_manifest());
         image_ = builder.build();
-        auto spec{make_spec()};
         if (!spec) {
             return std::unexpected{spec.error()};
         }
-        auto candidates{mod::scan_builtin_image(image_)};
-        if (!candidates) {
-            return std::unexpected{candidates.error()};
-        }
-        auto plan{mod::resolve(*spec, *candidates)};
+        auto plan{resolve(*spec)};
         if (!plan) {
-            return std::unexpected{plan.error()};
+            return std::unexpected{std::move(plan.error())};
         }
         plan_ = std::move(*plan);
         // The base resolver is statically linked into the test binary; copy its
@@ -468,6 +560,20 @@ class lifecycle_fixture {
         return image_;
     }
 
+    /// Resolve `spec` against the fixture's synthetic package image without
+    /// loading it.
+    [[nodiscard]] auto resolve(const refrain::result<mod::gamepack_spec> &spec)
+        -> refrain::result<mod::composition> {
+        if (!spec) {
+            return std::unexpected{spec.error()};
+        }
+        auto candidates{mod::scan_builtin_image(image_)};
+        if (!candidates) {
+            return std::unexpected{std::move(candidates.error())};
+        }
+        return mod::resolve(*spec, *candidates);
+    }
+
   private:
     mod::static_mod_registry registry_{};
     std::filesystem::path root_{};
@@ -501,6 +607,16 @@ class lifecycle_fixture {
 constexpr std::string_view base_policy{R"(
 [defaults]
 default = "deny"
+)"};
+
+/// Base policy grants a node a wrapper denies: an incomplete walk that fell
+/// back to the base would widen the answer, a fail-closed walk denies.
+constexpr std::string_view grant_home_policy{R"(
+[defaults]
+default = "deny"
+
+[grants]
+"player:069a79f4-44e9-4726-a5be-fca90e38aaf5" = ["com.example.owned.home"]
 )"};
 
 const suite chain_lifecycle_tests = [] {
@@ -601,6 +717,7 @@ const suite chain_lifecycle_tests = [] {
         const auto &client{*bound};
         expect(client.query(player(), owned_home) ==
                permission_result::allowed);
+        const auto revision_before{client.revision()};
 
         auto staged{fixture.host().stage_uninstall(wrapper_id)};
         expect(static_cast<bool>(staged))
@@ -634,6 +751,11 @@ const suite chain_lifecycle_tests = [] {
         expect(client.query(player(), owned_home) == permission_result::denied);
         expect(client.query(player(), "refrain.command.teleport") ==
                permission_result::denied);
+        // Dropping the link lowers the raw revision sum; the published facade
+        // value still moves forward.
+        expect(client.revision() > revision_before)
+            << (std::to_string(revision_before) + " -> " +
+                std::to_string(client.revision()));
     };
 
     "chain lifecycle/dropping the wrapper declaration retires its slot while "
@@ -911,6 +1033,224 @@ const suite chain_lifecycle_tests = [] {
         expect(client.query(player(), owned_second) ==
                permission_result::allowed);
         expect(client.query(player(), owned_home) == permission_result::denied);
+    };
+
+    "chain lifecycle/an incomplete walk during a commit denies instead of "
+    "widening permissions"_test = [] {
+        lifecycle_fixture fixture{grant_home_policy};
+        // The wrapper denies the node the base policy grants, so any fallback
+        // to the base resolver would turn a deny into an allow.
+        fixture.loader().next_owned_result = permission_result::denied;
+        auto loaded{fixture.load()};
+        expect(static_cast<bool>(loaded))
+            << (loaded ? std::string{} : loaded.error().message);
+        if (!loaded) {
+            return;
+        }
+        auto bound{bind_client(fixture.host())};
+        expect(static_cast<bool>(bound));
+        if (!bound) {
+            return;
+        }
+        const auto &client{*bound};
+        expect(client.query(player(), owned_home) == permission_result::denied);
+        expect(client.default_result(player(), owned_home) ==
+               permission_result::allowed);
+
+        auto staged{fixture.host().stage_uninstall(wrapper_id)};
+        expect(static_cast<bool>(staged))
+            << (staged ? std::string{"staged"} : staged.error().message);
+        if (!staged) {
+            return;
+        }
+
+        // One query is held inside the wrapper table and therefore holds the
+        // walk lease while the commit quiesces and drains the slot.
+        g_block_wrapper_query.store(true, std::memory_order_release);
+        g_wrapper_query_entered.store(false, std::memory_order_release);
+        g_release_wrapper_query.store(false, std::memory_order_release);
+        permission_result raced_answer{permission_result::allowed};
+        std::thread querier{[&client, &raced_answer] {
+            raced_answer = client.query(player(), owned_home);
+        }};
+        const auto entered_deadline{std::chrono::steady_clock::now() +
+                                    std::chrono::seconds{2}};
+        while (!g_wrapper_query_entered.load(std::memory_order_acquire) &&
+               std::chrono::steady_clock::now() < entered_deadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds{1});
+        }
+        expect(g_wrapper_query_entered.load());
+
+        std::atomic<bool> commit_done{false};
+        std::optional<mod::composition_commit> commit_result{};
+        std::string commit_error{};
+        std::thread committer{
+            [&fixture, &commit_done, &commit_result, &commit_error] {
+                auto committed{fixture.host().commit_epoch()};
+                if (committed) {
+                    commit_result = *committed;
+                } else {
+                    commit_error = committed.error().message;
+                }
+                commit_done.store(true, std::memory_order_release);
+            }};
+        const auto quiesce_deadline{std::chrono::steady_clock::now() +
+                                    std::chrono::seconds{2}};
+        auto quiesced{false};
+        while (std::chrono::steady_clock::now() < quiesce_deadline) {
+            const auto slot{fixture.host().services().query(
+                "refrain:permissions", mod::chain_wrapper_instance(0))};
+            if (!slot && slot.error().code == error_code::stale) {
+                quiesced = true;
+                break;
+            }
+            if (commit_done.load(std::memory_order_acquire)) {
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds{1});
+        }
+        expect(quiesced);
+        expect(!commit_done.load(std::memory_order_acquire));
+
+        // The commit is draining the wrapper slot; a query during that window
+        // cannot walk the declared chain, and the base policy alone would
+        // allow the node the wrapper denies. The answer must be a denial.
+        expect(client.query(player(), owned_home) == permission_result::denied);
+        expect(client.default_result(player(), owned_home) ==
+               permission_result::allowed);
+
+        g_release_wrapper_query.store(true, std::memory_order_release);
+        querier.join();
+        committer.join();
+        g_block_wrapper_query.store(false, std::memory_order_release);
+        expect(commit_error.empty()) << commit_error;
+        expect(commit_result.has_value());
+        // The in-flight call finished on the previous generation, which still
+        // answered denied; after the commit the wrapper is gone and the base
+        // grant applies.
+        expect(raced_answer == permission_result::denied);
+        expect(client.query(player(), owned_home) ==
+               permission_result::allowed);
+    };
+
+    "chain lifecycle/a declared wrapper without a provider contract fails "
+    "the plan"_test = [] {
+        lifecycle_fixture fixture{base_policy};
+        const auto loaded{fixture.load_with(make_spec_data_only_wrapper())};
+        expect(!loaded);
+        if (loaded) {
+            return;
+        }
+        const auto &message{loaded.error().message};
+        expect(message.find("refrain.test.permissions_companion") !=
+               std::string::npos)
+            << message;
+        expect(message.find("chain:0") != std::string::npos) << message;
+        expect(message.find("no provider contract") != std::string::npos)
+            << message;
+        expect(!fixture.host()
+                    .services()
+                    .active_provider("refrain:permissions",
+                                     mod::chain_wrapper_instance(0))
+                    .has_value());
+    };
+
+    "chain lifecycle/a wrapper cannot occupy the reserved default "
+    "instance"_test = [] {
+        lifecycle_fixture fixture{base_policy};
+        fixture.loader().explicit_default_instance = true;
+        const auto loaded{fixture.load()};
+        expect(!loaded);
+        if (loaded) {
+            return;
+        }
+        expect(fixture.loader().last_registration_error.find(
+                   "default instance") != std::string::npos)
+            << fixture.loader().last_registration_error;
+    };
+
+    "chain lifecycle/the same mod cannot be the chain base and a "
+    "wrapper"_test = [] {
+        lifecycle_fixture fixture{base_policy};
+        const auto loaded{fixture.load_with(make_spec_base_is_wrapper())};
+        expect(!loaded);
+        if (loaded) {
+            return;
+        }
+        expect(fixture.loader().last_registration_error.find(
+                   "both the chain base and a chain wrapper") !=
+               std::string::npos)
+            << fixture.loader().last_registration_error;
+    };
+
+    "chain lifecycle/the same mod cannot occupy two wrapper positions"_test =
+        [] {
+            lifecycle_fixture fixture{base_policy};
+            const auto loaded{fixture.load_with(make_spec_duplicate_wrapper())};
+            expect(!loaded);
+            if (loaded) {
+                return;
+            }
+            // The composition resolver refuses a duplicated wrapper before the
+            // host stage runs; the host's own multi-position guard is the
+            // defense for a hand-built plan.
+            expect(loaded.error().message.find("more than once") !=
+                   std::string::npos)
+                << loaded.error().message;
+        };
+
+    "chain lifecycle/moving a declared wrapper position is refused until it "
+    "is rebuilt"_test = [] {
+        lifecycle_fixture fixture{base_policy};
+        auto loaded{fixture.load_with(make_spec_two_wrappers())};
+        expect(static_cast<bool>(loaded))
+            << (loaded ? std::string{} : loaded.error().message);
+        if (!loaded) {
+            return;
+        }
+        auto bound{bind_client(fixture.host())};
+        expect(static_cast<bool>(bound));
+        if (!bound) {
+            return;
+        }
+        const auto &client{*bound};
+        const auto epoch_before{fixture.host().epoch()};
+        const auto revision_before{client.revision()};
+        expect(client.query(player(), owned_home) ==
+               permission_result::allowed);
+        expect(client.query(player(), owned_outer) ==
+               permission_result::allowed);
+
+        auto next{fixture.resolve(make_spec_two_wrappers_swapped())};
+        expect(static_cast<bool>(next));
+        if (!next) {
+            return;
+        }
+        auto staged{
+            fixture.host().stage_composition(*next, fixture.resolver())};
+        expect(!staged);
+        if (staged) {
+            return;
+        }
+        // The declared positions moved but neither package was rebuilt, so the
+        // composed chain cannot match the plan; the stage fails closed.
+        expect(staged.error().message.find("chain:0") != std::string::npos)
+            << staged.error().message;
+        expect(fixture.host().epoch() == epoch_before);
+        expect(!fixture.host().staged_change().has_value());
+        expect(client.revision() == revision_before);
+        expect(fixture.host()
+                   .services()
+                   .active_provider("refrain:permissions",
+                                    mod::chain_wrapper_instance(0))
+                   .has_value());
+        expect(fixture.host()
+                   .services()
+                   .active_provider("refrain:permissions",
+                                    mod::chain_wrapper_instance(1))
+                   .has_value());
+        expect(client.query(player(), owned_home) ==
+               permission_result::allowed);
     };
 
     "chain lifecycle/a forced link-instance change keeps the revision "
