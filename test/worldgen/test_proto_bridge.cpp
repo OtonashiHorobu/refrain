@@ -137,6 +137,289 @@ auto same_heightmap(const chunk &left, const chunk &right,
     return entity;
 }
 
+// --- structure fixtures ---------------------------------------------------
+
+using nbt_value = data::nbt::value;
+using worldgen::structure_piece_record;
+using worldgen::structure_start;
+
+auto nbt_child(const data::nbt::compound &entries, std::string_view key)
+    -> const nbt_value * {
+    const auto found = entries.find(key);
+    return found == entries.end() ? nullptr : &found->second;
+}
+
+auto packed_chunk_pos(std::int32_t x, std::int32_t z) -> std::int64_t {
+    const auto low = static_cast<std::uint64_t>(static_cast<std::uint32_t>(x));
+    const auto high = static_cast<std::uint64_t>(static_cast<std::uint32_t>(z))
+                      << 32U;
+    return static_cast<std::int64_t>(low | high);
+}
+
+auto make_piece(std::string type, worldgen::structure::structure_bbox bounds,
+                std::int32_t orientation) -> structure_piece_record {
+    structure_piece_record piece{};
+    piece.type = std::move(type);
+    piece.min_x = bounds.min_x;
+    piece.min_y = bounds.min_y;
+    piece.min_z = bounds.min_z;
+    piece.max_x = bounds.max_x;
+    piece.max_y = bounds.max_y;
+    piece.max_z = bounds.max_z;
+    piece.orientation = orientation;
+    piece.height_position = -1;
+    piece.height_offset = 0;
+    piece.integrity = 1.0F;
+    piece.overwrite = true;
+    return piece;
+}
+
+/// A shipwreck start whose single piece reaches from chunk (0, 0) into chunk
+/// (1, 0): the column that owns the start can only place the crossing piece
+/// in its neighbour, which is the continuation the stored references encode.
+auto shipwreck_start() -> structure_start {
+    structure_start start{};
+    start.structure = "minecraft:shipwreck";
+    start.step = "surface_structures";
+    start.chunk_x = 0;
+    start.chunk_z = 0;
+    auto piece = make_piece("minecraft:shipwreck",
+                            {.min_x = 10,
+                             .min_y = 55,
+                             .min_z = 12,
+                             .max_x = 22,
+                             .max_y = 64,
+                             .max_z = 28},
+                            2);
+    piece.template_id = "minecraft:shipwreck/with_mast";
+    piece.template_x = 10;
+    piece.template_y = 55;
+    piece.template_z = 12;
+    piece.template_rotation = 1;
+    piece.template_mirror = 0;
+    piece.template_pivot_x = 4;
+    piece.template_pivot_y = 0;
+    piece.template_pivot_z = 15;
+    piece.beached = false;
+    start.min_x = piece.min_x;
+    start.min_y = piece.min_y;
+    start.min_z = piece.min_z;
+    start.max_x = piece.max_x;
+    start.max_y = piece.max_y;
+    start.max_z = piece.max_z;
+    start.pieces.push_back(std::move(piece));
+    return start;
+}
+
+auto mineshaft_start() -> structure_start {
+    structure_start start{};
+    start.structure = "minecraft:mineshaft";
+    start.step = "underground_structures";
+    start.chunk_x = 0;
+    start.chunk_z = 0;
+    auto room = make_piece("minecraft:msroom",
+                           {.min_x = 0,
+                            .min_y = 40,
+                            .min_z = 0,
+                            .max_x = 7,
+                            .max_y = 48,
+                            .max_z = 8},
+                           -1);
+    room.mesa = true;
+    room.two_floored = false;
+    room.entrances.push_back(worldgen::structure::structure_bbox{.min_x = 0,
+                                                                 .min_y = 41,
+                                                                 .min_z = 8,
+                                                                 .max_x = 2,
+                                                                 .max_y = 44,
+                                                                 .max_z = 8});
+    auto corridor = make_piece("minecraft:mscorridor",
+                               {.min_x = 0,
+                                .min_y = 40,
+                                .min_z = 8,
+                                .max_x = 2,
+                                .max_y = 42,
+                                .max_z = 23},
+                               0);
+    corridor.mesa = true;
+    corridor.sections = 3;
+    corridor.rails = true;
+    corridor.spider = true;
+    start.min_x = 0;
+    start.min_y = 40;
+    start.min_z = 0;
+    start.max_x = 7;
+    start.max_y = 48;
+    start.max_z = 23;
+    start.pieces.push_back(std::move(room));
+    start.pieces.push_back(std::move(corridor));
+    return start;
+}
+
+auto jigsaw_start() -> structure_start {
+    structure_start start{};
+    start.structure = "minecraft:village_plains";
+    start.step = "surface_structures";
+    start.chunk_x = 0;
+    start.chunk_z = 0;
+    auto piece = make_piece("minecraft:jigsaw",
+                            {.min_x = -2,
+                             .min_y = 64,
+                             .min_z = 5,
+                             .max_x = 14,
+                             .max_y = 70,
+                             .max_z = 21},
+                            -1);
+    piece.template_x = -2;
+    piece.template_y = 64;
+    piece.template_z = 5;
+    piece.template_rotation = 2;
+    piece.template_mirror = 0;
+    piece.template_pivot_x = 0;
+    piece.template_pivot_y = 0;
+    piece.template_pivot_z = 0;
+    worldgen::structure::jigsaw_element_info element{};
+    element.kind = worldgen::structure::pool_element_kind::single;
+    element.projection = worldgen::structure::pool_projection::rigid;
+    element.template_id =
+        "minecraft:village/plains/houses/plains_small_house_1";
+    worldgen::structure::jigsaw_piece_data data{};
+    data.element = std::move(element);
+    data.ground_level_delta = 1;
+    data.liquid = worldgen::structure::liquid_settings::ignore_waterlogging;
+    data.junctions.push_back(worldgen::structure::jigsaw_junction_info{
+        .source_x = 4,
+        .source_ground_y = 63,
+        .source_z = 9,
+        .delta_y = -2,
+        .dest_projection =
+            worldgen::structure::pool_projection::terrain_matching});
+    piece.jigsaw = std::move(data);
+    start.min_x = piece.min_x;
+    start.min_y = piece.min_y;
+    start.min_z = piece.min_z;
+    start.max_x = piece.max_x;
+    start.max_y = piece.max_y;
+    start.max_z = piece.max_z;
+    start.pieces.push_back(std::move(piece));
+    return start;
+}
+
+/// The three starts plus references from the two horizontal neighbours; the
+/// shipwreck piece crosses the x=16 border.
+void fill_structure_fixture(worldgen::proto_chunk &chunk) {
+    chunk.add_structure_start(shipwreck_start());
+    chunk.add_structure_start(mineshaft_start());
+    chunk.add_structure_start(jigsaw_start());
+    chunk.add_structure_reference("minecraft:shipwreck", 1, 0, 1);
+    chunk.add_structure_reference("minecraft:village_plains", -1, 0, 2);
+    chunk.add_structure_reference("minecraft:mineshaft", 0, 1, 1);
+}
+
+auto step_of(std::string_view structure_id) -> std::string {
+    return structure_id == "minecraft:mineshaft" ? "underground_structures"
+                                                 : "surface_structures";
+}
+
+auto same_bounds(const worldgen::structure::structure_bbox &left,
+                 const worldgen::structure::structure_bbox &right) -> bool {
+    return left.min_x == right.min_x && left.min_y == right.min_y &&
+           left.min_z == right.min_z && left.max_x == right.max_x &&
+           left.max_y == right.max_y && left.max_z == right.max_z;
+}
+
+auto same_bounds_list(
+    const std::vector<worldgen::structure::structure_bbox> &left,
+    const std::vector<worldgen::structure::structure_bbox> &right) -> bool {
+    if (left.size() != right.size()) {
+        return false;
+    }
+    for (std::size_t index = 0; index < left.size(); ++index) {
+        if (!same_bounds(left[index], right[index])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+auto same_piece(const structure_piece_record &left,
+                const structure_piece_record &right) -> bool {
+    if (left.type != right.type || left.min_x != right.min_x ||
+        left.min_y != right.min_y || left.min_z != right.min_z ||
+        left.max_x != right.max_x || left.max_y != right.max_y ||
+        left.max_z != right.max_z || left.orientation != right.orientation ||
+        left.template_id != right.template_id ||
+        left.template_x != right.template_x ||
+        left.template_y != right.template_y ||
+        left.template_z != right.template_z ||
+        left.template_rotation != right.template_rotation ||
+        left.template_mirror != right.template_mirror ||
+        left.template_pivot_x != right.template_pivot_x ||
+        left.template_pivot_y != right.template_pivot_y ||
+        left.template_pivot_z != right.template_pivot_z ||
+        left.height_position != right.height_position ||
+        left.height_offset != right.height_offset ||
+        left.integrity != right.integrity || left.large != right.large ||
+        left.beached != right.beached || left.overwrite != right.overwrite ||
+        left.sections != right.sections || left.rails != right.rails ||
+        left.spider != right.spider || left.two_floored != right.two_floored ||
+        left.mesa != right.mesa ||
+        !same_bounds_list(left.entrances, right.entrances) ||
+        left.children.size() != right.children.size()) {
+        return false;
+    }
+    for (std::size_t index = 0; index < left.children.size(); ++index) {
+        if (!same_piece(left.children[index], right.children[index])) {
+            return false;
+        }
+    }
+    if (left.jigsaw.has_value() != right.jigsaw.has_value()) {
+        return false;
+    }
+    if (left.jigsaw) {
+        const auto &a = *left.jigsaw;
+        const auto &b = *right.jigsaw;
+        if (a.element.kind != b.element.kind ||
+            a.element.projection != b.element.projection ||
+            a.element.template_id != b.element.template_id ||
+            a.element.processor_list != b.element.processor_list ||
+            a.element.feature != b.element.feature ||
+            a.ground_level_delta != b.ground_level_delta ||
+            a.liquid != b.liquid || a.junctions != b.junctions) {
+            return false;
+        }
+    }
+    return true;
+}
+
+auto same_start(const structure_start &left, const structure_start &right)
+    -> bool {
+    if (left.structure != right.structure || left.step != right.step ||
+        left.chunk_x != right.chunk_x || left.chunk_z != right.chunk_z ||
+        left.min_x != right.min_x || left.min_y != right.min_y ||
+        left.min_z != right.min_z || left.max_x != right.max_x ||
+        left.max_y != right.max_y || left.max_z != right.max_z ||
+        left.pieces.size() != right.pieces.size()) {
+        return false;
+    }
+    for (std::size_t index = 0; index < left.pieces.size(); ++index) {
+        if (!same_piece(left.pieces[index], right.pieces[index])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+auto restored_starts(const chunk &stored) -> std::vector<structure_start> {
+    worldgen::block_state_registry states{};
+    (void)states.intern("minecraft:air", {.air = true});
+    worldgen::proto_chunk restored{states, 0, 0, -64, 384};
+    const auto status = restore_structures(stored, restored, step_of);
+    expect(status.has_value());
+    return std::vector<structure_start>{restored.structure_starts().begin(),
+                                        restored.structure_starts().end()};
+}
+
 } // namespace
 
 suite<"worldgen/proto-bridge"> proto_bridge_tests = [] {
@@ -436,6 +719,465 @@ suite<"worldgen/proto-bridge"> proto_bridge_tests = [] {
         expect(!bad_angles);
         if (!bad_angles) {
             expect(bad_angles.error().code == refrain::error_code::parse_error);
+        }
+    };
+
+    "a column stores its structure starts and references"_test = [&] {
+        auto states = make_registry();
+        worldgen::proto_chunk source{states, 0, 0, -64, 384};
+        source.set_status(worldgen::chunk_status::terrain);
+        fill_structure_fixture(source);
+
+        const auto converted = from_proto_chunk(source, {"minecraft:plains"});
+        expect(converted.has_value());
+        if (!converted) {
+            return;
+        }
+        expect(!converted->structures.empty());
+
+        const auto document = data::nbt::read(converted->structures);
+        expect(document.has_value());
+        if (!document) {
+            return;
+        }
+        const auto *root = document->as_compound();
+        expect(root != nullptr);
+        if (root == nullptr) {
+            return;
+        }
+        const auto *starts = nbt_child(*root, "starts");
+        const auto *references = nbt_child(*root, "References");
+        expect(starts != nullptr && starts->as_compound() != nullptr);
+        expect(references != nullptr && references->as_compound() != nullptr);
+        if (starts == nullptr || references == nullptr) {
+            return;
+        }
+        const auto &start_entries = *starts->as_compound();
+        const auto &reference_entries = *references->as_compound();
+        expect(start_entries.size() == 3U);
+        expect(reference_entries.size() == 3U);
+
+        // The shipwreck start keeps its vanilla template piece tag.
+        const auto wreck = start_entries.find("minecraft:shipwreck");
+        expect(wreck != start_entries.end());
+        if (wreck != start_entries.end()) {
+            const auto &tag = *wreck->second.as_compound();
+            expect(tag.at("id").as_string() ==
+                   std::optional<std::string_view>{"minecraft:shipwreck"});
+            expect(tag.at("ChunkX").as_int() == std::optional<std::int32_t>{0});
+            expect(tag.at("ChunkZ").as_int() == std::optional<std::int32_t>{0});
+            const auto *children = nbt_child(tag, "Children");
+            expect(children != nullptr && children->as_list() != nullptr);
+            if (children != nullptr && children->as_list() != nullptr) {
+                const auto &list = *children->as_list();
+                expect(list.items.size() == 1U);
+                if (!list.items.empty()) {
+                    const auto &piece = *list.items.front().as_compound();
+                    expect(
+                        piece.at("id").as_string() ==
+                        std::optional<std::string_view>{"minecraft:shipwreck"});
+                    expect(piece.at("Template").as_string() ==
+                           std::optional<std::string_view>{
+                               "minecraft:shipwreck/with_mast"});
+                    expect(piece.at("Rot").as_string() ==
+                           std::optional<std::string_view>{"CLOCKWISE_90"});
+                    expect(piece.at("TPX").as_int() ==
+                           std::optional<std::int32_t>{10});
+                    expect(piece.at("isBeached").as_byte() ==
+                           std::optional<std::int8_t>{0});
+                    const auto box = piece.at("BB").as_int_array();
+                    expect(box.has_value() && box->size() == 6U);
+                    if (box && box->size() == 6U) {
+                        expect((*box)[0] == 10 && (*box)[3] == 22);
+                    }
+                }
+            }
+        }
+
+        // The mineshaft start keeps its procedural piece tags.
+        const auto shaft = start_entries.find("minecraft:mineshaft");
+        expect(shaft != start_entries.end());
+        if (shaft != start_entries.end()) {
+            const auto &tag = *shaft->second.as_compound();
+            const auto *children = nbt_child(tag, "Children");
+            expect(children != nullptr && children->as_list() != nullptr);
+            if (children != nullptr && children->as_list() != nullptr) {
+                const auto &list = *children->as_list();
+                expect(list.items.size() == 2U);
+                if (list.items.size() == 2U) {
+                    const auto &room = *list.items[0].as_compound();
+                    const auto &corridor = *list.items[1].as_compound();
+                    expect(room.at("id").as_string() ==
+                           std::optional<std::string_view>{"minecraft:msroom"});
+                    expect(room.at("MST").as_int() ==
+                           std::optional<std::int32_t>{1});
+                    expect(room.at("Entrances").as_list() != nullptr);
+                    expect(corridor.at("id").as_string() ==
+                           std::optional<std::string_view>{
+                               "minecraft:mscorridor"});
+                    expect(corridor.at("Num").as_int() ==
+                           std::optional<std::int32_t>{3});
+                    expect(corridor.at("hr").as_byte() ==
+                           std::optional<std::int8_t>{1});
+                    expect(corridor.at("sc").as_byte() ==
+                           std::optional<std::int8_t>{1});
+                }
+            }
+        }
+
+        // The jigsaw start keeps its pool element and junction list.
+        const auto village = start_entries.find("minecraft:village_plains");
+        expect(village != start_entries.end());
+        if (village != start_entries.end()) {
+            const auto &tag = *village->second.as_compound();
+            const auto *children = nbt_child(tag, "Children");
+            expect(children != nullptr && children->as_list() != nullptr);
+            if (children != nullptr && children->as_list() != nullptr &&
+                !children->as_list()->items.empty()) {
+                const auto &piece =
+                    *children->as_list()->items.front().as_compound();
+                expect(piece.at("id").as_string() ==
+                       std::optional<std::string_view>{"minecraft:jigsaw"});
+                expect(piece.at("PosX").as_int() ==
+                       std::optional<std::int32_t>{-2});
+                expect(piece.at("rotation").as_string() ==
+                       std::optional<std::string_view>{"CLOCKWISE_180"});
+                expect(piece.at("ground_level_delta").as_int() ==
+                       std::optional<std::int32_t>{1});
+                const auto *element = nbt_child(piece, "pool_element");
+                expect(element != nullptr && element->as_compound() != nullptr);
+                if (element != nullptr && element->as_compound() != nullptr) {
+                    const auto &entries = *element->as_compound();
+                    expect(entries.at("element_type").as_string() ==
+                           std::optional<std::string_view>{
+                               "minecraft:single_pool_element"});
+                    expect(entries.at("projection").as_string() ==
+                           std::optional<std::string_view>{"rigid"});
+                }
+                const auto *junctions = nbt_child(piece, "junctions");
+                expect(junctions != nullptr && junctions->as_list() != nullptr);
+                if (junctions != nullptr && junctions->as_list() != nullptr) {
+                    expect(junctions->as_list()->items.size() == 1U);
+                }
+                expect(piece.at("liquid_settings").as_string() ==
+                       std::optional<std::string_view>{"ignore_waterlogging"});
+            }
+        }
+
+        // The references keep one packed position per reference count.
+        const auto packed_of = [&](std::string_view id)
+            -> std::optional<std::vector<std::int64_t>> {
+            const auto found = reference_entries.find(id);
+            if (found == reference_entries.end()) {
+                return std::nullopt;
+            }
+            const auto values = found->second.as_long_array();
+            if (!values) {
+                return std::nullopt;
+            }
+            return std::vector<std::int64_t>{values->begin(), values->end()};
+        };
+        const auto wreck_references = packed_of("minecraft:shipwreck");
+        expect(wreck_references.has_value());
+        if (wreck_references) {
+            expect(wreck_references->size() == 1U);
+            expect((*wreck_references)[0] == packed_chunk_pos(1, 0));
+        }
+        const auto village_references = packed_of("minecraft:village_plains");
+        expect(village_references.has_value());
+        if (village_references) {
+            expect(village_references->size() == 2U);
+            expect((*village_references)[0] == packed_chunk_pos(-1, 0));
+            expect((*village_references)[1] == packed_chunk_pos(-1, 0));
+        }
+
+        // A column without structure records keeps the field empty so its
+        // semantic hash is unchanged.
+        worldgen::proto_chunk plain{states, 0, 0, -64, 384};
+        plain.set_status(worldgen::chunk_status::terrain);
+        const auto plain_column = from_proto_chunk(plain, {"minecraft:plains"});
+        expect(plain_column.has_value());
+        if (plain_column) {
+            expect(plain_column->structures.empty());
+        }
+
+        // The stored records decode back into the generated ones.
+        auto restored = restored_starts(*converted);
+        expect(restored.size() == 3U);
+        std::map<std::string, structure_start> by_id{};
+        for (auto &start : restored) {
+            by_id.emplace(start.structure, std::move(start));
+        }
+        expect(by_id.size() == 3U);
+        expect(same_start(by_id["minecraft:shipwreck"], shipwreck_start()));
+        expect(same_start(by_id["minecraft:mineshaft"], mineshaft_start()));
+        expect(same_start(by_id["minecraft:village_plains"], jigsaw_start()));
+    };
+
+    "structure records survive the store and an Anvil round trip"_test = [&] {
+        auto states = make_registry();
+        worldgen::proto_chunk source{states, 0, 0, -64, 384};
+        source.set_status(worldgen::chunk_status::terrain);
+        fill_structure_fixture(source);
+        const auto converted = from_proto_chunk(source, {"minecraft:plains"});
+        expect(converted.has_value());
+        if (!converted) {
+            return;
+        }
+        const refrain::test_support::scratch_directory scratch;
+        const auto root = scratch.path() / "store";
+        auto store = world_store::create(root.string());
+        expect(store.has_value());
+        if (!store) {
+            return;
+        }
+        data::nbt::compound level{};
+        level["DataVersion"] = data::nbt::value{std::int32_t{5023}};
+        data::nbt::compound meta{};
+        meta["level"] = data::nbt::value{std::move(level)};
+        const auto meta_bytes =
+            data::nbt::write(data::nbt::value{std::move(meta)}, "",
+                             data::nbt::compression::none);
+        expect(meta_bytes.has_value());
+        if (!meta_bytes) {
+            return;
+        }
+        expect(store->write_meta(*meta_bytes).has_value());
+        expect(store->write_chunk({.x = 0, .z = 0}, *converted).has_value());
+        const auto read = store->read_chunk({.x = 0, .z = 0});
+        expect(read.has_value());
+        if (!read) {
+            return;
+        }
+        expect(read->structures == converted->structures);
+        const auto before = semantic_hash(*converted);
+        const auto after = semantic_hash(*read);
+        expect(before.has_value() && after.has_value());
+        if (before && after) {
+            expect(*before == *after);
+        }
+        expect(store->commit().has_value());
+
+        const auto export_path = scratch.path() / "anvil";
+        const auto exported =
+            anvil::export_world(root.string(), export_path.string(), true);
+        expect(exported.has_value());
+        if (!exported) {
+            return;
+        }
+        const auto imported_path = scratch.path() / "rwf";
+        const auto imported = anvil::import_world(export_path.string(),
+                                                  imported_path.string(), true);
+        expect(imported.has_value());
+        if (!imported) {
+            return;
+        }
+        auto reopened = world_store::open(imported_path.string());
+        expect(reopened.has_value());
+        if (!reopened) {
+            return;
+        }
+        const auto back = reopened->read_chunk({.x = 0, .z = 0});
+        expect(back.has_value());
+        if (!back) {
+            return;
+        }
+        // The Anvil import/export path carries the compound byte for byte, so
+        // the exported chunk declares the same starts a vanilla reader accepts.
+        expect(back->structures == converted->structures);
+        const auto restored = restored_starts(*back);
+        expect(restored.size() == 3U);
+        std::map<std::string, structure_start> by_id{};
+        for (const auto &start : restored) {
+            by_id.emplace(start.structure, start);
+        }
+        expect(by_id.size() == 3U);
+        expect(same_start(by_id["minecraft:shipwreck"], shipwreck_start()));
+        expect(same_start(by_id["minecraft:mineshaft"], mineshaft_start()));
+        expect(same_start(by_id["minecraft:village_plains"], jigsaw_start()));
+        std::map<std::pair<std::string, std::pair<std::int32_t, std::int32_t>>,
+                 std::int32_t>
+            expected_references{};
+        expected_references[{"minecraft:shipwreck", {1, 0}}] = 1;
+        expected_references[{"minecraft:village_plains", {-1, 0}}] = 2;
+        expected_references[{"minecraft:mineshaft", {0, 1}}] = 1;
+        std::map<std::pair<std::string, std::pair<std::int32_t, std::int32_t>>,
+                 std::int32_t>
+            actual_references{};
+        {
+            worldgen::block_state_registry restored_states{};
+            (void)restored_states.intern("minecraft:air", {.air = true});
+            worldgen::proto_chunk restored_chunk{restored_states, 0, 0, -64,
+                                                 384};
+            expect(
+                restore_structures(*back, restored_chunk, step_of).has_value());
+            for (const auto &reference :
+                 restored_chunk.structure_references()) {
+                actual_references[{reference.structure,
+                                   {reference.chunk_x, reference.chunk_z}}] =
+                    reference.count;
+            }
+        }
+        const bool references_match = actual_references == expected_references;
+        expect(references_match);
+    };
+
+    "a corrupt stored structure payload fails the reverse bridge"_test = [&] {
+        auto states = make_registry();
+        worldgen::proto_chunk source{states, 0, 0, -64, 384};
+        source.set_status(worldgen::chunk_status::terrain);
+        fill_structure_fixture(source);
+        const auto converted = from_proto_chunk(source, {"minecraft:plains"});
+        expect(converted.has_value());
+        if (!converted) {
+            return;
+        }
+        const auto restore = [&](const chunk &stored) {
+            worldgen::block_state_registry restored_states{};
+            (void)restored_states.intern("minecraft:air", {.air = true});
+            worldgen::proto_chunk restored{restored_states, 0, 0, -64, 384};
+            return restore_structures(stored, restored, step_of);
+        };
+        // Truncated NBT is not a compound.
+        {
+            auto corrupt = *converted;
+            corrupt.structures = {std::byte{0x0A}};
+            const auto restored = restore(corrupt);
+            expect(!restored);
+            if (!restored) {
+                expect(restored.error().code ==
+                       refrain::error_code::parse_error);
+            }
+        }
+        // A compound whose starts entry has the wrong shape is rejected
+        // instead of being treated as an empty structure list.
+        {
+            data::nbt::compound bad_root{};
+            bad_root["starts"] = data::nbt::make_int(1);
+            const auto bytes =
+                data::nbt::write(data::nbt::value{std::move(bad_root)}, "",
+                                 data::nbt::compression::none);
+            expect(bytes.has_value());
+            if (!bytes) {
+                return;
+            }
+            auto corrupt = *converted;
+            corrupt.structures = *bytes;
+            const auto restored = restore(corrupt);
+            expect(!restored);
+            if (!restored) {
+                expect(restored.error().code ==
+                       refrain::error_code::parse_error);
+            }
+        }
+        // An unknown piece id is malformed for the generated record model.
+        {
+            auto document = data::nbt::read(converted->structures);
+            expect(document.has_value());
+            if (!document || document->as_compound() == nullptr) {
+                return;
+            }
+            auto *starts = (*document->as_compound())["starts"].as_compound();
+            expect(starts != nullptr);
+            if (starts == nullptr) {
+                return;
+            }
+            auto &wreck = (*starts)["minecraft:shipwreck"];
+            auto *tag = wreck.as_compound();
+            expect(tag != nullptr);
+            if (tag == nullptr) {
+                return;
+            }
+            auto *children = (*tag)["Children"].as_list();
+            expect(children != nullptr && !children->items.empty());
+            if (children == nullptr || children->items.empty()) {
+                return;
+            }
+            auto *piece = children->items.front().as_compound();
+            expect(piece != nullptr);
+            if (piece == nullptr) {
+                return;
+            }
+            (*piece)["id"] = data::nbt::make_string("minecraft:unknown_piece");
+            const auto bytes =
+                data::nbt::write(*document, "", data::nbt::compression::none);
+            expect(bytes.has_value());
+            if (!bytes) {
+                return;
+            }
+            auto corrupt = *converted;
+            corrupt.structures = *bytes;
+            const auto restored = restore(corrupt);
+            expect(!restored);
+            if (!restored) {
+                expect(restored.error().code ==
+                       refrain::error_code::parse_error);
+            }
+        }
+    };
+
+    "a record the compound cannot represent fails the conversion"_test = [&] {
+        auto states = make_registry();
+        const auto convert = [&](const worldgen::proto_chunk &chunk) {
+            return from_proto_chunk(chunk, {"minecraft:plains"});
+        };
+        // A piece type the vanilla piece registry does not name is rejected
+        // rather than dropped from the stored start.
+        {
+            worldgen::proto_chunk source{states, 0, 0, -64, 384};
+            structure_start start{};
+            start.structure = "minecraft:test";
+            start.step = "surface_structures";
+            auto piece = make_piece("minecraft:unknown",
+                                    {.min_x = 0,
+                                     .min_y = 64,
+                                     .min_z = 0,
+                                     .max_x = 3,
+                                     .max_y = 70,
+                                     .max_z = 3},
+                                    -1);
+            start.pieces.push_back(std::move(piece));
+            source.add_structure_start(std::move(start));
+            const auto converted = convert(source);
+            expect(!converted);
+            if (!converted) {
+                expect(converted.error().code ==
+                       refrain::error_code::parse_error);
+            }
+        }
+        // Two starts of one structure cannot share a column: the compound is
+        // keyed by structure id and the reference keeps one start per id.
+        {
+            worldgen::proto_chunk source{states, 0, 0, -64, 384};
+            source.add_structure_start(shipwreck_start());
+            source.add_structure_start(shipwreck_start());
+            const auto converted = convert(source);
+            expect(!converted);
+            if (!converted) {
+                expect(converted.error().code ==
+                       refrain::error_code::parse_error);
+            }
+        }
+        // An empty structure id has no compound key.
+        {
+            worldgen::proto_chunk source{states, 0, 0, -64, 384};
+            structure_start start{};
+            start.step = "surface_structures";
+            start.pieces.push_back(make_piece("minecraft:btp",
+                                              {.min_x = 0,
+                                               .min_y = 0,
+                                               .min_z = 0,
+                                               .max_x = 0,
+                                               .max_y = 0,
+                                               .max_z = 0},
+                                              -1));
+            source.add_structure_start(std::move(start));
+            const auto converted = convert(source);
+            expect(!converted);
+            if (!converted) {
+                expect(converted.error().code ==
+                       refrain::error_code::parse_error);
+            }
         }
     };
 };
