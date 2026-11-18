@@ -432,17 +432,70 @@ worker count only decides how the terrain fills are spread over threads.
 
 Two pieces of shared state make that content independent of worker order. The
 block-state table is built from the content's block table container
-(`tables.rvtb`, the sibling of the data directory) and frozen before any worker
-starts. It interns every state of the table, in the table's key order, and the
-bare block name of every default state, so a state key always resolves to the
-same id regardless of which worker reaches it first; an unknown key fails
-instead of taking a first-use id. The proto cache is shared under one mutex and
-records the first demanded column that publishes each terrain chunk, so a chunk
-is filled from the dependency window that the per-generator pipeline would have
-used. After a column is served, terrain entries older than the cache's retention
-window are evicted in ascending position order; their content is reproducible,
-so the eviction cannot change a served chunk. A decorated entry carries
-neighbour feature writes and is kept until `clear`.
+(`tables.rvtb`, the sibling of the data directory) and frozen after the first
+worker generator loaded. It interns every state of the table, in the table's key
+order, and the bare block name of every default state, so a state key always
+resolves to the same id regardless of which worker reaches it first; an unknown
+key fails instead of taking a first-use id. The frozen table is checked before
+the scheduler starts (`block_state_registry::verify_frozen`, backed by a
+completeness assertion in the shared builder), so a state the content does not
+define is refused at creation instead of silently resolving to the empty state.
+
+The proto cache is shared under one mutex and records the first demanded column
+that publishes each terrain chunk, so a chunk is filled from the dependency
+window that the per-generator pipeline would have used. Its `capacity` is a hard
+bound on the pristine terrain entries, the fills that no structure or feature
+has written to yet: an insertion evicts pristine entries in ascending position
+order until the count is back at the bound. An evicted pristine entry is
+refilled from the dependency window of the demand that first published it, and
+that window is a pure function of the demand sequence, so eviction cannot change
+a served chunk; the tests compare a capacity of 25 against a non-evicting
+capacity over a demand gap larger than one window and get equal digests. Pinned
+entries, which the ordered lane holds while it reads its five-by-five dependency
+window, are never evicted, and the pipe never mutates an entry through a pointer
+the cache could drop.
+
+A terrain entry that received a structure piece or a neighbour feature write is
+no longer reproducible from the seed, so it is marked written and is not an
+eviction candidate until it is decorated. Written and decorated entries carry
+state that only an unload can drop, and a long viewport would grow them without
+bound, so the caller declares the rectangle of positions it may demand next
+(`chunk_scheduler::trim_outside`) and the entries more than two chunks outside
+it, which no such demand can read or write, are unloaded. The experimental
+runtime derives that window from the wanted set and the chains in flight on
+every dispatch, so a walking viewport keeps the cached set inside its current
+working set; a request that jumps outside the declared window rebuilds its
+neighbourhood from the seed and can serve different blocks than an unbounded
+cache, which is the accepted consequence of not keeping the whole session in
+memory. Without a declared window the decorated and written entries stay cached
+until `clear`.
+
+The statistics are race free: the cache maintains its entry, pristine and
+high-water counters under its own mutex, and the ordered lane publishes a stage
+change or a seal through locked cache methods instead of writing the entry
+through an unlocked `find` pointer. A reader may therefore poll
+`chunk_scheduler::stats` while the workers generate. The high-water counters are
+what the memory bound is checked against: `cache_peak_pristine_entries` never
+exceeds `cache_capacity`, and `cache_peak_terrain_entries` additionally covers
+the written dependency ring.
+
+The worker loop follows the runtime contract: a worker waits on a condition
+variable whose predicate is `chunk_scheduler::has_job`, takes one job with
+`next_job`, and the completion sites notify the condition variable so another
+worker can pick up the ordered lane or a queued fill. The tests drive the
+scheduler as waiting workers rather than busy polling `next_job`.
+
+The scheduler's tests pin its content gates on the development machine; these
+are correctness digests, not throughput numbers. A sixteen-by-sixteen fill at
+eight workers with the default capacity of 256 terms serves every column and
+peaks at 125 pristine and 125 resident terrain entries (400 cached entries in
+total, including the decorated ring), so the pristine bound holds with room to
+spare. At one, four and eight workers the same four-by-four fill at capacity 25
+serves identical digests, and an eight-by-eight fill served by the scheduler
+equals the serial per-generator pipeline at capacity 128, where that generator's
+own cache evicts sixteen entries. The residency numbers are indicative and not
+comparable with the bench host figures below; throughput on the shared path is
+measured separately before it can replace the tile path.
 
 The scheduler is opt-in. `chunk_generation` drives it only when its
 `experimental_chunk_pipeline` config flag is set, and the flag is off by default

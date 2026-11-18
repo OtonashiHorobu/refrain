@@ -713,10 +713,24 @@ struct chunk_scheduler_stats {
     std::size_t pending{0};
     /// Cached proto chunks in the shared cache.
     std::size_t cache_entries{0};
-    /// Cached chunks still at terrain stage: the eviction candidates.
+    /// Cached chunks still at terrain stage, written or not.
     std::size_t cache_terrain_entries{0};
-    /// Proto chunks evicted over the cache's retention window.
+    /// Cached chunks that are still pure terrain fills: the eviction
+    /// candidates.
+    std::size_t cache_pristine_entries{0};
+    /// Configured bound on pristine terrain entries.
+    std::size_t cache_capacity{0};
+    /// High-water marks of the counters above. `cache_peak_pristine_entries`
+    /// never exceeds `cache_capacity`; a caller reports it to check the stated
+    /// memory bound against a real run.
+    std::size_t cache_peak_entries{0};
+    std::size_t cache_peak_terrain_entries{0};
+    std::size_t cache_peak_pristine_entries{0};
+    /// Proto chunks evicted to keep the terrain working set inside its bound.
     std::uint64_t cache_evictions{0};
+    /// Cached chunks unloaded by `trim_outside` after they left the demand
+    /// window.
+    std::uint64_t cache_unloads{0};
 };
 
 /// Runs per-chunk status jobs over one shared deterministic pipeline state.
@@ -740,11 +754,18 @@ struct chunk_scheduler_stats {
 /// once its own three-by-three is decorated. A served chunk is sealed, so a
 /// later feature write into it is dropped just as on the serial path.
 ///
-/// The shared cache bounds its terrain working set: after a column is served,
-/// terrain entries published by demands older than the cache's retention
-/// window are evicted. Their content is reproducible, so eviction cannot
-/// change a served chunk; a decorated entry carries feature writes and is kept
-/// until `clear`.
+/// The shared cache keeps `capacity` a hard bound on pristine terrain entries:
+/// an insertion erases unpinned pristine entries in ascending position order
+/// until the count is back at the bound, and the ordered lane pins its
+/// five-by-five dependency window so a pointer it reads is never erased under
+/// it. An evicted pristine entry is refilled from the dependency window of the
+/// demand that first published it, so the served content does not depend on
+/// when an eviction happened. A terrain entry that already received a structure
+/// or feature write, and every decorated entry, carries state that the seed
+/// cannot reproduce; those are kept until the caller unloads them with
+/// `trim_outside`, which drops the entries a caller-declared demand window can
+/// no longer read or write. A call without a demand window keeps them until
+/// `clear`, so the caller states the window it covers.
 class chunk_scheduler {
   public:
     struct config {
@@ -797,6 +818,21 @@ class chunk_scheduler {
 
     [[nodiscard]] auto stats() const -> chunk_scheduler_stats;
 
+    /// Unloads every cached chunk farther than `margin` chunks from `window`
+    /// and returns the number unloaded. The decorated entries of a long
+    /// viewport carry neighbour feature writes and are otherwise kept until
+    /// `clear`; the caller declares the rectangle of positions it may demand
+    /// next, and an entry outside `margin` chunks of it can be neither read nor
+    /// written by such a demand, so unloading it cannot change the content of a
+    /// demand inside the window. A later demand outside the declared window
+    /// rebuilds its neighbourhood from the seed and may serve different blocks
+    /// than an unbounded cache would, because the unloaded feature writes are
+    /// gone; a caller that wants unchanged content keeps the window over every
+    /// position it will demand. Pinned entries are skipped and reconsidered on
+    /// the next call.
+    auto trim_outside(const chunk_rectangle &window, jint margin = 2)
+        -> std::size_t;
+
     /// Drops every cached chunk and the chain bookkeeping. The scheduler keeps
     /// running after it; the next demand rebuilds its neighbourhood from the
     /// seed.
@@ -819,16 +855,12 @@ class chunk_scheduler {
 
     /// Fills the 25 terrain chunks around `pos` whose entry is missing, each
     /// from the dependency window of the demand that published it first. The
-    /// ordered lane calls it before decorating: a terrain entry may have been
-    /// evicted by the shared cache's retention window, and refilling it from
-    /// its original window is what keeps the content independent of when the
+    /// ordered lane calls it before decorating: a pristine terrain entry may
+    /// have been evicted to keep the cache bound, and refilling it from its
+    /// original window is what keeps the content independent of when the
     /// eviction happened.
     [[nodiscard]] auto refill_terrain(chunk_generator &generator,
                                       const chunk_pos &pos) -> result<void>;
-
-    /// Evicts the terrain entries whose publishing demand is older than the
-    /// cache's retention window.
-    void evict_old_terrain();
 
     /// What the scheduler knows about one demanded column.
     struct demand_chain {
@@ -845,11 +877,6 @@ class chunk_scheduler {
     /// The next demand in the ordered lane that is not finished, skipping
     /// failed chains.
     [[nodiscard]] auto ordered_front() const -> const demand_chain *;
-
-    /// Retention of the shared cache's terrain entries, in demanded columns.
-    /// Derived from the configured capacity so the retention window can never
-    /// exceed the bound.
-    [[nodiscard]] auto retention_columns() const noexcept -> std::size_t;
 
     config settings_{};
     mutable std::mutex mutex_{};

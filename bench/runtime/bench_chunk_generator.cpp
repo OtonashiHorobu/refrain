@@ -792,17 +792,24 @@ auto run_scheduler_case(const options &config, jint chunks, std::size_t workers,
             static_cast<double>(completion_ms.size() - 1) * fraction);
         return completion_ms[index];
     };
+    // The cache counters are part of the result: the pristine entries are the
+    // bounded part of the working set, and the resident entry peak also covers
+    // the written dependency ring and the decorated entries.
+    const auto stats = scheduler->stats();
     const auto line = fmt::format(
         "RESULT scheduler=true target=full chunks={} tile=1 workers={} "
         "first_chunk_ms={:.1f} full_ms={:.1f} chunks_per_s={:.3f} "
         "p50_ms_per_chunk={:.1f} p95_ms_per_chunk={:.1f} rss_mib={:.1f} "
-        "peak_rss_mib={:.1f}",
+        "peak_rss_mib={:.1f} cache_capacity={} pristine_peak={} "
+        "terrain_peak={} entries_peak={} evictions={} unloads={}",
         positions.size(), worker_count, completion_ms.front(),
         completion_ms.back(),
         static_cast<double>(positions.size()) * 1000.0 / completion_ms.back(),
         percentile(0.50), percentile(0.95),
         static_cast<double>(read_rss_kib()) / 1024.0,
-        static_cast<double>(read_peak_rss_kib()) / 1024.0);
+        static_cast<double>(read_peak_rss_kib()) / 1024.0, stats.cache_capacity,
+        stats.cache_peak_pristine_entries, stats.cache_peak_terrain_entries,
+        stats.cache_peak_entries, stats.cache_evictions, stats.cache_unloads);
     fmt::print("{}\n", line);
     if (stream != nullptr) {
         *stream << line << '\n';

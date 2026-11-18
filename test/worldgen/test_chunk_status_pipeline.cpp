@@ -24,6 +24,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -628,6 +629,40 @@ suite<"worldgen/chunk-status-pipeline"> chunk_status_pipeline_tests = [] {
         expect(stats.hits == 1U);
         expect(stats.misses == 2U);
     };
+
+    "the shared cache bounds only pristine terrain and keeps pins and writes"_test =
+        [] {
+            const test_table table;
+            std::mutex mutex;
+            proto_chunk_cache cache{2, &mutex};
+            const std::array<chunk_pos, 1> pinned{chunk_pos{.x = 0, .z = 0}};
+            cache.pin(pinned);
+            (void)cache.insert(chunk_pos{.x = 0, .z = 0},
+                               make_chunk(table, 0, 0));
+            (void)cache.insert(chunk_pos{.x = 1, .z = 0},
+                               make_chunk(table, 1, 0));
+            const std::array<chunk_pos, 1> written{chunk_pos{.x = 1, .z = 0}};
+            cache.mark_written(written);
+            (void)cache.insert(chunk_pos{.x = 2, .z = 0},
+                               make_chunk(table, 2, 0));
+            (void)cache.insert(chunk_pos{.x = 3, .z = 0},
+                               make_chunk(table, 3, 0));
+            const auto stats = cache.stats();
+            // Capacity two: the pinned and the written entries are not
+            // candidates, so the ascending pristine eviction took the lowest
+            // pristine position that was not pinned.
+            expect(cache.find(chunk_pos{.x = 0, .z = 0}) != nullptr)
+                << "a pinned entry was evicted";
+            expect(cache.find(chunk_pos{.x = 1, .z = 0}) != nullptr)
+                << "a written entry was evicted";
+            expect(cache.find(chunk_pos{.x = 2, .z = 0}) == nullptr)
+                << "the pristine bound did not evict the lowest candidate";
+            expect(cache.find(chunk_pos{.x = 3, .z = 0}) != nullptr);
+            expect(stats.pristine_entries <= stats.capacity);
+            expect(stats.peak_pristine_entries <= stats.capacity);
+            expect(stats.evictions == 1U);
+            cache.unpin(pinned);
+        };
 
     "a served chunk is readable but refuses writes"_test = [] {
         const test_table table;

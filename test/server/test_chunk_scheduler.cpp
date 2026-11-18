@@ -21,12 +21,15 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <filesystem>
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -216,6 +219,130 @@ auto make_positions(worldgen::jint width, worldgen::jint depth)
         }
     }
     return positions;
+}
+
+struct waiting_run {
+    digest_map results{};
+    /// The main thread observed every demanded column served before the
+    /// timeout.
+    bool completed{false};
+    /// Number of predicate evaluations that found a job, i.e. how often a
+    /// worker actually woke on the `has_job` predicate.
+    std::size_t wakes{0};
+};
+
+/// Drives a scheduler to completion the way the runtime does: every worker
+/// sleeps on a condition variable until `has_job` is true, runs one job and
+/// notifies the others. Returns the served digests, whether the run completed
+/// inside the timeout, and how often the wake predicate fired.
+auto run_scheduler_waiting(worldgen::chunk_scheduler &scheduler,
+                           std::size_t workers,
+                           const std::vector<worldgen::chunk_pos> &demands)
+    -> waiting_run {
+    for (const auto &pos : demands) {
+        expect(scheduler.demand(pos));
+    }
+    std::mutex wait_mutex;
+    std::condition_variable wait_cv;
+    std::mutex result_mutex;
+    waiting_run run{};
+    std::atomic<bool> stop{false};
+    std::atomic<std::size_t> wakes{0};
+    std::vector<std::jthread> threads;
+    threads.reserve(workers);
+    for (std::size_t worker = 0; worker < workers; ++worker) {
+        threads.emplace_back([&, worker] {
+            for (;;) {
+                std::optional<worldgen::pipeline_job> job{};
+                {
+                    std::unique_lock lock{wait_mutex};
+                    static_cast<void>(
+                        wait_cv.wait_for(lock, std::chrono::seconds{120}, [&] {
+                            if (stop.load(std::memory_order_acquire)) {
+                                return true;
+                            }
+                            if (!scheduler.has_job(worker)) {
+                                return false;
+                            }
+                            wakes.fetch_add(1, std::memory_order_relaxed);
+                            return true;
+                        }));
+                    if (stop.load(std::memory_order_acquire)) {
+                        return;
+                    }
+                    job = scheduler.next_job(worker);
+                }
+                if (!job.has_value()) {
+                    continue;
+                }
+                auto generated{scheduler.run(*job)};
+                if (!generated) {
+                    const auto message{generated.error().message};
+                    scheduler.complete(*job, &message);
+                } else {
+                    scheduler.complete(*job, nullptr);
+                    if (job->step == worldgen::pipeline_step::served) {
+                        const auto digest{chunk_digest(**generated)};
+                        const std::lock_guard lock{result_mutex};
+                        run.results[{job->position.x, job->position.z}] =
+                            digest;
+                    }
+                }
+                wait_cv.notify_all();
+            }
+        });
+    }
+    {
+        std::unique_lock lock{wait_mutex};
+        run.completed = wait_cv.wait_for(lock, std::chrono::seconds{120}, [&] {
+            return scheduler.pending() == 0U;
+        });
+        stop.store(true, std::memory_order_release);
+    }
+    wait_cv.notify_all();
+    threads.clear();
+    run.wakes = wakes.load(std::memory_order_relaxed);
+    return run;
+}
+
+/// Serves a rectangle one demanded column at a time on a single worker and
+/// trims the cache to the positions still to be demanded after every row. The
+/// served digests are keyed by position like `run_scheduler`.
+auto run_scheduler_trimmed(worldgen::chunk_scheduler &scheduler,
+                           worldgen::jint width, worldgen::jint depth)
+    -> digest_map {
+    digest_map results;
+    for (worldgen::jint x = 0; x < width; ++x) {
+        for (worldgen::jint z = 0; z < depth; ++z) {
+            expect(scheduler.demand({.x = x, .z = z}));
+            for (;;) {
+                auto job{scheduler.next_job(0)};
+                if (!job.has_value()) {
+                    break;
+                }
+                auto generated{scheduler.run(*job)};
+                if (!generated) {
+                    const auto message{generated.error().message};
+                    scheduler.complete(*job, &message);
+                    continue;
+                }
+                scheduler.complete(*job, nullptr);
+                if (job->step == worldgen::pipeline_step::served) {
+                    results[{job->position.x, job->position.z}] =
+                        chunk_digest(**generated);
+                }
+            }
+            expect(scheduler.pending() == 0U);
+        }
+        // The next demand is in the next row; everything more than two chunks
+        // behind it can be neither read nor written by the positions still to
+        // be demanded.
+        (void)scheduler.trim_outside(
+            worldgen::chunk_rectangle{
+                .min_x = x, .min_z = 0, .max_x = width - 1, .max_z = depth - 1},
+            2);
+    }
+    return results;
 }
 
 } // namespace
@@ -610,12 +737,11 @@ suite<"server/chunk-scheduler"> chunk_scheduler_tests = [] {
             if (!test_support::vanilla_data().available) {
                 return;
             }
-            // A capacity of 25 keeps one column's terrain window, so the
-            // retention window drops terrain chunks as the ordered lane
-            // advances. The retention rule is a function of the demand
-            // sequence, so the served content stays identical across worker
-            // counts at that small bound even though the terrain entries are
-            // re-filled along the way.
+            // A capacity of 25 is a hard bound on the pristine terrain set:
+            // the fills ahead of the ordered lane are evicted and refilled from
+            // the demand window that published them, which is a pure function
+            // of the demand sequence, so the served content stays identical
+            // across worker counts at that small bound.
             const auto demands{make_positions(4, 4)};
             digest_map reference{};
             for (const std::size_t workers : {1U, 4U, 8U}) {
@@ -647,15 +773,248 @@ suite<"server/chunk-scheduler"> chunk_scheduler_tests = [] {
                     }
                 }
                 const auto stats{(*scheduler)->stats()};
-                expect(stats.cache_terrain_entries <= 25U)
-                    << "the terrain working set grew to "
-                    << stats.cache_terrain_entries
+                expect(stats.cache_peak_pristine_entries <= 25U)
+                    << "the pristine terrain working set grew to "
+                    << stats.cache_peak_pristine_entries
                     << " entries over a bound of 25";
-                expect(stats.cache_evictions > 0U)
-                    << "the small cache did not evict a terrain entry";
                 // Unloading drops every cached chunk.
                 (*scheduler)->clear();
                 expect((*scheduler)->stats().cache_entries == 0U);
             }
+        };
+
+    "server/chunk scheduler wakes a worker on the has_job predicate"_test = [] {
+        if (!test_support::vanilla_data().available) {
+            return;
+        }
+        // The runtime workers sleep on `has_job` under a condition variable and
+        // are woken by the completion sites. Drive the scheduler the same way,
+        // so a missing notification would leave a demanded column pending until
+        // the test times out.
+        auto scheduler{create_scheduler(2)};
+        expect(scheduler.has_value());
+        if (!scheduler) {
+            return;
+        }
+        const auto demands{make_positions(2, 2)};
+        const auto run{run_scheduler_waiting(**scheduler, 2, demands)};
+        expect(run.completed) << "a waiting worker never saw a queued job";
+        expect(run.wakes > 0U) << "no worker woke on the has_job predicate";
+        expect(run.results.size() == demands.size());
+        expect((*scheduler)->stats().served == demands.size());
+    };
+
+    "server/chunk scheduler bounds the resident terrain set at eight workers"_test =
+        [] {
+            if (!test_support::vanilla_data().available) {
+                return;
+            }
+            // The configured capacity is a hard bound on unsealed terrain
+            // entries, not a hint: every insertion evicts unpinned terrain
+            // until the count is back inside it, and the peak counter reports
+            // the largest published state of the run. A full sixteen-by-sixteen
+            // viewport at eight workers is the load the default capacity is
+            // stated over.
+            constexpr std::size_t capacity = 256;
+            auto scheduler{create_scheduler(8, 256)};
+            expect(scheduler.has_value())
+                << (scheduler ? "" : scheduler.error().message);
+            if (!scheduler) {
+                return;
+            }
+            const auto demands{make_positions(16, 16)};
+            const auto run{run_scheduler_waiting(**scheduler, 8, demands)};
+            expect(run.completed)
+                << "the waiting workers did not finish a sixteen-by-sixteen "
+                   "fill";
+            expect(run.results.size() == demands.size());
+            const auto stats{(*scheduler)->stats()};
+            std::fprintf(
+                stderr,
+                "scheduler 16x16 x8 cache: capacity=%zu pristine "
+                "peak=%zu terrain peak=%zu entries=%zu entries peak=%zu "
+                "evictions=%llu unloads=%llu\n",
+                stats.cache_capacity, stats.cache_peak_pristine_entries,
+                stats.cache_peak_terrain_entries, stats.cache_entries,
+                stats.cache_peak_entries,
+                static_cast<unsigned long long>(stats.cache_evictions),
+                static_cast<unsigned long long>(stats.cache_unloads));
+            expect(stats.cache_capacity == capacity);
+            expect(stats.cache_peak_pristine_entries > 0U)
+                << "the pristine peak counter never observed a resident entry";
+            expect(stats.cache_peak_pristine_entries <= stats.cache_capacity)
+                << "the pristine terrain working set peaked at "
+                << stats.cache_peak_pristine_entries << " entries over a bound "
+                << "of " << stats.cache_capacity;
+            // The resident terrain set also holds the written dependency ring
+            // of the decoration passes, which the seed cannot reproduce. The
+            // dense sixteen-by-sixteen fill keeps the whole set far inside the
+            // configured capacity; this number is measured, not derived.
+            expect(stats.cache_peak_terrain_entries <= stats.cache_capacity)
+                << "the terrain working set peaked at "
+                << stats.cache_peak_terrain_entries << " entries over a bound "
+                << "of " << stats.cache_capacity;
+            expect(stats.served == demands.size());
+        };
+
+    "server/chunk scheduler serves the same content from a small and a non-evicting cache"_test =
+        [] {
+            if (!test_support::vanilla_data().available) {
+                return;
+            }
+            // A capacity of 25 keeps exactly one dependency window, so the
+            // pristine fills ahead of the ordered lane are evicted between
+            // decoration steps. The far block is well outside that window, so
+            // its terrain can only be filled by the demand that published it,
+            // and the served content must still equal the unbounded run.
+            const std::vector<worldgen::chunk_pos> demands{
+                {.x = 0, .z = 0},   {.x = 1, .z = 0},   {.x = 0, .z = 1},
+                {.x = 1, .z = 1},   {.x = 0, .z = 2},   {.x = 20, .z = 20},
+                {.x = 21, .z = 20}, {.x = 20, .z = 21}, {.x = 21, .z = 21},
+            };
+            auto small{create_scheduler(2, 25)};
+            auto large{create_scheduler(2, 4096)};
+            expect(small.has_value());
+            expect(large.has_value());
+            if (!small || !large) {
+                return;
+            }
+            const auto small_results{run_scheduler(**small, 2, demands)};
+            const auto large_results{run_scheduler(**large, 2, demands)};
+            expect(small_results.size() == demands.size());
+            expect(large_results.size() == demands.size());
+            for (const auto &[position, digest] : large_results) {
+                const auto found{small_results.find(position)};
+                expect(found != small_results.end());
+                if (found == small_results.end()) {
+                    continue;
+                }
+                expect(found->second == digest)
+                    << "eviction changed chunk (" << position.first << ", "
+                    << position.second << ")";
+            }
+            const auto small_stats{(*small)->stats()};
+            const auto large_stats{(*large)->stats()};
+            std::fprintf(
+                stderr,
+                "scheduler cache after 9 demands: small pristine "
+                "peak=%zu evictions=%llu, large pristine peak=%zu "
+                "evictions=%llu\n",
+                small_stats.cache_peak_pristine_entries,
+                static_cast<unsigned long long>(small_stats.cache_evictions),
+                large_stats.cache_peak_pristine_entries,
+                static_cast<unsigned long long>(large_stats.cache_evictions));
+            expect(small_stats.cache_peak_pristine_entries <=
+                   small_stats.cache_capacity)
+                << "the small cache held "
+                << small_stats.cache_peak_pristine_entries
+                << " pristine terrain entries over a bound of "
+                << small_stats.cache_capacity;
+            expect(small_stats.cache_evictions > 0U)
+                << "the small cache never evicted a pristine terrain entry";
+            expect(large_stats.cache_evictions == 0U)
+                << "the non-evicting capacity evicted an entry";
+        };
+
+    "server/chunk scheduler serves the serial content where the serial cache evicts"_test =
+        [] {
+            if (!test_support::vanilla_data().available) {
+                return;
+            }
+            // An eight-by-eight rectangle at capacity 128 needs more unique
+            // entries than fit, so the serial pipeline's private cache begins
+            // evicting while it serves the rectangle. The scheduler keeps its
+            // decorated entries and bounds only terrain, so this compares the
+            // two eviction rules over the same demand sequence.
+            constexpr worldgen::jint edge = 8;
+            auto scheduler{create_scheduler(8, 128)};
+            auto generator{worldgen::chunk_generator::create(
+                generator_config(test_support::vanilla_data_root(), 128))};
+            expect(scheduler.has_value())
+                << (scheduler ? "" : scheduler.error().message);
+            expect(generator.has_value())
+                << (generator ? "" : generator.error().message);
+            if (!scheduler || !generator) {
+                return;
+            }
+            const auto demands{make_positions(edge, edge)};
+            const auto results{run_scheduler(**scheduler, 8, demands)};
+            expect(results.size() == demands.size());
+            for (const auto &position : demands) {
+                auto expected{(*generator)->generate_chunk(position)};
+                expect(expected.has_value())
+                    << (expected ? "" : expected.error().message);
+                if (!expected) {
+                    return;
+                }
+                const auto found{results.find({position.x, position.z})};
+                expect(found != results.end());
+                if (found == results.end()) {
+                    continue;
+                }
+                expect(found->second == chunk_digest(**expected))
+                    << "chunk (" << position.x << ", " << position.z
+                    << ") differs between the scheduler and the serial cache";
+            }
+            const auto serial_stats{(*generator)->cache_stats()};
+            std::fprintf(
+                stderr,
+                "serial cache after 8x8: entries=%zu peak=%zu "
+                "evictions=%llu\n",
+                serial_stats.entries, serial_stats.peak_entries,
+                static_cast<unsigned long long>(serial_stats.evictions));
+            expect(serial_stats.evictions > 0U)
+                << "the serial cache did not evict, so the comparison does not "
+                   "cover eviction";
+        };
+
+    "server/chunk scheduler unloads outside the demand window without changing content"_test =
+        [] {
+            if (!test_support::vanilla_data().available) {
+                return;
+            }
+            // A long viewport grows the decorated working set without bound
+            // because a decorated entry keeps the neighbour feature writes. The
+            // caller declares the rectangle it may still demand; entries more
+            // than two chunks outside it can be neither read nor written by a
+            // demand inside it, so unloading them must not change the served
+            // content.
+            auto reference{create_scheduler(1, 128)};
+            auto trimmed{create_scheduler(1, 128)};
+            expect(reference.has_value());
+            expect(trimmed.has_value());
+            if (!reference || !trimmed) {
+                return;
+            }
+            const auto demands{make_positions(8, 8)};
+            const auto expected{run_scheduler(**reference, 1, demands)};
+            const auto served{run_scheduler_trimmed(**trimmed, 8, 8)};
+            expect(expected.size() == demands.size());
+            expect(served.size() == demands.size());
+            for (const auto &[position, digest] : expected) {
+                const auto found{served.find(position)};
+                expect(found != served.end());
+                if (found == served.end()) {
+                    continue;
+                }
+                expect(found->second == digest)
+                    << "unloading changed chunk (" << position.first << ", "
+                    << position.second << ")";
+            }
+            const auto reference_stats{(*reference)->stats()};
+            const auto trimmed_stats{(*trimmed)->stats()};
+            std::fprintf(
+                stderr,
+                "scheduler cache after 8x8: unbounded entries=%zu "
+                "peak=%zu, windowed entries=%zu peak=%zu unloads=%llu\n",
+                reference_stats.cache_entries,
+                reference_stats.cache_peak_entries, trimmed_stats.cache_entries,
+                trimmed_stats.cache_peak_entries,
+                static_cast<unsigned long long>(trimmed_stats.cache_unloads));
+            expect(trimmed_stats.cache_unloads > 0U)
+                << "the demand window never unloaded a cached chunk";
+            expect(trimmed_stats.cache_entries < reference_stats.cache_entries)
+                << "the demand window kept as many entries as the unbounded "
+                   "run";
         };
 };

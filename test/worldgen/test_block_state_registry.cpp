@@ -431,6 +431,68 @@ suite<"worldgen/shared-block-state-registry">
                 }
             };
 
+        "a frozen shared table holds the content's complete state universe"_test =
+            [] {
+                const auto spec = sample_spec();
+                const auto bytes = build_vanilla_tables(spec);
+                expect(bytes.has_value());
+                if (!bytes) {
+                    return;
+                }
+                const auto tables = vanilla_tables::open(*bytes);
+                expect(tables.has_value());
+                if (!tables) {
+                    return;
+                }
+                block_tag_set tags;
+                auto registry =
+                    build_shared_block_state_registry(*tables, tags);
+                expect(registry.has_value());
+                if (!registry) {
+                    return;
+                }
+                // Every state of the content table and the bare spelling of
+                // every block resolves before the table is frozen, so a later
+                // lookup can only fail for a key the content does not define.
+                for (std::uint32_t index = 0; index < tables->state_count();
+                     ++index) {
+                    const auto state = tables->state_at(index);
+                    expect(registry->holds(state.key))
+                        << "state " << state.key << " is missing";
+                }
+                for (std::uint32_t index = 0; index < tables->block_count();
+                     ++index) {
+                    const auto block =
+                        tables->block_at(static_cast<std::uint16_t>(index));
+                    expect(registry->holds(block.name))
+                        << "default spelling of " << block.name
+                        << " is missing";
+                }
+                expect(registry->holds("minecraft:air"));
+                // The completeness check refuses a table that was not frozen.
+                expect(!registry->verify_frozen().has_value());
+                registry->freeze();
+                const auto verified = registry->verify_frozen();
+                expect(verified.has_value())
+                    << (verified ? "" : verified.error().message);
+                // Freezing does not hide the universe: a known state still
+                // resolves, an unknown one still fails closed.
+                for (std::uint32_t index = 0; index < tables->state_count();
+                     ++index) {
+                    const auto state = tables->state_at(index);
+                    const auto id = registry->intern(state.key, state_traits{});
+                    expect(id.has_value())
+                        << "frozen table lost state " << state.key;
+                }
+                const auto unknown = registry->intern(
+                    "minecraft:not_in_the_table", state_traits{});
+                expect(!unknown.has_value());
+                if (!unknown) {
+                    expect(unknown.error().code ==
+                           refrain::error_code::not_found);
+                }
+            };
+
         "shared table carries the per-block default properties"_test = [] {
             const auto spec = sample_spec();
             const auto bytes = build_vanilla_tables(spec);

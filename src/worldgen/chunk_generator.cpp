@@ -515,6 +515,13 @@ auto chunk_generator::create_scheduler_shared(chunk_generator_config config)
         return std::unexpected{first.error()};
     }
     (*shared)->shared_states->freeze();
+    // The table is frozen before any other worker reads it; verify the frozen
+    // universe here, while a failure can still refuse to start the scheduler
+    // instead of letting a later lookup fall back to the empty state.
+    const auto verified = (*shared)->shared_states->verify_frozen();
+    if (!verified) {
+        return std::unexpected{verified.error()};
+    }
     return scheduler_shared_state{
         .shared = std::shared_ptr<const shared_generator_data>{*shared},
         .first = std::move(*first),
@@ -2016,6 +2023,27 @@ auto square_box(const chunk_pos &center, jint radius) -> chunk_rectangle {
                            .max_z = center.z + radius};
 }
 
+/// Pins one dependency window of the ordered lane while a job reads it. The
+/// shared cache never evicts a pinned position, so a chunk pointer taken from a
+/// `find` stays valid for the whole job even while other workers insert terrain
+/// and the cache evicts to hold its bound.
+class pinned_window {
+  public:
+    pinned_window(proto_chunk_cache &cache, std::vector<chunk_pos> positions)
+        : cache_{cache}, positions_{std::move(positions)} {
+        cache_.pin(positions_);
+    }
+    pinned_window(const pinned_window &) = delete;
+    auto operator=(const pinned_window &) -> pinned_window & = delete;
+    pinned_window(pinned_window &&) = delete;
+    auto operator=(pinned_window &&) -> pinned_window & = delete;
+    ~pinned_window() { cache_.unpin(positions_); }
+
+  private:
+    proto_chunk_cache &cache_;
+    std::vector<chunk_pos> positions_;
+};
+
 } // namespace
 
 void chunk_generator::clear_proto_cache() noexcept {
@@ -2280,6 +2308,10 @@ auto chunk_generator::ensure_structure_pieces(
         }
         entry->structures = true;
     }
+    // A piece wrote into its own chunk, which no longer holds the pure fill.
+    // Mark it written so an eviction cannot drop the piece before the chunk is
+    // decorated.
+    pipeline_cache_->mark_written(positions);
     return {};
 }
 
@@ -2306,7 +2338,10 @@ auto chunk_generator::ensure_decorated(std::span<const chunk_pos> positions,
         for (const auto &position : pending) {
             if (auto *entry = pipeline_cache_->find(position);
                 entry != nullptr) {
-                entry->stage = proto_stage::decorated;
+                // The stage is published through the statistics, so the cache
+                // mutates it under its own mutex instead of through the
+                // unlocked pointer.
+                (void)pipeline_cache_->mark_decorated(position);
                 entry->chunk->set_status(chunk_status::features);
             }
         }
@@ -2345,9 +2380,20 @@ auto chunk_generator::ensure_decorated(std::span<const chunk_pos> positions,
     if (const auto decorated = decorate_chunks(region, targets); !decorated) {
         return std::unexpected{decorated.error()};
     }
+    // A feature writes within one chunk of its target, and the targets are the
+    // three-by-three of this pass, so the whole five-by-five terrain ring `box`
+    // can have received writes. Mark it written: those writes must survive
+    // until the pipeline decorates the entry.
+    std::vector<chunk_pos> written;
+    for (jint x = box.min_x; x <= box.max_x; ++x) {
+        for (jint z = box.min_z; z <= box.max_z; ++z) {
+            written.push_back(chunk_pos{.x = x, .z = z});
+        }
+    }
+    pipeline_cache_->mark_written(written);
     for (const auto &position : pending) {
         if (auto *entry = pipeline_cache_->find(position); entry != nullptr) {
-            entry->stage = proto_stage::decorated;
+            (void)pipeline_cache_->mark_decorated(position);
             entry->chunk->set_status(chunk_status::features);
         }
     }
@@ -2380,7 +2426,9 @@ auto chunk_generator::serve_cached(
                                         reference.chunk_z, reference.count);
     }
     served->set_status(target_status(config_.target));
-    entry->sealed = true;
+    // The served flag is published through the statistics, so the cache mutates
+    // it under its own mutex instead of through the unlocked pointer.
+    (void)pipeline_cache_->seal(pos);
     return served;
 }
 
@@ -2472,6 +2520,7 @@ auto chunk_generator::advance_decorated(const chunk_pos &pos) -> result<void> {
         structure::refresh_chunk_shapes(*entry->chunk, region,
                                         dimension_->states());
         entry->shapes = true;
+        pipeline_cache_->mark_written(std::array<chunk_pos, 1>{pos});
     }
     return ensure_decorated(positions, terrain);
 }
@@ -2617,15 +2666,12 @@ namespace {
 /// Terrain a demand publishes is the five-by-five around it, the dependency
 /// radius of the feature step plus its own read ring.
 constexpr jint scheduler_terrain_radius = 2;
-/// A left-behind terrain entry is evicted only after this many further columns
-/// were served, so the sliding window keeps the fills a decoration pass reads.
-constexpr std::size_t max_retention_columns = 8;
-constexpr std::size_t terrain_chunks_per_column = 25;
 
 /// Terrain fills run ahead of the ordered lane so the decoration steps never
 /// wait for a fill, but not so far that a stale window would be evicted again
-/// before it reaches the lane. The bound is relative to the lane front and the
-/// worker count.
+/// before it reaches the lane. The look-ahead paces the fills against the lane
+/// front; the cache bound is enforced on insertion, so this number never widens
+/// the resident terrain set beyond the configured capacity.
 [[nodiscard]] auto terrain_lookahead(std::size_t frontier,
                                      std::size_t workers) noexcept
     -> std::size_t {
@@ -2665,15 +2711,6 @@ auto chunk_scheduler::create(config settings)
         return std::unexpected{ready.error()};
     }
     return scheduler;
-}
-
-auto chunk_scheduler::retention_columns() const noexcept -> std::size_t {
-    const auto capacity = cache_->capacity();
-    const auto columns = capacity / terrain_chunks_per_column;
-    if (columns == 0) {
-        return 0;
-    }
-    return std::min(max_retention_columns, columns - 1);
 }
 
 auto chunk_scheduler::initialize_shared_state() -> result<void> {
@@ -2879,6 +2916,12 @@ auto chunk_scheduler::run(const pipeline_job &job)
         return std::unique_ptr<proto_chunk>{};
     }
     case pipeline_step::decorated: {
+        // The whole dependency window this step reads and writes is pinned
+        // before the first lookup: the shared cache evicts unpinned terrain
+        // entries when another worker inserts, and an eviction under the
+        // region pointers would be a use after free.
+        const pinned_window pinned{
+            *cache_, square_positions(job.position, scheduler_terrain_radius)};
         if (const auto refilled = refill_terrain(**generator, job.position);
             !refilled) {
             return std::unexpected{refilled.error()};
@@ -2890,6 +2933,8 @@ auto chunk_scheduler::run(const pipeline_job &job)
         return std::unique_ptr<proto_chunk>{};
     }
     case pipeline_step::served: {
+        const pinned_window pinned{*cache_,
+                                   std::vector<chunk_pos>{job.position}};
         return (*generator)->take_served(job.position);
     }
     }
@@ -2925,20 +2970,6 @@ auto chunk_scheduler::refill_terrain(chunk_generator &generator,
     return {};
 }
 
-void chunk_scheduler::evict_old_terrain() {
-    const auto retention = retention_columns();
-    const auto threshold = ordered_front_ > retention
-                               ? ordered_front_ - retention
-                               : std::size_t{0};
-    (void)cache_->evict_terrain_if(
-        [this, threshold](const chunk_pos &position) {
-            const auto owner = terrain_owner_.find(position);
-            // A position without an owner cannot be reproduced from a demand
-            // window, so it is kept.
-            return owner == terrain_owner_.end() || owner->second >= threshold;
-        });
-}
-
 void chunk_scheduler::complete(const pipeline_job &job,
                                const std::string *error_message) {
     const std::lock_guard lock{mutex_};
@@ -2972,7 +3003,6 @@ void chunk_scheduler::complete(const pipeline_job &job,
         if (ordered_front_ < chains_.size()) {
             ++ordered_front_;
         }
-        evict_old_terrain();
     };
     if (job.step == pipeline_step::terrain) {
         const auto found = active_.find(job.demand);
@@ -3024,11 +3054,35 @@ auto chunk_scheduler::stats() const -> chunk_scheduler_stats {
         result.failed = failed_count_;
         result.pending = active_.size();
     }
+    // The cache counters are maintained under the cache mutex, so polling them
+    // while the workers generate is race free. The scheduler mutex is released
+    // first to keep the two locks from being taken in opposite orders.
     const auto cache = cache_->stats();
     result.cache_entries = cache.entries;
     result.cache_terrain_entries = cache.terrain_entries;
+    result.cache_pristine_entries = cache.pristine_entries;
+    result.cache_capacity = cache.capacity;
+    result.cache_peak_entries = cache.peak_entries;
+    result.cache_peak_terrain_entries = cache.peak_terrain_entries;
+    result.cache_peak_pristine_entries = cache.peak_pristine_entries;
     result.cache_evictions = cache.evictions;
+    result.cache_unloads = cache.unloads;
     return result;
+}
+
+auto chunk_scheduler::trim_outside(const chunk_rectangle &window, jint margin)
+    -> std::size_t {
+    if (window.empty()) {
+        return 0;
+    }
+    const chunk_rectangle kept{.min_x = window.min_x - margin,
+                               .min_z = window.min_z - margin,
+                               .max_x = window.max_x + margin,
+                               .max_z = window.max_z + margin};
+    return cache_->unload_if([kept](const chunk_pos &position) {
+        return position.x < kept.min_x || position.x > kept.max_x ||
+               position.z < kept.min_z || position.z > kept.max_z;
+    });
 }
 
 void chunk_scheduler::clear() {
