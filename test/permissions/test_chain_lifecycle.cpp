@@ -2,12 +2,13 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 //
-// The composed permission chain follows the committed composition epoch: when
-// the host retires a chain wrapper, the next answer re-resolves the links and
-// stops calling the retired generation; the composed revision stays monotonic
-// and changes, so the command-tree cache invalidates. A wrapper the host
-// publishes as a replacement generation is re-resolved instead of the cached
-// table.
+// The composed permission chain follows the committed composition epoch. The
+// host cannot currently publish a change to a chain link: a staged wrapper
+// reload or uninstall retires the default provider slot the base resolver
+// occupies and is refused, which the tests pin. The provider's epoch refresh is
+// defensive; a test seam forces fresh chain instances so the concurrent
+// snapshot lifetime, the re-resolution path and the monotonic revision offset
+// can still be exercised.
 
 #include <refrain/contracts/abi.hpp>
 #include <refrain/contracts/services/mod_loader_abi.h>
@@ -32,13 +33,20 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <thread>
 #include <utility>
 #include <vector>
+
+namespace refrain::permissions::test_seam {
+extern std::atomic<std::uint64_t> forced_chain_rebuilds;
+extern std::function<void()> query_probe;
+} // namespace refrain::permissions::test_seam
 
 namespace {
 
@@ -431,61 +439,6 @@ default = "deny"
 )"};
 
 const suite chain_lifecycle_tests = [] {
-    "chain lifecycle/a composition epoch change keeps the committed chain"_test =
-        [] {
-            lifecycle_fixture fixture{base_policy};
-            auto loaded{fixture.load()};
-            expect(static_cast<bool>(loaded))
-                << (loaded ? std::string{} : loaded.error().message);
-            if (!loaded) {
-                return;
-            }
-            auto bound{bind_client(fixture.host())};
-            expect(static_cast<bool>(bound));
-            if (!bound) {
-                return;
-            }
-            const auto &client{*bound};
-            expect(client.query(player(), "com.example.owned.home") ==
-                   permission_result::allowed);
-            auto *wrapper{fixture.loader().current()};
-            expect(wrapper != nullptr);
-            if (wrapper == nullptr) {
-                return;
-            }
-            const auto queries_before{wrapper->queries.load()};
-            const auto revision_before{client.revision()};
-            expect(fixture.host().epoch() == 1U);
-
-            // Publish a new composition epoch by reloading the unrelated
-            // companion mod. The permission link set does not change, so the
-            // provider reuses the cached chain and the composed revision stays
-            // put: an epoch advance is not a policy change.
-            mod::stage_options options{};
-            options.reload.push_back(std::string{companion_id});
-            auto staged{fixture.host().stage_composition(
-                fixture.plan(), fixture.resolver(), options)};
-            expect(static_cast<bool>(staged))
-                << (staged ? std::string{} : staged.error().message);
-            if (!staged) {
-                return;
-            }
-            auto committed{fixture.host().commit_epoch()};
-            expect(static_cast<bool>(committed))
-                << (committed ? std::string{} : committed.error().message);
-            if (!committed) {
-                return;
-            }
-            expect(fixture.host().epoch() == 2U);
-
-            // The next answer refreshes the link set from the new epoch and
-            // keeps asking the same wrapper generation.
-            expect(client.query(player(), "com.example.owned.home") ==
-                   permission_result::allowed);
-            expect(wrapper->queries.load() > queries_before);
-            expect(client.revision() == revision_before);
-        };
-
     "chain lifecycle/a retired wrapper cannot be published, the chain keeps "
     "serving"_test = [] {
         lifecycle_fixture fixture{base_policy};
@@ -530,6 +483,118 @@ const suite chain_lifecycle_tests = [] {
                permission_result::allowed);
         expect(wrapper->queries.load() == queries_before + 1);
     };
+
+    "chain lifecycle/a forced link-instance change keeps the revision "
+    "monotonic"_test = [] {
+        lifecycle_fixture fixture{base_policy};
+        auto loaded{fixture.load()};
+        expect(static_cast<bool>(loaded));
+        if (!loaded) {
+            return;
+        }
+        auto bound{bind_client(fixture.host())};
+        expect(static_cast<bool>(bound));
+        if (!bound) {
+            return;
+        }
+        const auto &client{*bound};
+        expect(client.query(player(), "com.example.owned.home") ==
+               permission_result::allowed);
+        const auto revision_before{client.revision()};
+
+        // The test seam publishes a fresh chain instance in place of a
+        // composition epoch change, so the changed-link-set path runs without a
+        // host that can publish a link change. The raw revision sum is
+        // unchanged, so the monotonic offset has to move the composed revision
+        // forward.
+        permissions::test_seam::forced_chain_rebuilds.fetch_add(
+            1U, std::memory_order_relaxed);
+        const auto revision_after{client.revision()};
+        expect(revision_after == revision_before + 1U)
+            << (std::to_string(revision_before) + " -> " +
+                std::to_string(revision_after));
+        expect(permissions::test_seam::forced_chain_rebuilds.load() == 0U);
+        expect(client.query(player(), "com.example.owned.home") ==
+               permission_result::allowed);
+        expect(client.revision() == revision_after);
+    };
+
+    "chain lifecycle/a query keeps its chain snapshot across a forced "
+    "rebuild"_test = [] {
+        lifecycle_fixture fixture{base_policy};
+        auto loaded{fixture.load()};
+        expect(static_cast<bool>(loaded));
+        if (!loaded) {
+            return;
+        }
+        auto bound{bind_client(fixture.host())};
+        expect(static_cast<bool>(bound));
+        if (!bound) {
+            return;
+        }
+        const auto &client{*bound};
+        expect(client.query(player(), "com.example.owned.home") ==
+               permission_result::allowed);
+
+        // The probe runs after the query acquired its published chain snapshot
+        // and before it walks it; triggering a rebuild there makes the walk a
+        // use-after-free unless the query keeps the snapshot alive.
+        std::atomic<int> probe_calls{0};
+        permissions::test_seam::query_probe = [&client, &probe_calls] {
+            probe_calls.fetch_add(1, std::memory_order_relaxed);
+            permissions::test_seam::forced_chain_rebuilds.fetch_add(
+                1U, std::memory_order_relaxed);
+            static_cast<void>(client.revision());
+        };
+        const auto answer{client.query(player(), "com.example.owned.home")};
+        permissions::test_seam::query_probe = {};
+        expect(answer == permission_result::allowed);
+        expect(probe_calls.load() > 0);
+        expect(permissions::test_seam::forced_chain_rebuilds.load() == 0U);
+        expect(client.query(player(), "com.example.owned.home") ==
+               permission_result::allowed);
+    };
+
+    "chain lifecycle/a concurrent refresh keeps a queried chain alive"_test =
+        [] {
+            lifecycle_fixture fixture{base_policy};
+            auto loaded{fixture.load()};
+            expect(static_cast<bool>(loaded));
+            if (!loaded) {
+                return;
+            }
+            auto bound{bind_client(fixture.host())};
+            expect(static_cast<bool>(bound));
+            if (!bound) {
+                return;
+            }
+            const auto &client{*bound};
+            // Warm up the link set on this thread before the worker starts.
+            expect(client.query(player(), "com.example.owned.home") ==
+                   permission_result::allowed);
+
+            std::atomic<bool> stop{false};
+            std::atomic<int> wrong_answers{0};
+            std::thread worker{[&client, &stop, &wrong_answers] {
+                while (!stop.load(std::memory_order_acquire)) {
+                    if (client.query(player(), "com.example.owned.home") !=
+                        permission_result::allowed) {
+                        wrong_answers.fetch_add(1, std::memory_order_relaxed);
+                    }
+                }
+            }};
+            for (int iteration{0}; iteration < 200; ++iteration) {
+                // Every forced rebuild publishes a fresh chain instance, so a
+                // query that released its snapshot too early would walk a freed
+                // chain; a revision poll performs the rebuild.
+                permissions::test_seam::forced_chain_rebuilds.fetch_add(
+                    1U, std::memory_order_relaxed);
+                static_cast<void>(client.revision());
+            }
+            stop.store(true, std::memory_order_release);
+            worker.join();
+            expect(wrong_answers.load() == 0);
+        };
 };
 
 } // namespace

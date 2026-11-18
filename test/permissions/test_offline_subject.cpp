@@ -18,6 +18,7 @@
 
 #include <boost/ut.hpp>
 
+#include <algorithm>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -251,6 +252,33 @@ const suite offline_subject_tests = [] {
             report = fixture.run(check_tokens);
             expect(has_line(report.lines, "denied")) << report.error;
         };
+
+    "offline subject/a revoke prefers a legacy literal name key over the "
+    "canonical uuid"_test = [] {
+        constexpr std::string_view legacy_policy{R"(
+[grants]
+"player:Alice" = ["refrain.command.teleport"]
+)"};
+        // Offline mode with a profile service: the subject resolves to the
+        // account uuid, but the legacy rule lives under the literal name key
+        // and must still be removable.
+        subject_fixture fixture{legacy_policy, true, false};
+        expect(fixture.profile_lookup_installed);
+        const std::string_view revoke_tokens[]{"revoke", "player:Alice",
+                                               "refrain.command.teleport"};
+        const auto report{fixture.run(revoke_tokens)};
+        expect(report.ok) << report.error;
+        expect(has_line(report.lines, "revoked"));
+        expect(has_line(report.lines, "player:Alice"));
+        expect(fixture.audit.size() == 1U);
+        if (fixture.audit.size() == 1U) {
+            expect(fixture.audit.front().subject == "player:Alice");
+        }
+        const std::string_view check_tokens[]{"check", "player:Alice",
+                                              "refrain.command.teleport"};
+        const auto checked{fixture.run(check_tokens)};
+        expect(has_line(checked.lines, "denied")) << checked.error;
+    };
 
     "offline subject/without a profile service a bare name stays unknown"_test =
         [] {

@@ -490,13 +490,14 @@ revision is the base revision plus every wrapper revision, so a change in a
 wrapper invalidates the command tree exactly like a policy change, and
 `permissions reload` reloads the base and every wrapper. A wrapper the
 gamepack names but the host did not register fails composition, so the running
-server always has a complete chain. A running composition refreshes the chain
-when the committed composition epoch changes: a wrapper the host retires stops
-being asked at the next revision poll, and the composed revision moves with the
-link-set change so the command tree is resent. The declared wrapper list itself
-is read on the first answer after startup, so adding or removing an entry in
-the gamepack binding needs a restart; uninstalling a wrapper package at runtime
-is picked up by the refresh.
+server always has a complete chain. A running composition cannot change a chain
+link yet: a staged wrapper reload or uninstall is refused because the wrapper's
+provider slot is the default instance the base resolver occupies, so changing
+the wrapper set is a restart-level change. The provider does refresh its link
+set when the committed composition epoch changes and drops a wrapper the
+registry no longer holds; that path keeps the served chain consistent once a
+host can publish such a change, and the declared wrapper list is read on the
+first answer after startup.
 
 The service publishes a monotonic revision for caches. The administration
 commands below re-read the file or change one rule at runtime, and every policy
@@ -530,7 +531,8 @@ mutable name; a name that resolves through the offline profile does not
 authenticate anything, it only names the account a change targets. `grant`
 refuses a subject whose name does not resolve to an account, so a new rule never
 targets a mutable profile name; `revoke` still accepts the literal
-`player:<profile name>` key so a legacy name-keyed rule can be removed. An
+`player:<profile name>` key, and prefers it when the policy holds one, so a
+legacy name-keyed rule can be removed. An
 online-mode server cannot map a name to an account without the account, so a
 player who is not online is addressed by `player:<uuid>` there, and an unknown
 bare name is an error. A `<node>` is a rule: a concrete node, a namespace

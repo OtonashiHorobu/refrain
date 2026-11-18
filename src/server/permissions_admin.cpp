@@ -99,6 +99,21 @@ struct resolved_subject {
     return state.find_profile(name);
 }
 
+/// The literal configured player key an operator typed, or empty when the word
+/// names another subject kind (or console). A revoke looks this key up first so
+/// a legacy name-keyed rule can be removed even when the name also resolves to
+/// an account uuid.
+[[nodiscard]] auto literal_player_key(std::string_view text) -> std::string {
+    if (text.empty() || text == "console") {
+        return {};
+    }
+    if (const auto colon{text.find(':')}; colon != std::string_view::npos) {
+        return text.substr(0, colon) == "player" ? std::string{text}
+                                                 : std::string{};
+    }
+    return fmt::format("player:{}", text);
+}
+
 /// The context a query for this subject carries. Only a live session knows the
 /// world and game mode; a resolved offline profile has no context.
 [[nodiscard]] auto query_context(const resolved_subject &subject) noexcept
@@ -479,8 +494,23 @@ void write_audit(const permissions_admin_state &state,
         return finish("failed", "no permission administration surface",
                       current_revision(state));
     }
+    std::string change_key{subject->key};
+    if (!add) {
+        // A revoke prefers the key the operator literally named: a legacy
+        // name-keyed rule is not reachable through the canonical uuid form.
+        const auto literal{literal_player_key(tokens[1])};
+        if (!literal.empty()) {
+            const auto snapshot{state.admin->snapshot()};
+            if (snapshot.value.subjects.find(literal) !=
+                snapshot.value.subjects.end()) {
+                change_key = literal;
+                subject->display = change_key;
+            }
+        }
+    }
+    audit.subject = change_key;
     auto change{add ? state.admin->grant(subject->key, audit.node)
-                    : state.admin->revoke(subject->key, audit.node)};
+                    : state.admin->revoke(change_key, audit.node)};
     if (!change) {
         report.ok = false;
         report.error = change.error().message;

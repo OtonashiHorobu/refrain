@@ -65,6 +65,7 @@
 #include <atomic>
 #include <cstdint>
 #include <expected>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -72,6 +73,22 @@
 #include <string_view>
 #include <utility>
 #include <vector>
+
+namespace refrain::permissions::test_seam {
+
+/// Test-only seam. A test increments this counter to make the next chain
+/// refresh publish a fresh chain instance even though the configured link set
+/// did not change. It lets the snapshot lifetime and the monotonic revision be
+/// stressed without a host that can publish a link change; production code
+/// never touches it.
+std::atomic<std::uint64_t> forced_chain_rebuilds{0};
+
+/// Test-only seam. When set, `query()` calls it after acquiring the published
+/// chain snapshot and before walking it. A test sets it to force the snapshot
+/// to be replaced at exactly that point; production code never touches it.
+std::function<void()> query_probe{};
+
+} // namespace refrain::permissions::test_seam
 
 namespace {
 
@@ -233,7 +250,14 @@ class provider_impl final : public permissions::admin {
         if (!valid_query(value)) {
             return permission_result::denied;
         }
-        return current_chain().query(*value);
+        // Keep the snapshot alive for the walk: a concurrent epoch refresh may
+        // publish a new state and drop the last reference to this chain after
+        // the walk starts.
+        const auto state{current_chain_state()};
+        if (permissions::test_seam::query_probe) {
+            permissions::test_seam::query_probe();
+        }
+        return state->chain->query(*value);
     }
 
     /// Answer the way the base resolver answers alone, ignoring wrapper grants.
@@ -254,7 +278,8 @@ class provider_impl final : public permissions::admin {
     /// and the link-set changes. A cache keyed by it invalidates on a policy
     /// change, a wrapper change and a wrapper removal alike.
     [[nodiscard]] auto revision() const -> std::uint64_t {
-        return composed_revision(*current_chain_state());
+        const auto state{current_chain_state()};
+        return composed_revision(*state);
     }
 
     /// Reload the composed chain: the base policy first, then the wrappers.
@@ -531,7 +556,8 @@ class provider_impl final : public permissions::admin {
     /// increasing even when the raw sum drops (a retired wrapper carried
     /// revision too). An unchanged link set keeps the previous chain, so an
     /// epoch advance caused by an unrelated mod does not invalidate caches.
-    [[nodiscard]] auto rebuild_chain(std::uint64_t epoch) const
+    [[nodiscard]] auto rebuild_chain(std::uint64_t epoch,
+                                     bool forced_instance) const
         -> std::shared_ptr<const chain_state> {
         const auto previous{chain_.load(std::memory_order_acquire)};
         const auto previous_revision{previous != nullptr
@@ -562,7 +588,8 @@ class provider_impl final : public permissions::admin {
         }
         auto chain{std::make_shared<const permissions::provider_chain>(
             std::move(*composed))};
-        if (previous != nullptr && same_links(*previous->chain, *chain)) {
+        if (!forced_instance && previous != nullptr &&
+            same_links(*previous->chain, *chain)) {
             return std::make_shared<const chain_state>(chain_state{
                 .epoch = epoch,
                 .revision_offset = previous->revision_offset,
@@ -572,10 +599,13 @@ class provider_impl final : public permissions::admin {
         const auto raw{chain->revision()};
         const auto offset{previous_revision >= raw ? previous_revision + 1 - raw
                                                    : std::uint64_t{0}};
-        log_permissions.info(
-            "composed the permission chain at composition epoch {} with {} "
-            "before the base resolver",
-            epoch, count_noun(chain->wrappers().size(), "wrapper", "wrappers"));
+        if (!forced_instance) {
+            log_permissions.info(
+                "composed the permission chain at composition epoch {} with {} "
+                "before the base resolver",
+                epoch,
+                count_noun(chain->wrappers().size(), "wrapper", "wrappers"));
+        }
         return std::make_shared<const chain_state>(chain_state{
             .epoch = epoch,
             .revision_offset = offset,
@@ -595,26 +625,45 @@ class provider_impl final : public permissions::admin {
             return fallback_state_;
         }
         const auto epoch{host_->services().epoch()};
-        if (auto published = chain_.load(std::memory_order_acquire);
-            published != nullptr && published->epoch == epoch) {
-            return published;
+        // The test seam stands in for a composition epoch change: it forces a
+        // fresh chain instance even when no provider slot changed, so the
+        // snapshot lifetime and the monotonic revision can be exercised without
+        // a host that can publish a link change. Production never sets it.
+        const auto forced_instance{consume_forced_rebuild()};
+        if (!forced_instance) {
+            if (auto published = chain_.load(std::memory_order_acquire);
+                published != nullptr && published->epoch == epoch) {
+                return published;
+            }
         }
-        if (epoch == 0) {
+        if (epoch == 0 && !forced_instance) {
             return fallback_state_;
         }
         const std::lock_guard lock{chain_mutex_};
-        if (auto published = chain_.load(std::memory_order_acquire);
-            published != nullptr && published->epoch == epoch) {
-            return published;
+        if (!forced_instance) {
+            if (auto published = chain_.load(std::memory_order_acquire);
+                published != nullptr && published->epoch == epoch) {
+                return published;
+            }
         }
-        auto rebuilt{rebuild_chain(epoch)};
+        auto rebuilt{rebuild_chain(epoch, forced_instance)};
         chain_.store(rebuilt, std::memory_order_release);
         return rebuilt;
     }
 
-    [[nodiscard]] auto current_chain() const
-        -> const permissions::provider_chain & {
-        return *current_chain_state()->chain;
+    /// Consume one forced chain rebuild requested by a test. The
+    /// compare-exchange makes the decrement exact when query threads race the
+    /// test driver for the same request.
+    [[nodiscard]] static auto consume_forced_rebuild() noexcept -> bool {
+        auto &counter{permissions::test_seam::forced_chain_rebuilds};
+        auto expected{counter.load(std::memory_order_relaxed)};
+        while (expected != 0U) {
+            if (counter.compare_exchange_weak(expected, expected - 1U,
+                                              std::memory_order_relaxed)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /// Facade revision of one published link set: the chain's raw sum plus the
