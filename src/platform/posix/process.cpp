@@ -336,6 +336,16 @@ auto unset_environment_variable(std::string_view name) -> status {
     return status_ok();
 }
 
+auto stderr_is_terminal() noexcept -> bool {
+    return ::isatty(STDERR_FILENO) != 0;
+}
+
+auto set_stderr_binary_mode() noexcept -> bool {
+    // POSIX streams do not translate line endings, so a redirected ANSI
+    // capture is already byte-exact.
+    return true;
+}
+
 void trigger_segmentation_fault() noexcept {
     // Genuine null dereference inside the platform layer: the compiler is not
     // allowed to optimize it away, and any installed fault handler sees a real

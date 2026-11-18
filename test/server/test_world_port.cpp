@@ -1597,7 +1597,6 @@ const refrain_services_storage_vtable recording_storage_vtable{
         cfg.console_level = refrain::log::level::off;
         cfg.file_path = log_path.string();
         cfg.file_level = refrain::log::level::info;
-        cfg.enable_colors = false;
         expect(static_cast<bool>(refrain::log::init(cfg)));
 
         server::server_run_options options{};
@@ -1648,7 +1647,6 @@ const refrain_services_storage_vtable recording_storage_vtable{
         cfg.console_level = refrain::log::level::off;
         cfg.file_path = log_path.string();
         cfg.file_level = refrain::log::level::info;
-        cfg.enable_colors = false;
         expect(static_cast<bool>(refrain::log::init(cfg)));
 
         server::server_run_options options{};
@@ -2114,7 +2112,6 @@ const refrain_services_storage_vtable recording_storage_vtable{
         cfg.console_level = refrain::log::level::off;
         cfg.file_path = log_path.string();
         cfg.file_level = refrain::log::level::info;
-        cfg.enable_colors = false;
         expect(static_cast<bool>(refrain::log::init(cfg)));
 
         server::server_run_options options{};

@@ -1173,6 +1173,27 @@ the oldest out. The first start creates `logs/`, and a start where it cannot be
 created continues with console logging only and says why; startup never fails
 because of a diagnostic sink.
 
+### Console colour
+
+The console colours the level field only, and only when that is useful. The
+default mode is `auto`: stderr is coloured when it is an interactive terminal
+and stays plain when it is redirected to a file, a pipe or CI. The log file
+never contains escape sequences, and a captured console stream keeps the same
+line shape as plain output.
+
+The `REFRAIN_COLOR` environment variable overrides the mode with `auto`,
+`always` or `never`; an unknown or empty value is ignored. `NO_COLOR` disables
+colour inside the automatic mode when it holds any non-empty value. It does not
+override an explicit `always`, because a caller that asks for colour on a
+redirected stream wants the escape sequences in that stream:
+
+```bash
+REFRAIN_COLOR=always ./refrain-server ... 2> server.log   # escapes in the file
+NO_COLOR=1 ./refrain-server ...                           # plain auto output
+```
+
+### Crash reporting
+
 Crash reporting is also on by default. The local crash database is `crash/`
 under the working directory; `--crash-dir <dir>` overrides the location. Crash
 dumps and their metadata stay local. When the build enables Crashpad, the

@@ -422,7 +422,6 @@ struct log_capture {
         settings.console_level = refrain::log::level::off;
         settings.file_path = path.string();
         settings.file_level = refrain::log::level::info;
-        settings.enable_colors = false;
         expect(static_cast<bool>(refrain::log::init(settings)))
             << "log init failed";
         running = true;

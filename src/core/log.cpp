@@ -4,12 +4,14 @@
 
 #include <refrain/core/log.hpp>
 
+#include <refrain/platform/process.hpp>
 #include <refrain/platform/thread.hpp>
 
 #include <spdlog/async.h>
 #include <spdlog/async_logger.h>
 #include <spdlog/details/fmt_helper.h>
 #include <spdlog/pattern_formatter.h>
+#include <spdlog/sinks/ansicolor_sink.h>
 #include <spdlog/sinks/rotating_file_sink.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
 #include <spdlog/sinks/stdout_sinks.h>
@@ -18,12 +20,14 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <ctime>
 #include <exception>
 #include <filesystem>
 #include <memory>
 #include <mutex>
 #include <new>
+#include <optional>
 #include <shared_mutex>
 #include <string>
 #include <string_view>
@@ -36,8 +40,10 @@ namespace {
 
 // Vanilla-shaped console line (`[13:10:52] [worker-0/info]: message`). The
 // level is lowercase because spdlog's `%l` is lowercase; `%N` is the project
-// thread-name flag (falls back to `t<tid>` for unnamed threads).
-constexpr auto console_pattern = "[%H:%M:%S] [%N/%l] %v";
+// thread-name flag (falls back to `t<tid>` for unnamed threads). `%^`/`%$`
+// delimit the colour range: only the level is coloured, and a sink that does
+// not colour emits nothing for the markers.
+constexpr auto console_pattern_text = "[%H:%M:%S] [%N/%^%l%$] %v";
 // Files keep the same fields but add an ISO-8601 date and UTC offset so logs
 // from different days/hosts remain sortable and unambiguous.
 constexpr auto file_pattern = "[%Y-%m-%dT%H:%M:%S.%e%z] [%N/%l] %v";
@@ -104,6 +110,97 @@ void apply_pattern(const spdlog::sink_ptr &sink, std::string_view pattern) {
     sink->set_formatter(std::move(formatter));
 }
 
+/// Case-insensitive compare for the fixed vocabulary of the colour
+/// environment override. ASCII only, so the result never depends on the
+/// process locale.
+[[nodiscard]] auto
+equals_ascii_case_insensitive(std::string_view left,
+                              std::string_view right) noexcept -> bool {
+    if (left.size() != right.size()) {
+        return false;
+    }
+    for (std::size_t index = 0; index < left.size(); ++index) {
+        const auto value = static_cast<unsigned char>(left[index]);
+        const auto lowered =
+            value >= 'A' && value <= 'Z'
+                ? static_cast<char>(value +
+                                    static_cast<unsigned char>('a' - 'A'))
+                : static_cast<char>(value);
+        if (lowered != right[index]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+[[nodiscard]] auto color_mode_from_string(std::string_view name) noexcept
+    -> std::optional<color_mode> {
+    if (equals_ascii_case_insensitive(name, "auto")) {
+        return color_mode::automatic;
+    }
+    if (equals_ascii_case_insensitive(name, "always")) {
+        return color_mode::always;
+    }
+    if (equals_ascii_case_insensitive(name, "never")) {
+        return color_mode::never;
+    }
+    return std::nullopt;
+}
+
+/// `NO_COLOR` follows https://no-color.org: any non-empty value disables the
+/// automatic colour choice. An empty value counts as unset.
+[[nodiscard]] auto no_color_requested() noexcept -> bool {
+    const char *value{std::getenv("NO_COLOR")};
+    return value != nullptr && *value != '\0';
+}
+
+/// `REFRAIN_COLOR` is the operator override. An empty or unknown value is
+/// ignored so a typo cannot silently remove colour from a terminal or force it
+/// into a pipe.
+[[nodiscard]] auto color_override() noexcept -> std::optional<color_mode> {
+    const char *value{std::getenv("REFRAIN_COLOR")};
+    if (value == nullptr) {
+        return std::nullopt;
+    }
+    return color_mode_from_string(value);
+}
+
+/// Console sink for a resolved colour decision. A terminal uses the platform
+/// console colour sink, which writes ANSI escapes on POSIX and console
+/// attributes on Windows. The Windows console sink cannot write to a
+/// redirected handle, so a forced colour into a redirect keeps the escapes
+/// through the ANSI sink; on POSIX both choices are the same ANSI sink.
+[[nodiscard]] auto make_color_console_sink(bool stderr_terminal)
+    -> spdlog::sink_ptr {
+    if (!stderr_terminal) {
+        // A redirected stream takes the ANSI sink, which writes through
+        // `FILE*`. On Windows that stream is in text mode and would translate
+        // the already-CRLF line ending into CRCRLF, so the platform helper
+        // switches it to byte-exact mode first; POSIX needs no change.
+        static_cast<void>(platform::set_stderr_binary_mode());
+        return std::make_shared<spdlog::sinks::ansicolor_stderr_sink_mt>(
+            spdlog::color_mode::always);
+    }
+    return std::make_shared<spdlog::sinks::stderr_color_sink_mt>(
+        spdlog::color_mode::always);
+}
+
+/// Resolve the configured policy for this process and stream. The environment
+/// override wins over the configured mode; `NO_COLOR` only takes part in the
+/// automatic choice.
+[[nodiscard]] auto resolve_console_color(const config &cfg,
+                                         bool stderr_terminal) noexcept
+    -> bool {
+    const auto mode{color_override().value_or(cfg.console_color)};
+    if (mode == color_mode::never) {
+        return false;
+    }
+    if (mode == color_mode::always) {
+        return true;
+    }
+    return console_color_enabled(mode, stderr_terminal, no_color_requested());
+}
+
 [[nodiscard]] auto to_spdlog(level lvl) noexcept -> spdlog::level::level_enum {
     switch (lvl) {
     case level::trace:
@@ -165,6 +262,19 @@ void rollback_failed_init() noexcept {
 }
 
 } // namespace
+
+auto console_color_enabled(color_mode mode, bool stderr_terminal,
+                           bool no_color) noexcept -> bool {
+    switch (mode) {
+    case color_mode::automatic:
+        return stderr_terminal && !no_color;
+    case color_mode::always:
+        return true;
+    case color_mode::never:
+        return false;
+    }
+    return false;
+}
 
 auto to_string(level lvl) noexcept -> std::string_view {
     switch (lvl) {
@@ -234,20 +344,17 @@ auto init(const config &cfg) noexcept -> status {
             // CI and parsed by scripts), so a log line on stdout corrupts the
             // machine-readable stream. `stdout_color_sinks.h`/`stdout_sinks.h`
             // are the spdlog headers that also declare the `stderr_*` aliases.
-            if (cfg.enable_colors) {
-                auto sink =
-                    std::make_shared<spdlog::sinks::stderr_color_sink_mt>();
-                apply_pattern(sink, console_pattern);
-                sink->set_level(to_spdlog(cfg.console_level));
-                sinks.push_back(sink);
-                g_console_sink = sink;
+            const bool stderr_terminal{platform::stderr_is_terminal()};
+            spdlog::sink_ptr sink{};
+            if (resolve_console_color(cfg, stderr_terminal)) {
+                sink = make_color_console_sink(stderr_terminal);
             } else {
-                auto sink = std::make_shared<spdlog::sinks::stderr_sink_mt>();
-                apply_pattern(sink, console_pattern);
-                sink->set_level(to_spdlog(cfg.console_level));
-                sinks.push_back(sink);
-                g_console_sink = sink;
+                sink = std::make_shared<spdlog::sinks::stderr_sink_mt>();
             }
+            apply_pattern(sink, console_pattern_text);
+            sink->set_level(to_spdlog(cfg.console_level));
+            sinks.push_back(sink);
+            g_console_sink = sink;
             g_has_console_sink.store(true, std::memory_order_relaxed);
         }
 
