@@ -12,6 +12,7 @@
 #include <boost/ut.hpp>
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <string>
@@ -317,6 +318,42 @@ suite<"worldgen/block-state-registry"> block_state_registry_tests = [] {
         expect(custom != surface::no_state);
         expect(registry->find("minecraft:test_custom").has_value());
     };
+
+    "a table at the id limit refuses another state"_test = [] {
+        block_state_registry registry;
+        const auto air = registry.intern("minecraft:air", state_traits{});
+        expect(air.has_value());
+        if (!air) {
+            return;
+        }
+        expect(*air == 0);
+        // A state's id is its index in the table and the state type keeps its
+        // maximum value as `no_block_state`, so ids 0 through
+        // `no_block_state - 1` fill the table. The append guard must refuse
+        // the next state instead of assigning an index the type cannot hold.
+        for (std::size_t index = 1; index < no_block_state; ++index) {
+            std::string key{"minecraft:test_state_"};
+            key += std::to_string(index);
+            const auto id = registry.intern(key, state_traits{});
+            expect(id.has_value() && *id == static_cast<block_state_id>(index))
+                << "the table refused state index " << index;
+            if (!id) {
+                return;
+            }
+        }
+        expect(registry.size() == no_block_state);
+        const auto overflow =
+            registry.intern("minecraft:test_state_overflow", state_traits{});
+        expect(!overflow.has_value());
+        if (!overflow) {
+            expect(overflow.error().code == refrain::error_code::out_of_memory);
+        }
+        // The frozen table still resolves every id it holds.
+        registry.freeze();
+        const auto verified = registry.verify_frozen();
+        expect(verified.has_value())
+            << (verified ? "" : verified.error().message);
+    };
 };
 
 suite<"worldgen/shared-block-state-registry">
@@ -349,7 +386,8 @@ suite<"worldgen/shared-block-state-registry">
                 // The id of a key is a function of the content table, not of
                 // the order a worker happens to ask for it.
                 expect(first->size() == second->size());
-                for (block_state_id id = 0; id < first->size(); ++id) {
+                for (std::size_t index = 0; index < first->size(); ++index) {
+                    const auto id = static_cast<block_state_id>(index);
                     expect(first->name(id) == second->name(id));
                     expect(first->traits(id).air == second->traits(id).air);
                     expect(first->traits(id).fluid == second->traits(id).fluid);
