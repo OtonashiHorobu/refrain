@@ -173,10 +173,15 @@ declarations are required and both are validated before any guest code runs:
    ```
 
    ```cpp
-   // static or dynamic native mod factory
+   // static mod factory; the loader table is the provider's own vtable
    auto on_load(refrain::mod::host &host) -> refrain::status {
+       const refrain::mod::provider_api api{
+           .vtable = &loader_vtable,
+           .self = &loader_state,
+           .abi_major = REFRAIN_SERVICES_MOD_LOADER_ABI_MAJOR,
+       };
        return host.register_provider("refrain:mod.loader", "com.example.loader",
-                                     loader_api());
+                                     api);
    }
    ```
 
@@ -394,6 +399,7 @@ auto_scan = false
 list = [
     "refrain.data.vanilla@1.0.0",
     "refrain.world.vanilla@1.0.0",
+    "com.example.scripts@1.0.0",
 ]
 
 [mods."refrain.data.vanilla"]
