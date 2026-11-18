@@ -465,6 +465,82 @@ only equals the single-chunk reference when a fixed biome makes the ring order
 irrelevant; the natural-biome edge difference is pinned by a regression test as
 a known property of that staging.
 
+## Acceptance
+
+The production tile path is accepted on a dedicated 12-thread x86-64 machine
+(six physical cores, AVX-512) with a Release build at `x86-64-v4`, link-time
+optimisation enabled and the CPU governor fixed at `performance`.
+[Building](building.md#benchmarks) documents the remote benchmark target and
+its host lock, which keeps runs from overlapping. The runs use the generated
+datapack without an extracted template cache, so template-backed structure
+pieces are not placed in the full-target numbers.
+
+The runtime generates tiles: a `chunk_generation` worker produces one whole
+`tile_size` tile for the columns the runtime needs, and
+`refrain-bench-runtime --tiles` measures the same entry point. A request smaller
+than one tile still generates the whole 8x8 square, so its throughput counts
+the requested chunks, not the 64 generated; a 64-chunk request is exactly one
+tile. Throughput and scaling for the full target over 16 independent tiles
+(1024 chunks), median of five repeats:
+
+| workers | chunks/s | chunks/s per worker | speed-up |
+|---:|---:|---:|---:|
+| 1 | 52.1 | 52.1 | 1.00x |
+| 4 | 179.5 | 44.9 | 3.44x |
+| 8 | 216.5 | 27.1 | 4.15x |
+
+One tile (64 chunks) generates at 52.5 chunks/s on one worker, consistent with
+the per-worker figure over 16 tiles; the terrain target reaches 143.9 chunks/s
+per worker. Every configuration stays above the 20 chunks/s per worker budget.
+The eight-worker run scales sublinearly because the machine has six physical
+cores, and a request below one tile cannot use more than one worker at all.
+Peak resident set reached 85.5 MiB in the single-tile runs and 566 MiB in the
+16-tile run at eight workers.
+
+```bash
+REFRAIN_BENCH_HOST=user@host REFRAIN_BENCH_SSH_KEY=<key> \
+REFRAIN_BENCH_ARCH=x86-64-v4 REFRAIN_BENCH_REQUIRE=1 \
+scripts/dev/bench-remote.sh --tiles --targets full \
+    --chunks 1024 --workers 1,4,8 --repeat 5
+```
+
+The chunk digests are equal at one and eight workers, for fixed and natural
+biomes, and repeated runs agree. `--chunk-hash` hashes the first worker count of
+the list, so the gate is one invocation per worker count:
+
+| workload | chunks | one worker | eight workers |
+|---|---:|---|---|
+| full, fixed biome | 64 | `df152fcd8fe1fe47` | `df152fcd8fe1fe47` |
+| full, fixed biome | 1024 | `ec7c731572980cf0` | `ec7c731572980cf0` |
+| full, natural biome | 1024 | `5af78bada48fcc9e` | `5af78bada48fcc9e` |
+
+```bash
+REFRAIN_BENCH_HOST=user@host REFRAIN_BENCH_SSH_KEY=<key> \
+REFRAIN_BENCH_ARCH=x86-64-v4 REFRAIN_BENCH_REQUIRE=1 \
+scripts/dev/bench-remote.sh --tiles --chunk-hash --targets full \
+    --chunks 1024 --workers 1
+```
+
+The natural-biome case is the one the runtime generates with; the opt-in
+scheduler has its own digest gate.
+
+A fresh world fills its spawn area (49 chunks) before the listener accepts
+joins, and the tick loop then generates the viewports of the joining clients.
+Three runs of 20 clients at a view distance of six, over 60 seconds each,
+measured a tick-work average of 2.06-2.11 ms, p99 of 35.5-36.9 ms and a maximum
+of 45.2-46.9 ms against the 50 ms budget, with no missed ticks in 1280 ticks per
+run. The spawn fill runs before the first tick, so the budget is met by the tick
+loop of the same fresh-world run while the viewport fills.
+
+```bash
+REFRAIN_BIN=<bench build>/bin scripts/soak.sh --fresh --seed 99 \
+    --bots 20 --seconds 60 --view-distance 6 --p99-ms 50
+```
+
+`--p99-ms 50` sets the harness gate to the tick budget; `soak.sh` otherwise
+exits nonzero on its stricter join-path default of 15 ms, which this
+fresh-world load exceeds without missing a tick.
+
 ## Density sampling
 
 The final density contains the two sampling layers the documents declare. An
