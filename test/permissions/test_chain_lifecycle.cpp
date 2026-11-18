@@ -2,13 +2,13 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 //
-// The composed permission chain follows the committed composition epoch. The
-// host cannot currently publish a change to a chain link: a staged wrapper
-// reload or uninstall retires the default provider slot the base resolver
-// occupies and is refused, which the tests pin. The provider's epoch refresh is
-// defensive; a test seam forces fresh chain instances so the concurrent
-// snapshot lifetime, the re-resolution path and the monotonic revision offset
-// can still be exercised.
+// The composed permission chain follows the committed composition epoch. A
+// wrapper occupies its own `chain:<position>` registry slot, so a staged reload
+// or uninstall of the wrapper never touches the base resolver's default slot:
+// the composed chain applies at the commit and the previous chain answers until
+// then. A query holds a registry lease for every wrapper link for the duration
+// of one walk, so a commit that retires a wrapper drains the walk first instead
+// of freeing the table underneath it.
 
 #include <refrain/contracts/abi.hpp>
 #include <refrain/contracts/services/mod_loader_abi.h>
@@ -32,7 +32,6 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
-#include <fstream>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -55,16 +54,28 @@ using namespace boost::ut;
 namespace config = refrain::core::config;
 namespace data = refrain::data;
 namespace io = refrain::core::io;
+namespace kernel = refrain::kernel;
 namespace mod = refrain::mod;
 namespace permissions = refrain::permissions;
+using refrain::error_code;
 
 using refrain::services::permissions::permission_result;
 
 constexpr std::string_view player_uuid{"069a79f4-44e9-4726-a5be-fca90e38aaf5"};
 constexpr std::string_view player_name{"Notch"};
 constexpr std::string_view wrapper_id{"refrain.test.permissions_wrapper"};
+constexpr std::string_view wrapper2_id{"refrain.test.permissions_wrapper2"};
 constexpr std::string_view clean_loader_id{"com.example.clean"};
 constexpr std::string_view companion_id{"refrain.test.permissions_companion"};
+constexpr std::string_view owned_home{"com.example.owned.home"};
+constexpr std::string_view owned_second{"com.example.owned.second"};
+constexpr std::string_view owned_outer{"com.example.owned.outer"};
+
+/// Signal used by the concurrent-commit test to hold one wrapper query inside
+/// the table while another thread commits the composition epoch.
+std::atomic<bool> g_block_wrapper_query{false};
+std::atomic<bool> g_wrapper_query_entered{false};
+std::atomic<bool> g_release_wrapper_query{false};
 
 /// One wrapper generation. The loader keeps every generation alive so the test
 /// observes a stale call as an answer instead of a dangling pointer.
@@ -72,7 +83,11 @@ struct wrapper_generation {
     int generation{1};
     std::atomic<int> queries{0};
     std::uint64_t revision{5};
-    bool reload_succeeds{true};
+    /// The node this generation decides; every other node is forwarded to the
+    /// base resolver.
+    std::string owned_node{owned_home};
+    /// The decision for `owned_node`: allowed, denied or not-handled.
+    permission_result owned_result{permission_result::allowed};
 };
 
 auto wrapper_query(void *self,
@@ -80,12 +95,19 @@ auto wrapper_query(void *self,
     -> refrain_services_permissions_permission_result {
     auto &generation{*static_cast<wrapper_generation *>(self)};
     generation.queries.fetch_add(1, std::memory_order_relaxed);
+    if (g_block_wrapper_query.load(std::memory_order_acquire)) {
+        g_wrapper_query_entered.store(true, std::memory_order_release);
+        while (!g_release_wrapper_query.load(std::memory_order_acquire)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds{1});
+        }
+    }
     if (query == nullptr) {
         return REFRAIN_SERVICES_PERMISSIONS_PERMISSION_RESULT_DENIED;
     }
     const auto node{refrain::contracts::as_string_view(query->node)};
-    if (node == "com.example.owned.home") {
-        return REFRAIN_SERVICES_PERMISSIONS_PERMISSION_RESULT_ALLOWED;
+    if (!generation.owned_node.empty() && node == generation.owned_node) {
+        return static_cast<refrain_services_permissions_permission_result>(
+            generation.owned_result);
     }
     return REFRAIN_SERVICES_PERMISSIONS_PERMISSION_RESULT_NOT_HANDLED;
 }
@@ -105,9 +127,6 @@ auto wrapper_revision(void *self) -> std::uint64_t {
 
 auto wrapper_reload(void *self, std::uint64_t *out_value) -> refrain_status {
     auto &generation{*static_cast<wrapper_generation *>(self)};
-    if (!generation.reload_succeeds) {
-        return REFRAIN_SERVICES_PERMISSIONS_PERMISSION_ERROR_PARSE_ERROR;
-    }
     ++generation.revision;
     if (out_value != nullptr) {
         *out_value = generation.revision;
@@ -130,6 +149,25 @@ auto wrapper_vtable() -> const refrain_services_permissions_vtable & {
     return table;
 }
 
+/// A wrapper table whose generated 16-byte header is valid but whose `reload`
+/// slot is missing: the host accepts the ABI header, so only the chain
+/// composition can notice that the table cannot answer the whole contract.
+auto wrapper_vtable_missing_slot()
+    -> const refrain_services_permissions_vtable & {
+    static const refrain_services_permissions_vtable table{
+        .struct_size = REFRAIN_SERVICES_PERMISSIONS_VTABLE_SIZE,
+        .abi_major = REFRAIN_SERVICES_PERMISSIONS_ABI_MAJOR,
+        .abi_minor = REFRAIN_SERVICES_PERMISSIONS_ABI_MINOR,
+        .abi_patch = REFRAIN_SERVICES_PERMISSIONS_ABI_PATCH,
+        .query = &wrapper_query,
+        .default_result = &wrapper_query,
+        .has = &wrapper_has,
+        .revision = &wrapper_revision,
+        .reload = nullptr,
+    };
+    return table;
+}
+
 /// The fake clean loader of the lifecycle tests: it registers one provider for
 /// the wrapper it loads and reports every load, reload and unload call.
 struct clean_loader_state {
@@ -138,28 +176,82 @@ struct clean_loader_state {
     int load_calls{0};
     int reload_calls{0};
     int unload_calls{0};
+    /// Node and decision of the generation the next load/reload creates for
+    /// the primary wrapper.
+    std::string next_owned_node{owned_home};
+    permission_result next_owned_result{permission_result::allowed};
+    /// Decision the secondary wrapper generation answers for its own node.
+    permission_result second_owned_result{permission_result::allowed};
+    /// A reload whose validate slot fails before any generation is built.
+    bool validate_fails{false};
+    /// A load that succeeds without registering the provider: the host must
+    /// reject the composition because the planned chain wrapper never
+    /// activated.
+    bool skip_registration{false};
+    /// Registration of a chain wrapper passes the reserved default instance
+    /// explicitly, which the host must refuse.
+    bool explicit_default_instance{false};
+    /// The registered wrapper table has a valid ABI header but a missing
+    /// function slot.
+    bool incomplete_vtable{false};
+    /// Set by the unload slot when it ran while a wrapper query was still
+    /// blocked, which would mean the retire path skipped the drain.
+    bool unloaded_while_query_blocked{false};
+    /// Detail of the last refused provider registration: the loader contract
+    /// carries a status code only, so a test asserts the host's refusal through
+    /// the error the registration returned.
+    std::string last_registration_error{};
     std::vector<std::unique_ptr<wrapper_generation>> generations{};
+    std::vector<std::unique_ptr<wrapper_generation>> second_generations{};
 
     [[nodiscard]] auto current() const noexcept -> wrapper_generation * {
         return generations.empty() ? nullptr : generations.back().get();
     }
 
-    [[nodiscard]] auto register_guest(bool provides_permissions) -> bool {
-        if (owner == nullptr || !provides_permissions) {
+    [[nodiscard]] auto current_second() const noexcept -> wrapper_generation * {
+        return second_generations.empty() ? nullptr
+                                          : second_generations.back().get();
+    }
+
+    [[nodiscard]] auto register_guest(std::string_view mod_id) -> bool {
+        if (owner == nullptr || skip_registration) {
+            return true;
+        }
+        const auto primary{mod_id == wrapper_id};
+        const auto secondary{mod_id == wrapper2_id};
+        if (!primary && !secondary) {
             return true;
         }
         auto generation{std::make_unique<wrapper_generation>()};
-        generation->generation = load_calls + reload_calls + 1;
+        generation->generation = load_calls + reload_calls;
         generation->revision =
             static_cast<std::uint64_t>(generation->generation) * 5U;
+        if (primary) {
+            generation->owned_node = next_owned_node;
+            generation->owned_result = next_owned_result;
+        } else {
+            generation->owned_node = owned_outer;
+            generation->owned_result = second_owned_result;
+        }
         const mod::provider_api api{
-            .vtable = &wrapper_vtable(),
+            .vtable = incomplete_vtable ? &wrapper_vtable_missing_slot()
+                                        : &wrapper_vtable(),
             .self = generation.get(),
             .abi_major = REFRAIN_SERVICES_PERMISSIONS_ABI_MAJOR,
         };
-        generations.push_back(std::move(generation));
-        return owner->register_provider("refrain:permissions", api, "1.0.0")
-            .has_value();
+        auto &slot{primary ? generations : second_generations};
+        slot.push_back(std::move(generation));
+        auto registered{explicit_default_instance
+                            ? owner->register_provider(
+                                  "refrain:permissions",
+                                  kernel::service_registry::default_instance,
+                                  api, "1.0.0")
+                            : owner->register_provider("refrain:permissions",
+                                                       api, "1.0.0")};
+        if (!registered) {
+            last_registration_error = registered.error().message;
+        }
+        return registered.has_value();
     }
 };
 
@@ -174,9 +266,14 @@ void clean_capabilities(
     out->supports_hot_install = 1;
 }
 
-auto clean_validate(void *,
+auto clean_validate(void *self,
                     const refrain_services_mod_loader_mod_entry_manifest *)
     -> refrain_status {
+    const auto &state{*static_cast<clean_loader_state *>(self)};
+    if (state.validate_fails) {
+        return static_cast<refrain_status>(
+            REFRAIN_SERVICES_MOD_LOADER_MOD_LOADER_ERROR_VERSION_MISMATCH);
+    }
     return REFRAIN_STATUS_OK;
 }
 
@@ -191,9 +288,9 @@ auto clean_load(void *self,
         return static_cast<refrain_status>(
             REFRAIN_SERVICES_MOD_LOADER_MOD_LOADER_ERROR_INTERNAL);
     }
-    const auto mod_id{
-        refrain::contracts::as_string_view(request->manifest.mod_id)};
-    if (!state.register_guest(mod_id == wrapper_id)) {
+    if (request->manifest.activate_code != 0U &&
+        !state.register_guest(
+            refrain::contracts::as_string_view(request->manifest.mod_id))) {
         return static_cast<refrain_status>(
             REFRAIN_SERVICES_MOD_LOADER_MOD_LOADER_ERROR_INTERNAL);
     }
@@ -214,9 +311,9 @@ auto clean_reload(void *self,
         return static_cast<refrain_status>(
             REFRAIN_SERVICES_MOD_LOADER_MOD_LOADER_ERROR_INTERNAL);
     }
-    const auto mod_id{
-        refrain::contracts::as_string_view(request->manifest.mod_id)};
-    if (!state.register_guest(mod_id == wrapper_id)) {
+    if (request->manifest.activate_code != 0U &&
+        !state.register_guest(
+            refrain::contracts::as_string_view(request->manifest.mod_id))) {
         return static_cast<refrain_status>(
             REFRAIN_SERVICES_MOD_LOADER_MOD_LOADER_ERROR_INTERNAL);
     }
@@ -231,6 +328,10 @@ auto clean_unload(void *self,
     -> refrain_status {
     auto &state{*static_cast<clean_loader_state *>(self)};
     static_cast<void>(instance);
+    if (g_block_wrapper_query.load(std::memory_order_acquire) &&
+        !g_release_wrapper_query.load(std::memory_order_acquire)) {
+        state.unloaded_while_query_blocked = true;
+    }
     ++state.unload_calls;
     return REFRAIN_STATUS_OK;
 }
@@ -282,6 +383,14 @@ struct image_builder {
         wrapper_id, clean_loader_id);
 }
 
+[[nodiscard]] auto wrapper2_manifest() -> std::string {
+    return fmt::format(
+        "[mod]\nid = \"{}\"\nversion = \"1.0.0\"\nabi = \"1\"\nside = "
+        "\"server\"\n\n[provides]\nservices = [\"refrain:permissions\"]"
+        "\n\n[entry]\nloader = \"{}\"\n",
+        wrapper2_id, clean_loader_id);
+}
+
 [[nodiscard]] auto companion_manifest() -> std::string {
     return fmt::format(
         "[mod]\nid = \"{}\"\nversion = \"1.0.0\"\nabi = \"1\"\nside = "
@@ -295,26 +404,89 @@ struct image_builder {
            "[\"refrain:permissions\"]\n";
 }
 
-[[nodiscard]] auto make_spec() -> refrain::result<mod::gamepack_spec> {
-    constexpr std::string_view text{R"([gamepack]
-id = "refrain.test.permissions_lifecycle"
-version = "1.0.0"
-side = "server"
-abi = "1"
-auto_scan = false
+constexpr std::string_view mod_list{
+    "[\"refrain.test.permissions_wrapper@1.0.0\", "
+    "\"refrain.test.permissions_wrapper2@1.0.0\", "
+    "\"refrain.test.permissions_companion@1.0.0\", "
+    "\"refrain.permissions@1.0.0\"]"};
 
-[mods]
-list = ["refrain.test.permissions_wrapper@1.0.0", "refrain.test.permissions_companion@1.0.0", "refrain.permissions@1.0.0"]
-
-[providers]
-permissions = { base = "refrain.permissions@^1.0.0", wrappers = ["refrain.test.permissions_wrapper@^1.0.0"] }
-)"};
-    auto document{
-        config::document::parse_text(std::string{text}, "<gamepack>")};
+/// Parse one synthetic gamepack document with `providers` as its `[providers]`
+/// body.
+[[nodiscard]] auto make_spec_with(std::string_view providers)
+    -> refrain::result<mod::gamepack_spec> {
+    const auto text{fmt::format("[gamepack]\n"
+                                "id = \"refrain.test.permissions_lifecycle\"\n"
+                                "version = \"1.0.0\"\n"
+                                "side = \"server\"\n"
+                                "abi = \"1\"\n"
+                                "auto_scan = false\n\n"
+                                "[mods]\n"
+                                "list = {}\n\n"
+                                "[providers]\n{}",
+                                mod_list, providers)};
+    auto document{config::document::parse_text(text, "<gamepack>")};
     if (!document) {
         return std::unexpected{document.error()};
     }
     return mod::parse_gamepack(*document, "server");
+}
+
+[[nodiscard]] auto make_spec() -> refrain::result<mod::gamepack_spec> {
+    return make_spec_with(
+        "permissions = { base = \"refrain.permissions@^1.0.0\", wrappers = "
+        "[\"refrain.test.permissions_wrapper@^1.0.0\"] }\n");
+}
+
+/// The same composition with the wrapper declaration removed: the package
+/// stays listed but the chain no longer names it.
+[[nodiscard]] auto make_spec_without_wrapper()
+    -> refrain::result<mod::gamepack_spec> {
+    return make_spec_with(
+        "permissions = { base = \"refrain.permissions@^1.0.0\" }\n");
+}
+
+/// Two declared wrappers, primary innermost.
+[[nodiscard]] auto make_spec_two_wrappers()
+    -> refrain::result<mod::gamepack_spec> {
+    return make_spec_with(
+        "permissions = { base = \"refrain.permissions@^1.0.0\", wrappers = "
+        "[\"refrain.test.permissions_wrapper@^1.0.0\", "
+        "\"refrain.test.permissions_wrapper2@^1.0.0\"] }\n");
+}
+
+/// The same two wrappers with their declared positions swapped.
+[[nodiscard]] auto make_spec_two_wrappers_swapped()
+    -> refrain::result<mod::gamepack_spec> {
+    return make_spec_with(
+        "permissions = { base = \"refrain.permissions@^1.0.0\", wrappers = "
+        "[\"refrain.test.permissions_wrapper2@^1.0.0\", "
+        "\"refrain.test.permissions_wrapper@^1.0.0\"] }\n");
+}
+
+/// A wrapper package that declares no provider contract.
+[[nodiscard]] auto make_spec_data_only_wrapper()
+    -> refrain::result<mod::gamepack_spec> {
+    return make_spec_with(
+        "permissions = { base = \"refrain.permissions@^1.0.0\", wrappers = "
+        "[\"refrain.test.permissions_companion@^1.0.0\"] }\n");
+}
+
+/// The same mod declared as the chain base and as a chain wrapper.
+[[nodiscard]] auto make_spec_base_is_wrapper()
+    -> refrain::result<mod::gamepack_spec> {
+    return make_spec_with(
+        "permissions = { base = "
+        "\"refrain.test.permissions_wrapper@^1.0.0\", wrappers = "
+        "[\"refrain.test.permissions_wrapper@^1.0.0\"] }\n");
+}
+
+/// The same mod declared at two wrapper positions.
+[[nodiscard]] auto make_spec_duplicate_wrapper()
+    -> refrain::result<mod::gamepack_spec> {
+    return make_spec_with(
+        "permissions = { base = \"refrain.permissions@^1.0.0\", wrappers = "
+        "[\"refrain.test.permissions_wrapper@^1.0.0\", "
+        "\"refrain.test.permissions_wrapper@^1.0.0\"] }\n");
 }
 
 /// One loaded composition: the built-in resolver as the chain base and the
@@ -348,34 +520,38 @@ class lifecycle_fixture {
     }
 
     [[nodiscard]] auto load() -> refrain::status {
+        return load_with(make_spec());
+    }
+
+    [[nodiscard]] auto
+    load_with(const refrain::result<mod::gamepack_spec> &spec)
+        -> refrain::status {
         image_builder builder{};
         builder.add(wrapper_id, wrapper_manifest());
+        builder.add(wrapper2_id, wrapper2_manifest());
         builder.add(companion_id, companion_manifest());
         builder.add("refrain.permissions", base_manifest());
         image_ = builder.build();
-        auto spec{make_spec()};
         if (!spec) {
             return std::unexpected{spec.error()};
         }
-        auto candidates{mod::scan_builtin_image(image_)};
-        if (!candidates) {
-            return std::unexpected{candidates.error()};
-        }
-        auto plan{mod::resolve(*spec, *candidates)};
+        auto plan{resolve(*spec)};
         if (!plan) {
-            return std::unexpected{plan.error()};
+            return std::unexpected{std::move(plan.error())};
         }
         plan_ = std::move(*plan);
-        mod::static_mod_registry registry{};
+        // The base resolver is statically linked into the test binary; copy its
+        // descriptor into this fixture's isolated registry so every host load
+        // matches the manifest against the linked-in code.
         for (const auto &descriptor :
              mod::static_mod_registry::global().all()) {
             if (descriptor.id == "refrain.permissions") {
-                if (auto added{registry.add(descriptor)}; !added) {
+                if (auto added{registry_.add(descriptor)}; !added) {
                     return added;
                 }
             }
         }
-        host_.emplace(registry);
+        host_.emplace(registry_);
         const mod::provider_api loader_api{
             .vtable = &clean_loader_vtable(),
             .self = &loader_,
@@ -403,7 +579,26 @@ class lifecycle_fixture {
         return resolver ? *resolver : mod::package_resolver{};
     }
 
+    [[nodiscard]] auto image() const noexcept -> std::span<const std::byte> {
+        return image_;
+    }
+
+    /// Resolve `spec` against the fixture's synthetic package image without
+    /// loading it.
+    [[nodiscard]] auto resolve(const refrain::result<mod::gamepack_spec> &spec)
+        -> refrain::result<mod::composition> {
+        if (!spec) {
+            return std::unexpected{spec.error()};
+        }
+        auto candidates{mod::scan_builtin_image(image_)};
+        if (!candidates) {
+            return std::unexpected{std::move(candidates.error())};
+        }
+        return mod::resolve(*spec, *candidates);
+    }
+
   private:
+    mod::static_mod_registry registry_{};
     std::filesystem::path root_{};
     config::store store_{};
     std::vector<std::byte> image_{};
@@ -417,14 +612,13 @@ class lifecycle_fixture {
     const auto provider{host.services().active_provider("refrain:permissions")};
     if (!provider || provider->instance == nullptr) {
         return std::unexpected{refrain::make_error(
-            refrain::error_code::not_found,
+            error_code::not_found,
             "the composition has no refrain:permissions provider")};
     }
     const auto *api{static_cast<const mod::provider_api *>(provider->instance)};
     if (api == nullptr || api->vtable == nullptr || api->self == nullptr) {
-        return std::unexpected{
-            refrain::make_error(refrain::error_code::invalid_argument,
-                                "the provider table is incomplete")};
+        return std::unexpected{refrain::make_error(
+            error_code::invalid_argument, "the provider table is incomplete")};
     }
     return permissions::client::bind(api->vtable, api->self);
 }
@@ -438,9 +632,100 @@ constexpr std::string_view base_policy{R"(
 default = "deny"
 )"};
 
+/// Base policy grants a node a wrapper denies: an incomplete walk that fell
+/// back to the base would widen the answer, a fail-closed walk denies.
+constexpr std::string_view grant_home_policy{R"(
+[defaults]
+default = "deny"
+
+[grants]
+"player:069a79f4-44e9-4726-a5be-fca90e38aaf5" = ["com.example.owned.home"]
+)"};
+
 const suite chain_lifecycle_tests = [] {
-    "chain lifecycle/a retired wrapper cannot be published, the chain keeps "
-    "serving"_test = [] {
+    "chain lifecycle/a wrapper reload applies the new generation at the next "
+    "epoch"_test = [] {
+        lifecycle_fixture fixture{base_policy};
+        auto loaded{fixture.load()};
+        expect(static_cast<bool>(loaded))
+            << (loaded ? std::string{} : loaded.error().message);
+        if (!loaded) {
+            return;
+        }
+        auto bound{bind_client(fixture.host())};
+        expect(static_cast<bool>(bound));
+        if (!bound) {
+            return;
+        }
+        const auto &client{*bound};
+        expect(client.query(player(), owned_home) ==
+               permission_result::allowed);
+        expect(client.query(player(), owned_second) ==
+               permission_result::denied);
+        auto *first_generation{fixture.loader().current()};
+        expect(first_generation != nullptr);
+        if (first_generation == nullptr) {
+            return;
+        }
+        const auto first_queries{first_generation->queries.load()};
+        const auto first_revision{client.revision()};
+
+        // The wrapper keeps its own chain slot, so the staged generation is
+        // verified against that slot instead of the base's default instance.
+        fixture.loader().next_owned_node = std::string{owned_second};
+        auto staged{fixture.host().stage_composition(
+            fixture.plan(), fixture.resolver(),
+            mod::stage_options{.reload = {std::string{wrapper_id}}})};
+        expect(static_cast<bool>(staged))
+            << (staged ? std::string{"staged"} : staged.error().message);
+        if (!staged) {
+            return;
+        }
+        // Nothing is published until the tick boundary: the committed chain
+        // keeps answering with the previous wrapper generation.
+        expect(client.query(player(), owned_home) ==
+               permission_result::allowed);
+        expect(first_generation->queries.load() > first_queries);
+        expect(fixture.host().epoch() == 1U);
+
+        auto committed{fixture.host().commit_epoch()};
+        expect(static_cast<bool>(committed));
+        if (!committed) {
+            return;
+        }
+        expect(committed->epoch == 2U);
+        expect(committed->reloaded ==
+               std::vector<std::string>{std::string{wrapper_id}});
+        expect(fixture.loader().unload_calls == 1);
+        expect(fixture.loader().generations.size() == 2U);
+        // The next query resolves the new generation's rules: the old node is
+        // forwarded to the denying base, the new one is granted by the wrapper.
+        expect(client.query(player(), owned_home) == permission_result::denied);
+        expect(client.query(player(), owned_second) ==
+               permission_result::allowed);
+        expect(client.revision() > first_revision);
+        expect(fixture.loader().current()->queries.load() > 0);
+        // The committed slot points at the new generation even though the
+        // retired candidate is still in the candidate table until the commit
+        // finishes cleaning it up; a resolver that re-read first-registered
+        // order would resurrect the predecessor.
+        const auto wrapper_slot{fixture.host().services().active_provider(
+            "refrain:permissions", mod::chain_wrapper_instance(0))};
+        expect(wrapper_slot.has_value());
+        if (wrapper_slot) {
+            expect(wrapper_slot->id == wrapper_id);
+            expect(wrapper_slot->generation == 2U);
+        }
+        expect(
+            fixture.host().services().providers("refrain:permissions").size() ==
+            2U);
+        const auto old_queries{first_generation->queries.load()};
+        static_cast<void>(client.query(player(), owned_second));
+        expect(first_generation->queries.load() == old_queries);
+    };
+
+    "chain lifecycle/uninstalling the wrapper falls back to the base at the "
+    "next epoch"_test = [] {
         lifecycle_fixture fixture{base_policy};
         auto loaded{fixture.load()};
         expect(static_cast<bool>(loaded));
@@ -453,35 +738,572 @@ const suite chain_lifecycle_tests = [] {
             return;
         }
         const auto &client{*bound};
-        expect(client.query(player(), "com.example.owned.home") ==
+        expect(client.query(player(), owned_home) ==
                permission_result::allowed);
-        auto *wrapper{fixture.loader().current()};
-        expect(wrapper != nullptr);
-        if (wrapper == nullptr) {
-            return;
-        }
-        const auto queries_before{wrapper->queries.load()};
         const auto revision_before{client.revision()};
 
-        // A chain wrapper's provider slot is the default instance, which the
-        // base resolver occupies once it loads; staging the wrapper's
-        // retirement stages the base slot away, so the host refuses the
-        // composition change before it is published. The committed chain and
-        // its revision therefore never observe a retired wrapper.
         auto staged{fixture.host().stage_uninstall(wrapper_id)};
+        expect(static_cast<bool>(staged))
+            << (staged ? std::string{"staged"} : staged.error().message);
+        if (!staged) {
+            return;
+        }
+        expect(client.query(player(), owned_home) ==
+               permission_result::allowed);
+        auto committed{fixture.host().commit_epoch()};
+        expect(static_cast<bool>(committed));
+        if (!committed) {
+            return;
+        }
+        expect(committed->epoch == 2U);
+        expect(committed->removed ==
+               std::vector<std::string>{std::string{wrapper_id}});
+        expect(fixture.loader().unload_calls == 1);
+        // The base keeps the default slot; the wrapper's chain slot is gone.
+        const auto base{
+            fixture.host().services().active_provider("refrain:permissions")};
+        expect(base.has_value());
+        if (base) {
+            expect(base->id == "refrain.permissions");
+        }
+        expect(!fixture.host()
+                    .services()
+                    .active_provider("refrain:permissions",
+                                     mod::chain_wrapper_instance(0))
+                    .has_value());
+        expect(client.query(player(), owned_home) == permission_result::denied);
+        expect(client.query(player(), "refrain.command.teleport") ==
+               permission_result::denied);
+        // Dropping the link lowers the raw revision sum; the published facade
+        // value still moves forward.
+        expect(client.revision() > revision_before)
+            << (std::to_string(revision_before) + " -> " +
+                std::to_string(client.revision()));
+    };
+
+    "chain lifecycle/dropping the wrapper declaration retires its slot while "
+    "the package stays loaded"_test = [] {
+        lifecycle_fixture fixture{base_policy};
+        auto loaded{fixture.load()};
+        expect(static_cast<bool>(loaded));
+        if (!loaded) {
+            return;
+        }
+        auto bound{bind_client(fixture.host())};
+        expect(static_cast<bool>(bound));
+        if (!bound) {
+            return;
+        }
+        const auto &client{*bound};
+        expect(client.query(player(), owned_home) ==
+               permission_result::allowed);
+
+        auto spec{make_spec_without_wrapper()};
+        expect(static_cast<bool>(spec));
+        auto candidates{mod::scan_builtin_image(fixture.image())};
+        expect(static_cast<bool>(candidates));
+        if (!spec || !candidates) {
+            return;
+        }
+        auto next{mod::resolve(*spec, *candidates)};
+        expect(static_cast<bool>(next));
+        if (!next) {
+            return;
+        }
+        auto staged{
+            fixture.host().stage_composition(*next, fixture.resolver())};
+        expect(static_cast<bool>(staged))
+            << (staged ? std::string{"staged"} : staged.error().message);
+        if (!staged) {
+            return;
+        }
+        // Dropping the declaration is not a mod change: the package stays
+        // loaded, so only the chain slot is retired at the commit.
+        expect(staged->added.empty());
+        expect(staged->reloaded.empty());
+        expect(staged->removed.empty());
+        expect(client.query(player(), owned_home) ==
+               permission_result::allowed);
+
+        auto committed{fixture.host().commit_epoch()};
+        expect(static_cast<bool>(committed));
+        if (!committed) {
+            return;
+        }
+        expect(committed->epoch == 2U);
+        expect(fixture.host().find(wrapper_id) != nullptr);
+        expect(!fixture.host()
+                    .services()
+                    .active_provider("refrain:permissions",
+                                     mod::chain_wrapper_instance(0))
+                    .has_value());
+        expect(fixture.loader().unload_calls == 0);
+        expect(client.query(player(), owned_home) == permission_result::denied);
+    };
+
+    "chain lifecycle/a failed stage leaves the running chain untouched"_test =
+        [] {
+            lifecycle_fixture fixture{base_policy};
+            auto loaded{fixture.load()};
+            expect(static_cast<bool>(loaded));
+            if (!loaded) {
+                return;
+            }
+            auto bound{bind_client(fixture.host())};
+            expect(static_cast<bool>(bound));
+            if (!bound) {
+                return;
+            }
+            const auto &client{*bound};
+            const auto revision_before{client.revision()};
+            const auto epoch_before{fixture.host().epoch()};
+
+            fixture.loader().validate_fails = true;
+            fixture.loader().next_owned_node = std::string{owned_second};
+            auto staged{fixture.host().stage_composition(
+                fixture.plan(), fixture.resolver(),
+                mod::stage_options{.reload = {std::string{wrapper_id}}})};
+            expect(!staged);
+            if (staged) {
+                return;
+            }
+            expect(fixture.host().epoch() == epoch_before);
+            expect(!fixture.host().staged_change().has_value());
+            expect(fixture.loader().unload_calls == 0);
+            expect(fixture.loader().generations.size() == 1U);
+            expect(client.query(player(), owned_home) ==
+                   permission_result::allowed);
+            expect(client.revision() == revision_before);
+
+            // A later valid stage still commits normally.
+            fixture.loader().validate_fails = false;
+            auto retried{fixture.host().stage_composition(
+                fixture.plan(), fixture.resolver(),
+                mod::stage_options{.reload = {std::string{wrapper_id}}})};
+            expect(static_cast<bool>(retried));
+            if (retried) {
+                expect(static_cast<bool>(fixture.host().commit_epoch()));
+            }
+            expect(client.query(player(), owned_second) ==
+                   permission_result::allowed);
+        };
+
+    "chain lifecycle/a wrapper that never activates fails closed naming its "
+    "chain slot"_test = [] {
+        lifecycle_fixture fixture{base_policy};
+        fixture.loader().skip_registration = true;
+        const auto loaded{fixture.load()};
+        expect(!loaded);
+        if (loaded) {
+            return;
+        }
+        // The base is loaded and registered; the failure names the wrapper's
+        // chain slot, not the base's default provider.
+        const auto &message{loaded.error().message};
+        expect(message.find("refrain.test.permissions_wrapper") !=
+               std::string::npos)
+            << message;
+        expect(message.find("chain:0") != std::string::npos) << message;
+        expect(message.find("refrain.permissions") == std::string::npos)
+            << message;
+    };
+
+    "chain lifecycle/a staged wrapper that never activates fails closed and "
+    "rolls back"_test = [] {
+        lifecycle_fixture fixture{base_policy};
+        auto loaded{fixture.load()};
+        expect(static_cast<bool>(loaded));
+        if (!loaded) {
+            return;
+        }
+        auto bound{bind_client(fixture.host())};
+        expect(static_cast<bool>(bound));
+        if (!bound) {
+            return;
+        }
+        const auto &client{*bound};
+        const auto revision_before{client.revision()};
+        expect(client.query(player(), owned_home) ==
+               permission_result::allowed);
+
+        // The reloading loader reports success but registers no provider: the
+        // staged view has the wrapper's chain slot retired, so the plan
+        // verification fails closed instead of publishing a chain with a
+        // missing link.
+        fixture.loader().skip_registration = true;
+        auto staged{fixture.host().stage_composition(
+            fixture.plan(), fixture.resolver(),
+            mod::stage_options{.reload = {std::string{wrapper_id}}})};
         expect(!staged);
         if (staged) {
             return;
         }
-        expect(staged.error().message.find("no active provider") !=
-               std::string::npos)
+        expect(staged.error().message.find("chain:0") != std::string::npos)
+            << staged.error().message;
+        expect(staged.error().message.find(wrapper_id) != std::string::npos)
             << staged.error().message;
         expect(fixture.host().epoch() == 1U);
-        expect(fixture.loader().unload_calls == 0);
-        expect(client.revision() == revision_before);
-        expect(client.query(player(), "com.example.owned.home") ==
+        expect(!fixture.host().staged_change().has_value());
+        expect(client.query(player(), owned_home) ==
                permission_result::allowed);
-        expect(wrapper->queries.load() == queries_before + 1);
+        expect(client.revision() == revision_before);
+        expect(fixture.host()
+                   .services()
+                   .active_provider("refrain:permissions",
+                                    mod::chain_wrapper_instance(0))
+                   .has_value());
+    };
+
+    "chain lifecycle/a query racing the commit keeps the retired table "
+    "alive"_test = [] {
+        lifecycle_fixture fixture{base_policy};
+        auto loaded{fixture.load()};
+        expect(static_cast<bool>(loaded));
+        if (!loaded) {
+            return;
+        }
+        auto bound{bind_client(fixture.host())};
+        expect(static_cast<bool>(bound));
+        if (!bound) {
+            return;
+        }
+        const auto &client{*bound};
+        expect(client.query(player(), owned_home) ==
+               permission_result::allowed);
+        auto *first_generation{fixture.loader().current()};
+        expect(first_generation != nullptr);
+        if (first_generation == nullptr) {
+            return;
+        }
+
+        // Stage the reload first; it does not publish anything.
+        fixture.loader().next_owned_node = std::string{owned_second};
+        auto staged{fixture.host().stage_composition(
+            fixture.plan(), fixture.resolver(),
+            mod::stage_options{.reload = {std::string{wrapper_id}},
+                               .drain_timeout =
+                                   std::chrono::milliseconds{5000}})};
+        expect(static_cast<bool>(staged))
+            << (staged ? std::string{"staged"} : staged.error().message);
+        if (!staged) {
+            return;
+        }
+
+        // One query enters the wrapper table and blocks there, holding the
+        // walk's lease; the commit must not retire the table until it returns.
+        g_block_wrapper_query.store(true, std::memory_order_release);
+        g_wrapper_query_entered.store(false, std::memory_order_release);
+        g_release_wrapper_query.store(false, std::memory_order_release);
+        permission_result raced_answer{permission_result::denied};
+        std::thread querier{[&client, &raced_answer] {
+            raced_answer = client.query(player(), owned_home);
+        }};
+        const auto entered_deadline{std::chrono::steady_clock::now() +
+                                    std::chrono::seconds{2}};
+        while (!g_wrapper_query_entered.load(std::memory_order_acquire) &&
+               std::chrono::steady_clock::now() < entered_deadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds{1});
+        }
+        expect(g_wrapper_query_entered.load());
+
+        std::atomic<bool> commit_done{false};
+        std::optional<mod::composition_commit> commit_result{};
+        std::string commit_error{};
+        std::thread committer{
+            [&fixture, &commit_done, &commit_result, &commit_error] {
+                auto committed{fixture.host().commit_epoch()};
+                if (committed) {
+                    commit_result = *committed;
+                } else {
+                    commit_error = committed.error().message;
+                }
+                commit_done.store(true, std::memory_order_release);
+            }};
+        // The commit reaches the quiesce step while the query holds its lease
+        // and waits there instead of switching the slot.
+        const auto quiesce_deadline{std::chrono::steady_clock::now() +
+                                    std::chrono::seconds{2}};
+        auto quiesced{false};
+        while (std::chrono::steady_clock::now() < quiesce_deadline) {
+            const auto slot{fixture.host().services().query(
+                "refrain:permissions", mod::chain_wrapper_instance(0))};
+            if (!slot && slot.error().code == error_code::stale) {
+                quiesced = true;
+                break;
+            }
+            if (commit_done.load(std::memory_order_acquire)) {
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds{1});
+        }
+        expect(quiesced);
+        expect(!commit_done.load(std::memory_order_acquire));
+        expect(!fixture.loader().unloaded_while_query_blocked);
+
+        g_release_wrapper_query.store(true, std::memory_order_release);
+        querier.join();
+        committer.join();
+        g_block_wrapper_query.store(false, std::memory_order_release);
+        expect(commit_error.empty()) << commit_error;
+        expect(commit_done.load());
+        expect(commit_result.has_value());
+        // The in-flight call finished on the previous generation, and only then
+        // did the loader's unload hook run and the epoch switch.
+        expect(raced_answer == permission_result::allowed);
+        expect(fixture.loader().unload_calls == 1);
+        expect(!fixture.loader().unloaded_while_query_blocked);
+        expect(commit_result->epoch == 2U);
+        expect(client.query(player(), owned_second) ==
+               permission_result::allowed);
+        expect(client.query(player(), owned_home) == permission_result::denied);
+    };
+
+    "chain lifecycle/an incomplete walk during a commit denies instead of "
+    "widening permissions"_test = [] {
+        lifecycle_fixture fixture{grant_home_policy};
+        // The wrapper denies the node the base policy grants, so any fallback
+        // to the base resolver would turn a deny into an allow.
+        fixture.loader().next_owned_result = permission_result::denied;
+        auto loaded{fixture.load()};
+        expect(static_cast<bool>(loaded))
+            << (loaded ? std::string{} : loaded.error().message);
+        if (!loaded) {
+            return;
+        }
+        auto bound{bind_client(fixture.host())};
+        expect(static_cast<bool>(bound));
+        if (!bound) {
+            return;
+        }
+        const auto &client{*bound};
+        expect(client.query(player(), owned_home) == permission_result::denied);
+        expect(client.default_result(player(), owned_home) ==
+               permission_result::allowed);
+
+        auto staged{fixture.host().stage_uninstall(wrapper_id)};
+        expect(static_cast<bool>(staged))
+            << (staged ? std::string{"staged"} : staged.error().message);
+        if (!staged) {
+            return;
+        }
+
+        // One query is held inside the wrapper table and therefore holds the
+        // walk lease while the commit quiesces and drains the slot.
+        g_block_wrapper_query.store(true, std::memory_order_release);
+        g_wrapper_query_entered.store(false, std::memory_order_release);
+        g_release_wrapper_query.store(false, std::memory_order_release);
+        permission_result raced_answer{permission_result::allowed};
+        std::thread querier{[&client, &raced_answer] {
+            raced_answer = client.query(player(), owned_home);
+        }};
+        const auto entered_deadline{std::chrono::steady_clock::now() +
+                                    std::chrono::seconds{2}};
+        while (!g_wrapper_query_entered.load(std::memory_order_acquire) &&
+               std::chrono::steady_clock::now() < entered_deadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds{1});
+        }
+        expect(g_wrapper_query_entered.load());
+
+        std::atomic<bool> commit_done{false};
+        std::optional<mod::composition_commit> commit_result{};
+        std::string commit_error{};
+        std::thread committer{
+            [&fixture, &commit_done, &commit_result, &commit_error] {
+                auto committed{fixture.host().commit_epoch()};
+                if (committed) {
+                    commit_result = *committed;
+                } else {
+                    commit_error = committed.error().message;
+                }
+                commit_done.store(true, std::memory_order_release);
+            }};
+        const auto quiesce_deadline{std::chrono::steady_clock::now() +
+                                    std::chrono::seconds{2}};
+        auto quiesced{false};
+        while (std::chrono::steady_clock::now() < quiesce_deadline) {
+            const auto slot{fixture.host().services().query(
+                "refrain:permissions", mod::chain_wrapper_instance(0))};
+            if (!slot && slot.error().code == error_code::stale) {
+                quiesced = true;
+                break;
+            }
+            if (commit_done.load(std::memory_order_acquire)) {
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds{1});
+        }
+        expect(quiesced);
+        expect(!commit_done.load(std::memory_order_acquire));
+
+        // The commit is draining the wrapper slot; a query during that window
+        // cannot walk the declared chain, and the base policy alone would
+        // allow the node the wrapper denies. The answer must be a denial.
+        expect(client.query(player(), owned_home) == permission_result::denied);
+        expect(client.default_result(player(), owned_home) ==
+               permission_result::allowed);
+
+        g_release_wrapper_query.store(true, std::memory_order_release);
+        querier.join();
+        committer.join();
+        g_block_wrapper_query.store(false, std::memory_order_release);
+        expect(commit_error.empty()) << commit_error;
+        expect(commit_result.has_value());
+        // The in-flight call finished on the previous generation, which still
+        // answered denied; after the commit the wrapper is gone and the base
+        // grant applies.
+        expect(raced_answer == permission_result::denied);
+        expect(client.query(player(), owned_home) ==
+               permission_result::allowed);
+    };
+
+    "chain lifecycle/an incomplete wrapper table denies instead of falling "
+    "back to the base"_test = [] {
+        lifecycle_fixture fixture{grant_home_policy};
+        // The host validates the generated ABI header, which this table keeps;
+        // its missing `reload` slot is only visible to the chain composition.
+        fixture.loader().incomplete_vtable = true;
+        auto loaded{fixture.load()};
+        expect(static_cast<bool>(loaded))
+            << (loaded ? std::string{} : loaded.error().message);
+        if (!loaded) {
+            return;
+        }
+        auto bound{bind_client(fixture.host())};
+        expect(static_cast<bool>(bound));
+        if (!bound) {
+            return;
+        }
+        const auto &client{*bound};
+        // The base policy alone would grant the node the wrapper generation
+        // owns; the unusable wrapper table must deny instead of being dropped.
+        expect(client.default_result(player(), owned_home) ==
+               permission_result::allowed);
+        expect(client.query(player(), owned_home) == permission_result::denied);
+        // The unusable state is cached for the epoch, so repeated queries keep
+        // denying without re-composing or logging for every call.
+        expect(client.query(player(), owned_home) == permission_result::denied);
+        expect(client.revision() != 0U);
+        expect(!client.reload().has_value());
+    };
+
+    "chain lifecycle/a declared wrapper without a provider contract fails "
+    "the plan"_test = [] {
+        lifecycle_fixture fixture{base_policy};
+        const auto loaded{fixture.load_with(make_spec_data_only_wrapper())};
+        expect(!loaded);
+        if (loaded) {
+            return;
+        }
+        const auto &message{loaded.error().message};
+        expect(message.find("refrain.test.permissions_companion") !=
+               std::string::npos)
+            << message;
+        expect(message.find("chain:0") != std::string::npos) << message;
+        expect(message.find("no provider contract") != std::string::npos)
+            << message;
+        expect(!fixture.host()
+                    .services()
+                    .active_provider("refrain:permissions",
+                                     mod::chain_wrapper_instance(0))
+                    .has_value());
+    };
+
+    "chain lifecycle/a wrapper cannot occupy the reserved default "
+    "instance"_test = [] {
+        lifecycle_fixture fixture{base_policy};
+        fixture.loader().explicit_default_instance = true;
+        const auto loaded{fixture.load()};
+        expect(!loaded);
+        if (loaded) {
+            return;
+        }
+        expect(fixture.loader().last_registration_error.find(
+                   "default instance") != std::string::npos)
+            << fixture.loader().last_registration_error;
+    };
+
+    "chain lifecycle/the same mod cannot be the chain base and a "
+    "wrapper"_test = [] {
+        lifecycle_fixture fixture{base_policy};
+        const auto loaded{fixture.load_with(make_spec_base_is_wrapper())};
+        expect(!loaded);
+        if (loaded) {
+            return;
+        }
+        expect(fixture.loader().last_registration_error.find(
+                   "both the chain base and a chain wrapper") !=
+               std::string::npos)
+            << fixture.loader().last_registration_error;
+    };
+
+    "chain lifecycle/the same mod cannot occupy two wrapper positions"_test =
+        [] {
+            lifecycle_fixture fixture{base_policy};
+            const auto loaded{fixture.load_with(make_spec_duplicate_wrapper())};
+            expect(!loaded);
+            if (loaded) {
+                return;
+            }
+            // The composition resolver refuses a duplicated wrapper before the
+            // host stage runs; the host's own multi-position guard is the
+            // defense for a hand-built plan.
+            expect(loaded.error().message.find("more than once") !=
+                   std::string::npos)
+                << loaded.error().message;
+        };
+
+    "chain lifecycle/moving a declared wrapper position is refused until it "
+    "is rebuilt"_test = [] {
+        lifecycle_fixture fixture{base_policy};
+        auto loaded{fixture.load_with(make_spec_two_wrappers())};
+        expect(static_cast<bool>(loaded))
+            << (loaded ? std::string{} : loaded.error().message);
+        if (!loaded) {
+            return;
+        }
+        auto bound{bind_client(fixture.host())};
+        expect(static_cast<bool>(bound));
+        if (!bound) {
+            return;
+        }
+        const auto &client{*bound};
+        const auto epoch_before{fixture.host().epoch()};
+        const auto revision_before{client.revision()};
+        expect(client.query(player(), owned_home) ==
+               permission_result::allowed);
+        expect(client.query(player(), owned_outer) ==
+               permission_result::allowed);
+
+        auto next{fixture.resolve(make_spec_two_wrappers_swapped())};
+        expect(static_cast<bool>(next));
+        if (!next) {
+            return;
+        }
+        auto staged{
+            fixture.host().stage_composition(*next, fixture.resolver())};
+        expect(!staged);
+        if (staged) {
+            return;
+        }
+        // The declared positions moved but neither package was rebuilt, so the
+        // composed chain cannot match the plan; the stage fails closed.
+        expect(staged.error().message.find("chain:0") != std::string::npos)
+            << staged.error().message;
+        expect(fixture.host().epoch() == epoch_before);
+        expect(!fixture.host().staged_change().has_value());
+        expect(client.revision() == revision_before);
+        expect(fixture.host()
+                   .services()
+                   .active_provider("refrain:permissions",
+                                    mod::chain_wrapper_instance(0))
+                   .has_value());
+        expect(fixture.host()
+                   .services()
+                   .active_provider("refrain:permissions",
+                                    mod::chain_wrapper_instance(1))
+                   .has_value());
+        expect(client.query(player(), owned_home) ==
+               permission_result::allowed);
     };
 
     "chain lifecycle/a forced link-instance change keeps the revision "
@@ -498,7 +1320,7 @@ const suite chain_lifecycle_tests = [] {
             return;
         }
         const auto &client{*bound};
-        expect(client.query(player(), "com.example.owned.home") ==
+        expect(client.query(player(), owned_home) ==
                permission_result::allowed);
         const auto revision_before{client.revision()};
 
@@ -514,7 +1336,7 @@ const suite chain_lifecycle_tests = [] {
             << (std::to_string(revision_before) + " -> " +
                 std::to_string(revision_after));
         expect(permissions::test_seam::forced_chain_rebuilds.load() == 0U);
-        expect(client.query(player(), "com.example.owned.home") ==
+        expect(client.query(player(), owned_home) ==
                permission_result::allowed);
         expect(client.revision() == revision_after);
     };
@@ -533,12 +1355,13 @@ const suite chain_lifecycle_tests = [] {
             return;
         }
         const auto &client{*bound};
-        expect(client.query(player(), "com.example.owned.home") ==
+        expect(client.query(player(), owned_home) ==
                permission_result::allowed);
 
         // The probe runs after the query acquired its published chain snapshot
-        // and before it walks it; triggering a rebuild there makes the walk a
-        // use-after-free unless the query keeps the snapshot alive.
+        // and its leases and before it walks the chain; triggering a rebuild
+        // there makes the walk a use-after-free unless the query keeps the
+        // snapshot alive.
         std::atomic<int> probe_calls{0};
         permissions::test_seam::query_probe = [&client, &probe_calls] {
             probe_calls.fetch_add(1, std::memory_order_relaxed);
@@ -546,12 +1369,12 @@ const suite chain_lifecycle_tests = [] {
                 1U, std::memory_order_relaxed);
             static_cast<void>(client.revision());
         };
-        const auto answer{client.query(player(), "com.example.owned.home")};
+        const auto answer{client.query(player(), owned_home)};
         permissions::test_seam::query_probe = {};
         expect(answer == permission_result::allowed);
         expect(probe_calls.load() > 0);
         expect(permissions::test_seam::forced_chain_rebuilds.load() == 0U);
-        expect(client.query(player(), "com.example.owned.home") ==
+        expect(client.query(player(), owned_home) ==
                permission_result::allowed);
     };
 
@@ -570,14 +1393,14 @@ const suite chain_lifecycle_tests = [] {
             }
             const auto &client{*bound};
             // Warm up the link set on this thread before the worker starts.
-            expect(client.query(player(), "com.example.owned.home") ==
+            expect(client.query(player(), owned_home) ==
                    permission_result::allowed);
 
             std::atomic<bool> stop{false};
             std::atomic<int> wrong_answers{0};
             std::thread worker{[&client, &stop, &wrong_answers] {
                 while (!stop.load(std::memory_order_acquire)) {
-                    if (client.query(player(), "com.example.owned.home") !=
+                    if (client.query(player(), owned_home) !=
                         permission_result::allowed) {
                         wrong_answers.fetch_add(1, std::memory_order_relaxed);
                     }

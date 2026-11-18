@@ -640,6 +640,40 @@ auto service_registry::active_instances(std::string_view service) const
     return instances;
 }
 
+auto service_registry::snapshot(std::string_view service,
+                                std::string_view instance_prefix) const
+    -> service_snapshot {
+    std::shared_lock lock{mutex_};
+    // The whole map is read under one lock, and `commit_epoch()` switches every
+    // staged slot before it advances the epoch in the same critical section, so
+    // the returned epoch and slot set always describe the same committed
+    // generation.
+    service_snapshot result{.epoch = epoch_};
+    const auto first =
+        active_.lower_bound(active_key{std::string{service}, {}});
+    for (auto slot = first;
+         slot != active_.end() && slot->first.first == service; ++slot) {
+        if (!instance_prefix.empty() &&
+            !std::string_view{slot->first.second}.starts_with(
+                instance_prefix)) {
+            continue;
+        }
+        auto provider{provider_copy_locked(slot->second)};
+        if (provider.service.empty()) {
+            // The active slot references a candidate serial that is gone; a
+            // resolver must not see a payload that no longer exists.
+            continue;
+        }
+        result.slots.push_back(provider_handle{
+            .provider = std::move(provider),
+            .instance = slot->first.second,
+            .generation = slot->second.generation,
+            .epoch = epoch_,
+        });
+    }
+    return result;
+}
+
 auto service_registry::find(std::string_view service,
                             std::string_view provider_id,
                             std::string_view version) const

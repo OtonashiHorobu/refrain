@@ -3,9 +3,13 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 
 #include <refrain/mod/gamepack.hpp>
+#include <refrain/mod/host.hpp>
 
 #include <boost/ut.hpp>
 
+#include <fmt/format.h>
+
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -74,6 +78,35 @@ const suite service_slot_tests = [] {
         expect(declares({"refrain:net.session"}, "refrain:net.session"));
         expect(!declares({"refrain:net.session"}, "refrain:net.protocol"));
         expect(!declares({"refrain:net.session"}, "refrain:world.migration"));
+    };
+
+    "mod/chain wrapper slots round-trip their position"_test = [] {
+        expect(mod::chain_wrapper_instance(0) == "chain:0");
+        expect(mod::chain_wrapper_instance(12) == "chain:12");
+        expect(mod::chain_wrapper_position("chain:0") ==
+               std::optional<std::size_t>{0});
+        expect(mod::chain_wrapper_position("chain:12") ==
+               std::optional<std::size_t>{12});
+        expect(!mod::chain_wrapper_position("default").has_value());
+        expect(!mod::chain_wrapper_position("chain").has_value());
+        expect(!mod::chain_wrapper_position("chain:").has_value());
+        expect(!mod::chain_wrapper_position("chain:x").has_value());
+        expect(!mod::chain_wrapper_position("chain:1x").has_value());
+        expect(!mod::chain_wrapper_position("chain:1234567890").has_value());
+    };
+
+    "mod/chain wrapper positions share one bound with the slot name"_test = [] {
+        // The last valid position is the bound minus one; the bound itself
+        // and anything larger cannot decode, so a published slot always has
+        // a position the registry reader understands.
+        const auto last{mod::max_chain_wrappers - 1U};
+        expect(mod::chain_wrapper_position(mod::chain_wrapper_instance(last)) ==
+               std::optional<std::size_t>{last});
+        expect(!mod::chain_wrapper_position(
+                    fmt::format("chain:{}", mod::max_chain_wrappers))
+                    .has_value());
+        expect(!mod::chain_wrapper_position("chain:9999999").has_value());
+        expect(!mod::chain_wrapper_position("chain:12345678").has_value());
     };
 
     "mod/declares_service applies the short-slot rule to a declaration"_test =

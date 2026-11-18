@@ -27,6 +27,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cassert>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -275,6 +276,41 @@ struct provider_ref {
     return provider_ref{.id = text.substr(0, at),
                         .version = text.substr(at + 1)};
 }
+
+} // namespace
+
+auto chain_wrapper_instance(std::size_t position) -> std::string {
+    // The plan verification refuses a chain that declares more wrappers than
+    // the bound, so a position outside it never reaches a published slot.
+    assert(position < max_chain_wrappers);
+    return fmt::format("{}{}", chain_wrapper_instance_prefix, position);
+}
+
+auto chain_wrapper_position(std::string_view instance) noexcept
+    -> std::optional<std::size_t> {
+    if (!instance.starts_with(chain_wrapper_instance_prefix)) {
+        return std::nullopt;
+    }
+    auto text{instance.substr(chain_wrapper_instance_prefix.size())};
+    // `max_chain_wrappers` has seven decimal digits, so a longer suffix cannot
+    // encode a valid position and must not overflow the accumulator below.
+    if (text.empty() || text.size() > 7U) {
+        return std::nullopt;
+    }
+    std::size_t position{0};
+    for (const auto digit : text) {
+        if (digit < '0' || digit > '9') {
+            return std::nullopt;
+        }
+        position = position * 10U + static_cast<std::size_t>(digit - '0');
+    }
+    if (position >= max_chain_wrappers) {
+        return std::nullopt;
+    }
+    return position;
+}
+
+namespace {
 
 // ---------------------------------------------------------------------------
 // Generated vtable ABI header
@@ -1145,6 +1181,8 @@ auto host::load_one(const composition &plan, const package_source &package,
     current_mod_provides_ = manifest->provides;
     current_mod_planned_slots_.clear();
     current_mod_planned_instances_.clear();
+    current_mod_chain_slots_.clear();
+    current_mod_default_slots_.clear();
     if (const auto found{planned.slots.find(manifest->common.id)};
         found != planned.slots.end()) {
         current_mod_planned_slots_ = found->second;
@@ -1152,6 +1190,14 @@ auto host::load_one(const composition &plan, const package_source &package,
     if (const auto found{planned.instances.find(manifest->common.id)};
         found != planned.instances.end()) {
         current_mod_planned_instances_ = found->second;
+    }
+    if (const auto found{planned.chain_slots.find(manifest->common.id)};
+        found != planned.chain_slots.end()) {
+        current_mod_chain_slots_ = found->second;
+    }
+    if (const auto found{planned.default_slots.find(manifest->common.id)};
+        found != planned.default_slots.end()) {
+        current_mod_default_slots_ = found->second;
     }
 
     const auto declares_provides{!manifest->provides.empty()};
@@ -2352,7 +2398,11 @@ auto host::load(const composition &plan, const package_resolver &resolve)
         // activate provider code and which loaders are part of it, so project
         // it once before any factory runs. The registration path reads the
         // declared loader plan from `current_plan_` until it is published.
-        planned_providers planned{plan_providers(plan)};
+        auto planned_result{plan_providers(plan)};
+        if (!planned_result) {
+            return std::unexpected{std::move(planned_result.error())};
+        }
+        const planned_providers &planned{*planned_result};
         current_plan_ = &plan;
 
         // The bootstrap set is derived from the plan and the manifests: every
@@ -2442,6 +2492,8 @@ auto host::load(const composition &plan, const package_resolver &resolve)
         current_mod_provides_.clear();
         current_mod_planned_slots_.clear();
         current_mod_planned_instances_.clear();
+        current_mod_chain_slots_.clear();
+        current_mod_default_slots_.clear();
         current_mod_selected_provider_ = false;
         current_manifest_ = nullptr;
         current_candidate_ = nullptr;
@@ -2501,32 +2553,62 @@ auto host::load(const composition &plan, const package_resolver &resolve)
     return result;
 }
 
-auto host::plan_providers(const composition &plan) -> planned_providers {
+auto host::plan_providers(const composition &plan)
+    -> result<planned_providers> {
     planned_providers planned{};
     for (const auto &resolved : plan.providers) {
-        const auto add_provider_ref{
-            [&planned, &resolved](std::string_view ref,
-                                  std::string_view instance) {
-                const auto id{std::string{split_provider_ref(ref).id}};
-                if (id.empty()) {
-                    return;
-                }
-                planned.mods.insert(id);
-                if (resolved.service.empty()) {
-                    return;
-                }
-                planned.slots[id].insert(resolved.service);
-                if (!instance.empty()) {
-                    planned.instances[id][resolved.service].insert(
-                        std::string{instance});
-                }
-            }};
-        add_provider_ref(resolved.provider, {});
-        for (const auto &instance : resolved.instances) {
-            add_provider_ref(instance.provider, instance.name);
+        // The bound is checked before any wrapper slot name is formed, so a
+        // hand-built composition beyond the reader's bound fails closed with a
+        // diagnostic instead of constructing a position the reader rejects.
+        if (resolved.wrappers.size() > max_chain_wrappers) {
+            return std::unexpected{fail(
+                error_code::unsupported,
+                fmt::format("chain binding for service '{}' declares {} "
+                            "wrappers, more than the supported bound of {}",
+                            resolved.service, resolved.wrappers.size(),
+                            max_chain_wrappers))};
         }
-        for (const auto &wrapper : resolved.wrappers) {
-            add_provider_ref(wrapper, {});
+        // `role` selects which slot table records the reference: the reserved
+        // default instance (exclusive provider or chain base), an `instanced`
+        // instance name, or one chain wrapper position.
+        enum class role { default_instance, instance, chain_wrapper };
+        const auto add_provider_ref{[&planned, &resolved](std::string_view ref,
+                                                          std::string_view slot,
+                                                          role kind) {
+            const auto id{std::string{split_provider_ref(ref).id}};
+            if (id.empty()) {
+                return;
+            }
+            planned.mods.insert(id);
+            if (resolved.service.empty()) {
+                return;
+            }
+            planned.slots[id].insert(resolved.service);
+            switch (kind) {
+            case role::default_instance:
+                planned.default_slots[id].insert(resolved.service);
+                break;
+            case role::instance:
+                planned.instances[id][resolved.service].insert(
+                    std::string{slot});
+                break;
+            case role::chain_wrapper:
+                planned.chain_slots[id][resolved.service].insert(
+                    std::string{slot});
+                break;
+            }
+        }};
+        add_provider_ref(resolved.provider, {}, role::default_instance);
+        for (const auto &instance : resolved.instances) {
+            add_provider_ref(instance.provider, instance.name, role::instance);
+        }
+        // A chain wrapper occupies its own slot, one instance per declared
+        // wrapper position; the base keeps the reserved default instance.
+        for (std::size_t position{0}; position < resolved.wrappers.size();
+             ++position) {
+            add_provider_ref(resolved.wrappers[position],
+                             chain_wrapper_instance(position),
+                             role::chain_wrapper);
         }
     }
     // Package-provided loaders project onto the loader service the same way a
@@ -2669,7 +2751,8 @@ auto host::verify_plan_activation(const composition &plan, bool staged) const
         }};
     const auto verify_active{[this, &find_mod, &active_view](
                                  std::string_view slot, std::string_view ref,
-                                 std::string_view instance) -> status {
+                                 std::string_view instance,
+                                 bool allow_data_only) -> status {
         const auto [id, version] = split_provider_ref(ref);
         if (id.empty()) {
             return status_ok();
@@ -2683,9 +2766,20 @@ auto host::verify_plan_activation(const composition &plan, bool staged) const
                                  slot, id))};
         }
         if (mod->provides_summary.empty()) {
-            // Data-only binding (`content = ...`): the mod declares no
-            // contract, so there is no provider instance to activate.
-            return status_ok();
+            if (allow_data_only) {
+                // Data-only binding (`content = ...`): the mod declares no
+                // contract, so there is no provider instance to activate.
+                return status_ok();
+            }
+            // A chain wrapper is a provider by definition: a data-only package
+            // that cannot fill the slot would silently drop its decisions from
+            // the composed chain.
+            return std::unexpected{fail(
+                error_code::not_found,
+                fmt::format("provider activation for service '{}' instance "
+                            "'{}': planned mod '{}' declares no provider "
+                            "contract, so it cannot occupy this provider slot",
+                            slot, instance, id))};
         }
         for (const auto &service : services_.services()) {
             if (!matches_slot(service, slot)) {
@@ -2713,48 +2807,39 @@ auto host::verify_plan_activation(const composition &plan, bool staged) const
                         slot, instance, id))};
     }};
 
-    // Chain wrappers wrap the base provider; the upper layer has no runtime
-    // chain composition yet, so a wrapper only has to be registered as a
-    // candidate (the base is the active default instance).
-    const auto verify_registered{[this](std::string_view slot,
-                                        std::string_view ref) -> status {
-        const auto [id, version] = split_provider_ref(ref);
-        if (id.empty()) {
-            return status_ok();
-        }
-        for (const auto &service : services_.services()) {
-            if (!matches_slot(service, slot)) {
-                continue;
-            }
-            const auto candidate{services_.find(service, id, version)};
-            if (candidate.has_value()) {
-                return status_ok();
-            }
-        }
-        return std::unexpected{fail(
-            error_code::not_found,
-            fmt::format("provider activation for service '{}': planned chain "
-                        "wrapper '{}' was not registered",
-                        slot, ref))};
-    }};
-
+    // A chain wrapper is an active provider on its own `chain:<position>`
+    // instance; the base keeps the reserved default instance. Verifying the
+    // active slot (instead of the candidate table) is what makes a staged
+    // wrapper reload truthful: the staged activation of the wrapper does not
+    // shadow the base, and a wrapper that never activated still fails closed.
     for (const auto &resolved : plan.providers) {
         if (!resolved.provider.empty()) {
-            if (auto checked{
-                    verify_active(resolved.service, resolved.provider, {})};
+            if (auto checked{verify_active(resolved.service, resolved.provider,
+                                           {}, true)};
                 !checked) {
                 return checked;
             }
         }
         for (const auto &instance : resolved.instances) {
             if (auto checked{verify_active(resolved.service, instance.provider,
-                                           instance.name)};
+                                           instance.name, true)};
                 !checked) {
                 return checked;
             }
         }
-        for (const auto &wrapper : resolved.wrappers) {
-            if (auto checked{verify_registered(resolved.service, wrapper)};
+        if (resolved.wrappers.size() > max_chain_wrappers) {
+            return std::unexpected{fail(
+                error_code::unsupported,
+                fmt::format("chain binding for service '{}' declares {} "
+                            "wrappers, more than the supported bound of {}",
+                            resolved.service, resolved.wrappers.size(),
+                            max_chain_wrappers))};
+        }
+        for (std::size_t position{0}; position < resolved.wrappers.size();
+             ++position) {
+            if (auto checked{
+                    verify_active(resolved.service, resolved.wrappers[position],
+                                  chain_wrapper_instance(position), false)};
                 !checked) {
                 return checked;
             }
@@ -2786,6 +2871,8 @@ void host::enter_failed_state() {
     current_mod_provides_.clear();
     current_mod_planned_slots_.clear();
     current_mod_planned_instances_.clear();
+    current_mod_chain_slots_.clear();
+    current_mod_default_slots_.clear();
     current_mod_selected_provider_ = false;
     current_manifest_ = nullptr;
     current_plan_ = nullptr;
@@ -2808,6 +2895,7 @@ void host::enter_failed_state() {
     staged_mods_.clear();
     staged_retire_mods_.clear();
     staged_retire_reasons_.clear();
+    staged_retired_chain_slots_.clear();
     contract_definitions_.clear();
     staged_contract_definitions_.clear();
     current_contract_records_.clear();
@@ -3080,7 +3168,11 @@ auto host::stage_composition_locked(const composition &next,
         }
     }
 
-    const auto planned{plan_providers(next)};
+    auto planned_result{plan_providers(next)};
+    if (!planned_result) {
+        return std::unexpected{std::move(planned_result.error())};
+    }
+    const planned_providers &planned{*planned_result};
     const auto is_reload{[&options](std::string_view id) {
         return contains_id(options.reload, id);
     }};
@@ -3198,6 +3290,8 @@ auto host::stage_composition_locked(const composition &next,
     current_mod_provides_.clear();
     current_mod_planned_slots_.clear();
     current_mod_planned_instances_.clear();
+    current_mod_chain_slots_.clear();
+    current_mod_default_slots_.clear();
     current_mod_selected_provider_ = false;
     current_replaced_handle_.reset();
     current_replaced_generation_ = 0;
@@ -3218,6 +3312,48 @@ auto host::stage_composition_locked(const composition &next,
                 abort_staged_internals();
                 return std::unexpected{std::move(staged.error())};
             }
+        }
+    }
+    // A wrapper the staged composition no longer declares leaves its slot even
+    // when its package stays loaded: the chain is resolved from the registry,
+    // not from the plan, so a stale slot would keep answering after the commit
+    // that removed the declaration.
+    const auto wrapper_is_planned{[&planned](std::string_view id,
+                                             std::string_view service,
+                                             std::string_view instance) {
+        const auto found{planned.chain_slots.find(std::string{id})};
+        if (found == planned.chain_slots.end()) {
+            return false;
+        }
+        for (const auto &[slot, instances] : found->second) {
+            if (matches_slot(service, slot) &&
+                instances.contains(std::string{instance})) {
+                return true;
+            }
+        }
+        return false;
+    }};
+    for (const auto &mod : mods_) {
+        if (std::any_of(retiring.begin(), retiring.end(),
+                        [&mod](const loaded_mod &retired) {
+                            return retired.id == mod.id;
+                        })) {
+            continue;
+        }
+        for (const auto &slot : mod.provided_slots) {
+            if (!chain_wrapper_position(slot.instance).has_value() ||
+                wrapper_is_planned(mod.id, slot.service, slot.instance) ||
+                services_.staged_decision(slot.service, slot.instance)
+                    .has_value()) {
+                continue;
+            }
+            if (auto staged{
+                    services_.stage_retire(slot.service, slot.instance)};
+                !staged && staged.error().code != error_code::not_found) {
+                abort_staged_internals();
+                return std::unexpected{std::move(staged.error())};
+            }
+            staged_retired_chain_slots_.push_back(slot);
         }
     }
 
@@ -3330,6 +3466,7 @@ void host::abort_staged_internals() noexcept {
         staged_mods_.clear();
         staged_retire_mods_.clear();
         staged_retire_reasons_.clear();
+        staged_retired_chain_slots_.clear();
         staged_contract_definitions_.clear();
         staged_drain_timeout_ = default_drain_timeout;
         staged_next_composition_.reset();
@@ -3343,6 +3480,8 @@ void host::abort_staged_internals() noexcept {
         current_mod_provides_.clear();
         current_mod_planned_slots_.clear();
         current_mod_planned_instances_.clear();
+        current_mod_chain_slots_.clear();
+        current_mod_default_slots_.clear();
         current_mod_selected_provider_ = false;
         current_loader_id_.clear();
         current_loader_sandboxed_ = false;
@@ -3415,6 +3554,28 @@ auto host::commit_epoch() -> result<composition_commit> {
                 forced_quarantine[mod.id] = drained.error().message;
             }
         }
+    }
+    // A chain slot the staged plan stops declaring is retired at the same
+    // commitment point, so a query racing the switch starts from the base
+    // resolver instead of the table leaving the committed chain. The package
+    // stays loaded, so a timed-out drain is not a quarantine: the table and its
+    // code remain valid after the switch.
+    for (const auto &slot : staged_retired_chain_slots_) {
+        auto quiesced_slot{services_.quiesce(slot.service, slot.instance)};
+        if (!quiesced_slot &&
+            quiesced_slot.error().code != error_code::not_found) {
+            for (const auto &[service, instance] : quiesced) {
+                static_cast<void>(services_.resume(service, instance));
+            }
+            abort_staged_internals();
+            return std::unexpected{std::move(quiesced_slot.error())};
+        }
+        if (!quiesced_slot) {
+            continue;
+        }
+        quiesced.emplace_back(slot.service, slot.instance);
+        static_cast<void>(services_.drain(slot.service, slot.instance,
+                                          staged_drain_timeout_));
     }
 
     // The registry commit is the atomic switch: every staged slot changes at
@@ -3505,6 +3666,7 @@ auto host::commit_epoch() -> result<composition_commit> {
     staged_mods_.clear();
     staged_retire_mods_.clear();
     staged_retire_reasons_.clear();
+    staged_retired_chain_slots_.clear();
     staged_contract_definitions_.clear();
     staged_drain_timeout_ = default_drain_timeout;
     staged_change_.reset();
@@ -3918,7 +4080,61 @@ auto host::register_provider(std::string_view service,
     const auto binding{current_mod_planned_instances_.find(*planned_slot)};
     const bool instanced{binding != current_mod_planned_instances_.end() &&
                          !binding->second.empty()};
-    if (instanced) {
+    const auto chain_binding{current_mod_chain_slots_.find(*planned_slot)};
+    const bool chain_wrapper{chain_binding != current_mod_chain_slots_.end() &&
+                             !chain_binding->second.empty()};
+    const bool chain_base{current_mod_default_slots_.contains(*planned_slot)};
+    if (chain_wrapper && chain_base) {
+        return std::unexpected{fail(
+            error_code::permission_denied,
+            fmt::format("mod '{}' cannot provide service '{}': the gamepack "
+                        "plan binds it as both the chain base and a chain "
+                        "wrapper, and one provider table cannot occupy two "
+                        "composition slots",
+                        current_mod_, service))};
+    }
+    if (chain_wrapper && instanced) {
+        return std::unexpected{fail(
+            error_code::permission_denied,
+            fmt::format("mod '{}' cannot provide service '{}': the gamepack "
+                        "plan binds it as both a chain wrapper and an "
+                        "instanced provider",
+                        current_mod_, service))};
+    }
+    // The registry instance the registration targets: the plan's instanced
+    // name, the mod's own chain wrapper slot, or the reserved default instance.
+    std::string resolved_instance{};
+    if (chain_wrapper) {
+        if (chain_binding->second.size() > 1U) {
+            return std::unexpected{fail(
+                error_code::permission_denied,
+                fmt::format("mod '{}' cannot provide service '{}': the "
+                            "gamepack plan declares it at more than one chain "
+                            "wrapper position, and one provider table can only "
+                            "occupy one slot",
+                            current_mod_, service))};
+        }
+        resolved_instance = *chain_binding->second.begin();
+        if (!instance.empty() && instance != resolved_instance &&
+            instance != kernel::service_registry::default_instance) {
+            return std::unexpected{fail(
+                error_code::permission_denied,
+                fmt::format("mod '{}' cannot activate service '{}' on instance "
+                            "'{}': the plan binds it as the chain wrapper on "
+                            "slot '{}'",
+                            current_mod_, service, instance,
+                            resolved_instance))};
+        }
+        if (instance == kernel::service_registry::default_instance) {
+            return std::unexpected{fail(
+                error_code::permission_denied,
+                fmt::format("mod '{}' cannot activate service '{}' on the "
+                            "default instance: the plan binds it as the chain "
+                            "wrapper on slot '{}', and the default instance "
+                            "belongs to the chain base",
+                            current_mod_, service, resolved_instance))};
+        }
+    } else if (instanced) {
         if (instance.empty() ||
             binding->second.count(std::string{instance}) == 0) {
             std::string planned;
@@ -3934,6 +4150,7 @@ auto host::register_provider(std::string_view service,
                                  "instance '{}': the plan binds [{}]",
                                  current_mod_, service, instance, planned))};
         }
+        resolved_instance = std::string{instance};
     } else if (!instance.empty() &&
                instance != kernel::service_registry::default_instance) {
         return std::unexpected{fail(
@@ -3979,10 +4196,12 @@ auto host::register_provider(std::string_view service,
 
     const auto effective_version{version.empty() ? current_mod_version_
                                                  : version};
-    const auto resolved_instance{
-        instance.empty()
-            ? std::string{kernel::service_registry::default_instance}
-            : std::string{instance}};
+    if (resolved_instance.empty()) {
+        // The default instance normalizes to its reserved name so the slot a
+        // mod records is the same name a later retire/quiesce addresses.
+        resolved_instance =
+            std::string{kernel::service_registry::default_instance};
+    }
     provider_apis_.push_back(std::make_unique<provider_api>(api));
     provider_info info{};
     info.service = std::string{service};

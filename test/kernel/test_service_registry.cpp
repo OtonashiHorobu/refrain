@@ -916,6 +916,170 @@ suite<"kernel/service_registry"> service_registry_tests = [] {
         registry.abort_staging();
     };
 
+    "registry/snapshot reports one committed epoch with sorted slots"_test =
+        [] {
+            refrain::kernel::service_registry registry;
+            expect(registry
+                       .add_provider(make_provider("refrain:permissions",
+                                                   "base@1", "1.0.0", 1))
+                       .has_value());
+            expect(registry
+                       .add_provider(make_provider("refrain:permissions",
+                                                   "inner@1", "1.0.0", 2))
+                       .has_value());
+            expect(registry
+                       .add_provider(make_provider("refrain:permissions",
+                                                   "outer@1", "1.0.0", 3))
+                       .has_value());
+            expect(registry.select_active("refrain:permissions", "base@1")
+                       .has_value());
+            expect(registry
+                       .select_active("refrain:permissions", "inner@1", {},
+                                      "chain:0")
+                       .has_value());
+            expect(registry
+                       .select_active("refrain:permissions", "outer@1", {},
+                                      "chain:1")
+                       .has_value());
+            expect(registry.commit_epoch().has_value());
+
+            const auto all{registry.snapshot("refrain:permissions")};
+            expect(all.epoch == 1U);
+            expect(all.slots.size() == 3U);
+            if (all.slots.size() == 3U) {
+                // Ascending instance-name order, base included.
+                expect(all.slots[0].instance == "chain:0");
+                expect(all.slots[1].instance == "chain:1");
+                expect(all.slots[2].instance ==
+                       refrain::kernel::service_registry::default_instance);
+                expect(all.slots[0].generation == 1U);
+                expect(all.slots[0].epoch == 1U);
+            }
+            const auto wrappers{
+                registry.snapshot("refrain:permissions", "chain:")};
+            expect(wrappers.epoch == 1U);
+            expect(wrappers.slots.size() == 2U);
+            if (wrappers.slots.size() == 2U) {
+                expect(wrappers.slots[0].provider.capabilities == 2U);
+                expect(wrappers.slots[1].provider.capabilities == 3U);
+            }
+            expect(registry.snapshot("refrain:missing").slots.empty());
+        };
+
+    "registry/snapshot publishes every slot with its epoch"_test = [] {
+        refrain::kernel::service_registry registry;
+        expect(registry
+                   .add_provider(
+                       make_provider("refrain:worldgen", "flat@1", "1.0.0"))
+                   .has_value());
+        const auto next{registry.add_staged_provider(
+            make_provider("refrain:worldgen", "flat@1", "1.0.0", 0x2))};
+        expect(next.has_value());
+        if (!next) {
+            return;
+        }
+        expect(
+            registry.select_active("refrain:worldgen", "flat@1").has_value());
+        expect(registry.stage_active(*next, "refrain:worldgen", "chain:0")
+                   .has_value());
+        expect(registry.commit_epoch().has_value());
+
+        // The epoch and the slot payload are published in one critical
+        // section, so a snapshot can never report the new epoch with the old
+        // payload or the reverse.
+        const auto snapshot{registry.snapshot("refrain:worldgen")};
+        expect(snapshot.epoch == 1U);
+        expect(snapshot.slots.size() == 2U);
+        for (const auto &slot : snapshot.slots) {
+            expect(slot.epoch == snapshot.epoch);
+        }
+        const auto chained{registry.snapshot("refrain:worldgen", "chain:")};
+        expect(chained.slots.size() == 1U);
+        if (chained.slots.size() == 1U) {
+            expect(chained.slots[0].provider.capabilities == 0x2U);
+        }
+    };
+
+    "registry/a retired candidate is not re-resolved by first-registered "
+    "order"_test = [] {
+        refrain::kernel::service_registry registry;
+        // Two generations of one wrapper share the service/id/version text; the
+        // committed slot points at the newer serial while `find()` keeps
+        // reporting the first registered candidate.
+        const auto old_serial{registry.add_provider_serial(
+            make_provider("refrain:permissions", "wrapper@1", "1.0.0", 1))};
+        const auto new_serial{registry.add_staged_provider(
+            make_provider("refrain:permissions", "wrapper@1", "1.0.0", 2))};
+        expect(old_serial.has_value());
+        expect(new_serial.has_value());
+        if (!old_serial || !new_serial) {
+            return;
+        }
+        expect(
+            registry.stage_active(*new_serial, "refrain:permissions", "chain:0")
+                .has_value());
+        expect(registry.commit_epoch().has_value());
+
+        const auto stale{registry.find("refrain:permissions", "wrapper@1")};
+        expect(stale.has_value());
+        if (stale) {
+            expect(stale->capabilities == 1U);
+        }
+        const auto snapshot{registry.snapshot("refrain:permissions", "chain:")};
+        expect(snapshot.slots.size() == 1U);
+        if (snapshot.slots.size() != 1U) {
+            return;
+        }
+        expect(snapshot.slots[0].provider.capabilities == 2U);
+        // A resolver that reads the committed slot can lease exactly the table
+        // it resolved, and the retired predecessor stays unleased.
+        expect(registry.acquire(snapshot.slots[0]).has_value());
+
+        // Dropping the retired candidate cannot change the committed slot.
+        expect(registry.remove_provider(*old_serial).has_value());
+        const auto after{registry.snapshot("refrain:permissions", "chain:")};
+        expect(after.slots.size() == 1U);
+        if (after.slots.size() == 1U) {
+            expect(after.slots[0].provider.capabilities == 2U);
+            expect(registry.acquire(after.slots[0]).has_value());
+        }
+    };
+
+    "registry/snapshot still reports a quiescing slot and refuses its lease"_test =
+        [] {
+            refrain::kernel::service_registry registry;
+            expect(registry
+                       .add_provider(make_provider("refrain:permissions",
+                                                   "wrapper@1", "1.0.0"))
+                       .has_value());
+            expect(registry
+                       .select_active("refrain:permissions", "wrapper@1", {},
+                                      "chain:0")
+                       .has_value());
+            expect(registry.commit_epoch().has_value());
+            const auto handle =
+                registry.query("refrain:permissions", "chain:0");
+            expect(handle.has_value());
+            if (!handle) {
+                return;
+            }
+            expect(
+                registry.quiesce("refrain:permissions", "chain:0").has_value());
+            // The snapshot reports the slot the committed generation still
+            // owns; the lease is what rejects a call during the switch.
+            const auto snapshot{
+                registry.snapshot("refrain:permissions", "chain:")};
+            expect(snapshot.slots.size() == 1U);
+            const auto lease{registry.acquire(snapshot.slots[0])};
+            expect(!lease.has_value());
+            if (!lease) {
+                expect(lease.error().code == refrain::error_code::stale);
+            }
+            expect(
+                registry.resume("refrain:permissions", "chain:0").has_value());
+            expect(registry.acquire(snapshot.slots[0]).has_value());
+        };
+
     "registry/dump reports the committed epoch"_test = [] {
         refrain::kernel::service_registry registry;
         expect(registry
