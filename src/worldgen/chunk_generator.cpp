@@ -1091,6 +1091,10 @@ auto chunk_generator::generate_impl(const chunk_pos &pos)
                                       const block_pos &position) {
                     return structure_features->place(id, random, position);
                 };
+            place_context.bind_feature_chunk =
+                [&structure_features](proto_chunk &chunk) {
+                    structure_features->bind_chunk(chunk);
+                };
         }
     }
 
@@ -1430,6 +1434,10 @@ auto chunk_generator::make_structure_placement(
                                         worldgen_random &random,
                                         const block_pos &position) {
                 return pointer->features->place(id, random, position);
+            };
+        placement->context.bind_feature_chunk =
+            [pointer = placement.get()](proto_chunk &chunk) {
+                pointer->features->bind_chunk(chunk);
             };
     }
     return placement;

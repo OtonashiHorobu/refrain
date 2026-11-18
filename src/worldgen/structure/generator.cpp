@@ -381,6 +381,10 @@ auto structure_generator::generate(const chunk_pos &pos)
             return feature_placer->place(id, random, position);
         };
         place_context.place_feature = place_feature;
+        place_context.bind_feature_chunk =
+            [&feature_placer](proto_chunk &chunk) {
+                feature_placer->bind_chunk(chunk);
+            };
     }
     worldgen_random decoration{
         std::make_unique<xoroshiro_random_source>(config_.seed)};

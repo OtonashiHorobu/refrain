@@ -346,4 +346,68 @@ suite<"worldgen/feature-pool"> feature_pool_tests = [] {
                 warm_random);
             expect(warm.chunk->state_at(3, 8, 4) == *water);
         };
+
+    "a feature element placed for a piece runs against the receiving chunk"_test = [] {
+        fixture state;
+        // The tile generator builds one placer from a context that names
+        // the generation region and no chunk, because the pieces it places
+        // belong to several chunks. Every piece placement therefore binds
+        // the receiving chunk through the context hook, and a feature that
+        // reads the chunk (pile placement starts from its build limits)
+        // must run against that chunk.
+        auto region_context = state.context;
+        region_context.chunk = nullptr;
+        feature::feature_data_set data;
+        data.features.emplace(
+            "oracle:pile",
+            feature::configured_feature_document{
+                .id = "oracle:pile",
+                .document = parse(
+                    R"({"type":"minecraft:block_pile","state_provider":{"id":"minecraft:stone"}})")});
+        data.placed.emplace("oracle:pile", feature::placed_feature_document{
+                                               .id = "oracle:pile",
+                                               .feature = "oracle:pile",
+                                               .placement = parse("[]")});
+        structure::structure_feature_placer placer{region_context, data};
+        const std::array ids{std::string{"oracle:pile"}};
+        const auto loaded = placer.load(ids);
+        expect(loaded.has_value()) << (loaded ? "" : loaded.error().message);
+        if (!loaded) {
+            return;
+        }
+        // The pile places on a motion-blocking surface, so give the
+        // receiving chunk a floor one block under the pile origin.
+        for (jint z = 0; z < 16; ++z) {
+            for (jint x = 0; x < 16; ++x) {
+                (void)state.chunk->set_state(x, 9, z, state.stone);
+            }
+        }
+        auto piece_context = state.context;
+        piece_context.place_feature = [&placer](std::string_view id,
+                                                worldgen_random &random,
+                                                const block_pos &position) {
+            return placer.place(id, random, position);
+        };
+        piece_context.bind_feature_chunk = [&placer](proto_chunk &chunk) {
+            placer.bind_chunk(chunk);
+        };
+        worldgen_random random{
+            std::make_unique<xoroshiro_random_source>(424242)};
+        structure::place_structure_piece(
+            piece_context,
+            make_piece(feature_element("oracle:pile"),
+                       block_pos{.x = 8, .y = 10, .z = 8}),
+            random);
+        jint placed = 0;
+        for (jint y = 10; y <= 11; ++y) {
+            for (jint z = 0; z < 16; ++z) {
+                for (jint x = 0; x < 16; ++x) {
+                    if (state.chunk->state_at(x, y, z) == state.stone) {
+                        ++placed;
+                    }
+                }
+            }
+        }
+        expect(placed > 0) << "the pile placed nothing in its chunk";
+    };
 };
