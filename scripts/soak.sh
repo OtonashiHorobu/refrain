@@ -116,6 +116,7 @@ EOF
 "$BIN/refrain-server" --gamepack "$ROOT/gamepack/gamepack.toml" \
     --world "$WORLD" "${SEED_ARGS[@]}" --config-dir "$WORK/config" \
     --eula-file "$WORK/eula.toml" --accept-eula \
+    --mods-lock "$WORK/mods.lock" \
     --script "$WORK/script.txt" --ticks $((TICKS + 20)) \
     >"$WORK/server.log" 2>&1 &
 SERVER_PID=$!

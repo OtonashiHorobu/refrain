@@ -129,8 +129,9 @@ struct mods_list_options {
 
 /// `mods lock`: resolve the runtime composition (installed receipts + optional
 /// builtin image) exactly the way startup does and report or write `mods.lock`.
-/// Resolution goes through `app::resolve_server_mods`, so the lock this command
-/// writes is byte-identical to the one the server writes for the same inputs.
+/// Resolution goes through `app::resolve_server_mods` with the same options a
+/// server start computes from its flags, so the lock this command writes is
+/// byte-identical to the one the server writes for the same inputs.
 struct mods_lock_options {
     std::string gamepack{"gamepack/gamepack.toml"};
     /// Content store roots whose install receipts form the external catalog
@@ -143,6 +144,13 @@ struct mods_lock_options {
     /// Lock path; empty means `<gamepack directory>/mods.lock`.
     std::string lock{};
     std::string side{"server"};
+    /// `[providers]` keys the host cannot start without (`--require`); the
+    /// same list `refrain-server --require` passes to resolution.
+    std::vector<std::string> required_services{};
+    /// Force auto-discovery on regardless of `gamepack.auto_scan`.
+    bool force_auto_scan{false};
+    /// Disable auto-discovery: only `[mods].list` entries resolve.
+    bool no_auto_scan{false};
     /// Rewrite the lock when it is missing or drifted. Without it the command
     /// only reports (`--check` style exit code).
     bool write{false};

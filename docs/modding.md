@@ -533,15 +533,24 @@ the composition on the next start without editing the gamepack; the gamepack
 stays the source of truth for provider bindings, loader declarations and
 explicit version pins. `--no-auto-scan`, or `auto_scan = false` in the gamepack,
 turns discovery off: then `[mods].list` is the only source and every required
-mod must be listed.
+mod must be listed. The same opt-out stops the startup content bootstrap from
+installing inbox packages; `--auto-install` forces installation for one run and
+`--no-auto-install` keeps installation off while discovery stays on.
 
 An installed mod may declare `[provides]` for a service the gamepack already
 binds. Resolution fails closed in that case and names both candidates rather
 than silently keeping the gamepack's provider and loading the installed mod as
 data only. To choose the installed mod, name it explicitly: add it to
 `[mods].list` and bind it under `[providers]`. An explicit gamepack declaration
-always wins; the competition is then recorded as a lock warning. A mod that
-provides a different contract in the same namespace is not a conflict.
+always wins; the competition is then recorded as a lock warning.
+
+A declaration competes when it names the contract the binding's provider
+declares for the slot. The short spellings of a slot (`data`, `refrain:data`)
+name whatever contract that provider binds there, so a mod providing
+`refrain:data` competes with the shipped `data` binding even though its provider
+declares the full id `refrain:data.packs`. A different contract in the same
+namespace is not a conflict: `refrain:world.migration` does not compete with the
+`world` binding.
 
 A resolved composition is written to `mods.lock` next to the gamepack. The lock
 records the gamepack identity, every selected mod with its version, ABI, origin
@@ -577,10 +586,18 @@ refrain-tools mods lock -g gamepack/gamepack.toml \
     --lock gamepack/mods.lock --write
 ```
 
+`refrain-tools mods lock` accepts the server's resolution options: `--auto-scan`
+and `--no-auto-scan` override the gamepack policy and `--require` names services
+the host cannot start without, so a lock is resolved with the same options as
+the start it describes. A store root without a `mods/` directory is an empty
+catalog, matching what a server started with `--content-store` accepts.
+
 A missing lock is written once on the first start that resolves a composition;
 after that startup never rewrites it. A lock written by a different build
 profile or build id is refused rather than compared, and a lock that names a mod
-the binary was not built with fails before any world is opened.
+the binary was not built with fails before any world is opened. A release
+upgrade changes the build id, so remove the old lock once after upgrading and
+let the next resolve write it again.
 
 The install/update flow is therefore: install or update the package into the
 content store (`refrain-tools mods install`, or the server's startup inbox), then

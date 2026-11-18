@@ -263,7 +263,9 @@ only ends console input and does not stop the tick loop.
 | `--mods-lock <file>` | `mods.lock` path (default: next to the gamepack) |
 | `--auto-scan` | force discovery on regardless of the gamepack |
 | `--no-auto-scan` | disable discovery: only `[mods].list` entries load |
-| `--update-lock` | rewrite a drifted or missing `mods.lock` during this resolve instead of failing |
+| `--update-lock` | rewrite a drifted `mods.lock` during this resolve instead of failing; a missing lock is always written |
+| `--auto-install` | install inbox packages even when discovery is disabled (default: follow the effective discovery policy) |
+| `--no-auto-install` | scan and report the inbox without installing anything |
 | `--allow-downgrade` | accept a mod version lower than the installed highest (one run) |
 | `--replace-same-version` | accept the same mod `(id, version)` with a different archive digest (one run) |
 | `--keep-signer-pin` | keep a mod's signer pin after uninstalling its last version |
@@ -284,7 +286,14 @@ a content store joins the composition without editing `gamepack.toml`.
 `--no-auto-scan` (or `auto_scan = false` in the gamepack) is the single opt-out;
 then only the mods pinned in `[mods].list` load. The gamepack always decides
 provider bindings and loader declarations, and an explicit pin still overrides
-the discovered version.
+the discovered version. With discovery off, `--mods`, `--mods-lock` and
+`--update-lock` are usage errors (exit 2) rather than silently ignored flags.
+
+The same opt-out governs the startup content bootstrap: with discovery off,
+packages in the inbox are scanned and reported but not installed, so a start
+that pins a fixed composition cannot change it through the inbox. `--auto-install`
+forces installation for one run and `--no-auto-install` keeps installation off
+while discovery stays on.
 
 `mods.lock` next to the gamepack is the generated resolution record: the
 gamepack identity, every selected mod with its version, ABI, origin and manifest
@@ -298,6 +307,7 @@ sides and the exact refresh command:
 ```text
 mods.lock: '/srv/refrain/gamepack/mods.lock' is out of date:
 version drift: com.example.mod: lock says '1.0.0', resolved '1.0.1'
+fingerprint: lock says <old>, resolved <new>
 refresh it with: refrain-server --gamepack '/srv/refrain/gamepack/gamepack.toml' --content-store '/srv/refrain/store' --mods-lock '/srv/refrain/gamepack/mods.lock' --update-lock --check
 ```
 
@@ -305,9 +315,17 @@ Refresh it with `--update-lock` on a resolve-only run (`--check` opens no world
 and no port), or with `refrain-tools mods lock --write` in a development tree.
 The flow is install or update the package, refresh the lock, then start;
 installation writes the content store and its receipts only and never edits the
-gamepack or the lock. A lock written by a different build profile or build id is
-refused instead of compared, and a composition that claims a provider slot the
-gamepack already binds fails naming both candidates rather than silently
+gamepack or the lock.
+
+A lock is also refused when the build profile or the build id that wrote it does
+not match the running binary. A release upgrade ships a new build id, which
+invalidates an existing lock even when the profile is unchanged: `--update-lock`
+only refreshes a lock written by the same build, so after upgrading remove the
+old `mods.lock` and let the next resolve write a new one, or remove it and run
+`refrain-tools mods lock --write` in a development tree. The same rule rejects a
+lock written by another profile; that one is never refreshed, because the two
+builds do not contain the same mods. A composition that claims a provider slot
+the gamepack already binds fails naming both candidates rather than silently
 keeping one.
 
 The server logs the build's mod profile and build id at startup:

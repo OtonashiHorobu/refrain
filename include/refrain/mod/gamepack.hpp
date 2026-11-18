@@ -85,8 +85,10 @@ struct provider_binding {
 // ("data", "world", "protocol"), while a contract table or a factory passes the
 // full contract id ("refrain:data.packs", "refrain:net.protocol"). These
 // predicates are the single definition of that mapping: the host uses them to
-// activate a planned provider, and the tools use them to check that a mod's
-// `[provides]` list covers the slots its gamepack selects it for.
+// activate a planned provider, the tools use them to check that a mod's
+// `[provides]` list covers the slots its gamepack selects it for, and
+// resolution uses them to decide whether two provider declarations name the
+// same contract.
 
 namespace detail {
 
