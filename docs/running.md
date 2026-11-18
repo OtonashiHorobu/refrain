@@ -830,25 +830,68 @@ missing layer.
 
 A reload replaces the content layer: recipes, loot tables, advancements,
 worldgen documents, structure templates, tags and the file/asset layer every
-layer-aware consumer reads. Readers take the live view once per tick and never
-hold it across a tick boundary; the previous view is released when the last
-reader drops its snapshot, so a tick that started on the old view finishes on
-it.
+layer-aware consumer reads. Readers take the live snapshot once per tick and
+never hold it across a tick boundary; the snapshot keeps the view and its
+registry generation alive, so the previous view is released when the last
+reader drops it and a tick that started on the old view finishes on it.
 
-A reload does not replace:
+Chunk generation follows the published generation. A tile worker composes the
+published view over the installed game-data directory when a publish advances
+the generation, so a worldgen document, structure template or tag document the
+view changes is generation input for the chunks produced after the publish.
+Tag documents merge with the datapack rules for every tag kind: the installed
+document holds the lowest-priority values, each view layer appends its values,
+and a layer with `"replace": true` clears everything below it. A biome tag
+therefore keeps the installed values a feature predicate or structure match
+needs unless the view replaces it. A generator captures the generation it was
+built from; the worker swaps the generator between tiles, so the previous
+generator finishes the tile it is producing (up to `tile_size` squared chunks,
+64 by default), queued tiles are served by the newest generation, and chunks
+already written keep their content. A view that changes nothing chunk
+generation reads costs no copy and produces byte-identical chunks, which is the
+ordinary recipe or loot reload. The merged tree of a generation is a temporary
+directory removed when the last generator that captured it is destroyed; a
+leftover tree from a crashed process is swept when a process first materializes
+a content generation.
 
-- the block, item and entity registries. The server freezes them when it
-  starts and existing chunks keep the palette generation they were written
-  with. A pack that adds, removes or edits a registry document
+Registry data follows the same rule with two boundaries:
+
+- A change to block, item or entity registry documents
   (`data/<namespace>/block/...`, `data/<namespace>/item/...`,
-  `data/<namespace>/entity_type/...`, or a shipped `tables.rvtb` /
+  `data/<namespace>/entity_type/...`) is published as a new immutable registry
+  generation together with the view. Its entry ids are assigned per registry
+  kind in content-key order and every entry records its document digest, so the
+  mapping is a pure function of the content and a snapshot keeps the generation
+  it started with. The mapping is a data-layer identity: chunk generation
+  resolves block names on demand from the reloadable worldgen documents and
+  tag documents, and a stored palette keeps canonical block-state keys rather
+  than numeric ids, so no remap is needed and no registry document change is
+  generation-observable by itself. The commit names the changed class and says
+  that generated chunk content changes only through worldgen and tag
+  documents. A registry document path that cannot define an entry is refused as
+  restart-required instead of publishing an unchanged mapping;
+- A change to a registry container (`tables.rvtb` or
   `protocol_registry.json`) is refused with `restart required`, naming the
-  changed files, and the live view stays as it is;
-- mod code and the mod composition. That is `mods reload <id>` under
-  `hot_reload`, not `mods reload-data`;
-- the chunk generator's own data snapshot. Chunk generation owns generator
-  workers started from the game-data directory at boot, so changed worldgen
-  documents become generation input after a restart in this build.
+  changed files. The server froze the numeric identities of those tables and
+  the wire registry catalog at startup, and a connected client received the old
+  catalog at login. A pack that changes both classes is refused as one unit
+  rather than applying the document half.
+
+The spawn prefill of a fresh world runs before the first publish, so it takes
+the composition-root boot view and binds the same generation the tile workers
+will stream from: a spawn chunk and a streamed chunk of the same tile are
+produced from one generation.
+
+A reload does not replace mod code or the mod composition; that is
+`mods reload <id>` under `hot_reload`, not `mods reload-data`.
+
+The experimental per-chunk scheduler keeps its boot content after a reload: it
+runs one frozen shared block-state table whose ids every worker generator has
+already resolved, so it cannot be rebound safely. A composition that selects
+that path also declares that it cannot bind registry generations, and a
+registry-document reload is then refused as restart-required with the scheduler
+named instead of reporting a publish that nothing rebinds. The tile path is the
+production path and is rebound.
 
 A failed rebuild (a malformed document, a missing layer, a validation error) is
 rolled back: the live generation stays and the error names the layer and the

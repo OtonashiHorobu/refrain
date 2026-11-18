@@ -37,18 +37,44 @@ namespace refrain::app {
 // `content_view` pointer across a tick boundary. The last snapshot that refers
 // to the old view releases it in its destructor.
 //
-// A failed build, or a build whose block/item/entity registry data differs from
-// the live view, is rolled back: the live view is unchanged and the error names
-// the layer, path or registry file that needs attention. Registry changes are
-// refused with an outcome that says the change needs a restart, because the
-// running server froze its registries at startup and existing chunks keep the
-// generation they were written with.
+// A failed build is rolled back: the live view is unchanged and the error
+// names the layer and path that needs attention. Registry changes follow the
+// class of the changed input (`data::classify_registry_input_path`):
+//
+// - A change to per-entry block/item/entity registry documents is published
+//   as a new immutable `data::registry_generation` together with the view. The
+//   previous snapshot keeps the generation it started with, so a reader that
+//   took the snapshot earlier keeps its mapping. The mapping is a data-layer
+//   identity: generated chunk content changes only through reloadable worldgen
+//   documents and tag documents, so the commit says which class changed and
+//   does not claim that a registry document change alone is generation
+//   observability. A document that cannot name a registry entry is refused as
+//   restart-required instead of publishing an unchanged mapping.
+// - A change to a registry container (`tables.rvtb`, `protocol_registry.json`)
+//   is refused as restart-required with the changed files named: the runtime
+//   froze the numeric identities of those tables and the wire registry catalog
+//   at startup. A candidate that changes both classes is refused as one unit
+//   instead of applying the document half.
 
-/// One shared view and the epoch it was published as. Generation 0 means the
-/// server started without any content view.
+/// One shared view, its registry generation and the epoch they were published
+/// as. Generation 0 means the server started without any content view.
+///
+/// Lifetime: a consumer takes the snapshot once per tick and must not keep it
+/// across a tick boundary. The shared pointers keep the view and its registry
+/// mapping alive for as long as the consumer holds the snapshot, so a publish
+/// that swaps the live snapshot never frees data another thread is reading;
+/// the previous view is released when its last snapshot is dropped.
 struct content_view_snapshot {
+    /// View epoch; every publish advances it by one.
     std::uint64_t generation{0};
     std::shared_ptr<const data::content_view> view{};
+    /// Registry epoch of `view`. It starts at 1 for the boot view and advances
+    /// only when a published change alters the block/item/entity registry
+    /// documents, so a chunk generated from generation N keeps generation N.
+    std::uint64_t registry_generation{0};
+    /// Immutable block/item/entity id mapping of `view`. Never mutated; a
+    /// reload that changes registry documents publishes a new mapping here.
+    std::shared_ptr<const data::registry_generation> registries{};
 };
 
 /// One tick-boundary commit result. Only one of `published`, `pending`,
@@ -61,8 +87,12 @@ struct content_reload_commit_result {
     /// The build failed validation (or the builder failed); the live view
     /// stays.
     bool failed{false};
-    /// The build succeeded but changed registry data, which needs a restart.
+    /// The build succeeded but changed a registry container, which needs a
+    /// restart.
     bool restart_required{false};
+    /// The published view changed the block/item/entity registry documents, so
+    /// this commit also published a new immutable registry generation.
+    bool registry_generation_published{false};
     /// Operator-facing lines, one event per line.
     std::vector<std::string> lines{};
     /// The error that caused a failed or restart-required commit.
@@ -77,7 +107,43 @@ struct content_reload_options {
     /// File the gate was read from (diagnostics). Empty means the built-in
     /// default.
     std::string gate_source{};
+    /// Operator-policy override for binding a published registry generation.
+    /// True by default; `current_registry_rebind_capability()` reports what the
+    /// running chunk-generation path can actually do and is consulted as well,
+    /// so a composition that selects the experimental scheduler refuses a
+    /// document reload automatically. A refusal names
+    /// `registry_generation_unsupported_reason` when this flag is false, or the
+    /// running path's reason otherwise.
+    bool registry_generations{true};
+    std::string registry_generation_unsupported_reason{};
 };
+
+/// Whether the running chunk-generation path can bind a published registry
+/// generation. The production tile path can. The experimental per-chunk
+/// scheduler keeps its boot content, so a composition that selects it declares
+/// that it cannot bind registry generations and a document reload is refused as
+/// restart-required with the reason named, instead of reporting a publish that
+/// nothing rebinds.
+///
+/// `app::content_reload` reads this process-wide capability when it commits a
+/// document-class change; `chunk_generation::start` publishes it from the
+/// chunk-generation configuration, so enabling the scheduler cannot silently
+/// violate the reload contract through an embedder mistake. The default is
+/// supported, matching a server without a chunk-generation service.
+struct registry_rebind_capability {
+    bool supported{true};
+    std::string reason{};
+};
+
+/// Publish the capability of the chunk-generation path that is running.
+void publish_registry_rebind_capability(registry_rebind_capability capability);
+
+/// The capability the current process published; supported by default.
+[[nodiscard]] auto current_registry_rebind_capability()
+    -> registry_rebind_capability;
+
+/// Forget the published capability (test hygiene: the handoff is process-wide).
+void clear_registry_rebind_capability() noexcept;
 
 class content_reload {
   public:
@@ -118,6 +184,10 @@ class content_reload {
     [[nodiscard]] auto pending() const -> bool;
 
     [[nodiscard]] auto generation() const -> std::uint64_t;
+
+    /// Registry epoch of the live snapshot. Equal to `generation()` until a
+    /// publish changes registry documents; then it advances on its own.
+    [[nodiscard]] auto registry_generation() const -> std::uint64_t;
 
     [[nodiscard]] auto options() const noexcept
         -> const content_reload_options & {

@@ -1583,8 +1583,10 @@ auto run_server(const server_run_options &options,
         // Publish a finished content view rebuild at the same boundary. The
         // commit only swaps a shared pointer: the pack IO and the validation
         // happened on the builder thread, so a slow layer never blocks the
-        // tick. A failed or registry-changing rebuild is dropped and the live
-        // generation stays in place; the service logs the outcome.
+        // tick. A failed rebuild is rolled back; a registry container change is
+        // refused as restart-required and the live view stays; a registry
+        // document change publishes an immutable registry generation with the
+        // new view. The service logs the outcome.
         if (content_reload_service) {
             const auto committed{content_reload_service->commit()};
             if (committed.published) {

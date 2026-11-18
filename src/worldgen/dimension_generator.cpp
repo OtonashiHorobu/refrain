@@ -5,7 +5,12 @@
 #include <refrain/worldgen/dimension_generator.hpp>
 
 #include <refrain/core/io.hpp>
+#include <refrain/data/content_view.hpp>
+#include <refrain/data/datapack.hpp>
+#include <refrain/data/json.hpp>
+#include <refrain/data/registry.hpp>
 #include <refrain/data/vanilla.hpp>
+#include <refrain/platform/process.hpp>
 #include <refrain/worldgen/biome/biome_manager.hpp>
 #include <refrain/worldgen/biome/biome_view.hpp>
 #include <refrain/worldgen/carver/carver_data.hpp>
@@ -17,11 +22,21 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <charconv>
+#include <cstdint>
+#include <filesystem>
 #include <limits>
+#include <mutex>
 #include <optional>
+#include <set>
 #include <string>
+#include <string_view>
+#include <system_error>
 #include <utility>
 #include <vector>
+
+#include <fmt/format.h>
 
 namespace refrain::worldgen {
 
@@ -41,6 +56,288 @@ auto table_path(std::string_view data_root) -> std::string {
     std::string path = core::io::parent_directory(data_root);
     path += "/tables.rvtb";
     return path;
+}
+
+/// True when a merged view path is a document chunk generation reads. A view
+/// that carries none of these leaves the installed datapack untouched.
+auto is_generation_input_path(std::string_view path) -> bool {
+    constexpr std::string_view data_prefix{"data/"};
+    if (!path.starts_with(data_prefix)) {
+        return false;
+    }
+    auto rest{path.substr(data_prefix.size())};
+    const auto namespace_end{rest.find('/')};
+    if (namespace_end == std::string_view::npos) {
+        return false;
+    }
+    rest.remove_prefix(namespace_end + 1U);
+    return rest.starts_with("worldgen/") || rest.starts_with("tags/") ||
+           rest.starts_with("structure/");
+}
+
+/// True when a merged view path is a datapack tag document of any registry.
+auto is_tag_document_path(std::string_view path) -> bool {
+    constexpr std::string_view data_prefix{"data/"};
+    if (!path.starts_with(data_prefix)) {
+        return false;
+    }
+    auto rest{path.substr(data_prefix.size())};
+    const auto namespace_end{rest.find('/')};
+    if (namespace_end == std::string_view::npos) {
+        return false;
+    }
+    rest.remove_prefix(namespace_end + 1U);
+    if (!rest.starts_with("tags/")) {
+        return false;
+    }
+    return rest.ends_with(".json");
+}
+
+/// Recursively copy one directory tree. Entries are visited in sorted order and
+/// symlinks are skipped, so the materialized tree is a deterministic, closed
+/// copy of the installed content.
+auto copy_tree(std::string_view source, std::string_view destination)
+    -> status {
+    auto names{core::io::list_directory(source)};
+    if (!names) {
+        return std::unexpected{names.error()};
+    }
+    for (const auto &name : *names) {
+        std::string from{source};
+        from.push_back('/');
+        from += name;
+        std::string to{destination};
+        to.push_back('/');
+        to += name;
+        if (core::io::is_symlink(from)) {
+            continue;
+        }
+        if (core::io::is_directory(from)) {
+            if (auto created{core::io::create_directories(to)}; !created) {
+                return created;
+            }
+            if (auto copied{copy_tree(from, to)}; !copied) {
+                return copied;
+            }
+            continue;
+        }
+        if (!core::io::is_regular_file(from)) {
+            continue;
+        }
+        auto bytes{core::io::read_file(from, {.allow_symlink = false})};
+        if (!bytes) {
+            return std::unexpected{bytes.error()};
+        }
+        if (auto written{core::io::write_file(to, *bytes)}; !written) {
+            return written;
+        }
+    }
+    return status_ok();
+}
+
+/// Cleanup failures the materialized-tree owner could not report through a
+/// return value: the tree is removed from its destructor during a runtime
+/// rebind or process shutdown. Diagnostics for operators and tests.
+std::atomic<std::uint64_t> g_materialization_cleanup_failures{0};
+
+void remove_tree(std::string_view path) noexcept {
+    std::error_code error;
+    std::filesystem::remove_all(std::filesystem::path{std::string{path}},
+                                error);
+    if (error) {
+        g_materialization_cleanup_failures.fetch_add(1);
+    }
+}
+
+/// True when `name` is a materialized content tree owned by a live process.
+///
+/// A crashed process leaves its tree behind; the first materialization of a
+/// new process removes the trees of processes that no longer run. Names are
+/// `<temporary>/refrain-content-generation-<pid>-<sequence>`.
+auto sweep_stale_materializations() -> void {
+    auto names{core::io::list_directory(core::io::temp_directory())};
+    if (!names) {
+        return;
+    }
+    constexpr std::string_view prefix{"refrain-content-generation-"};
+    const auto own_pid{platform::process_id()};
+    for (const auto &name : *names) {
+        if (!name.starts_with(prefix)) {
+            continue;
+        }
+        const auto rest{std::string_view{name}.substr(prefix.size())};
+        const auto separator{rest.find('-')};
+        if (separator == std::string_view::npos) {
+            continue;
+        }
+        std::uint64_t pid{0};
+        const auto parsed{
+            std::from_chars(rest.data(), rest.data() + separator, pid)};
+        if (parsed.ec != std::errc{} || pid == own_pid) {
+            continue;
+        }
+        if (!platform::process_alive(pid)) {
+            std::string path{core::io::temp_directory()};
+            path.push_back('/');
+            path += name;
+            remove_tree(path);
+        }
+    }
+}
+
+/// Create one process-unique materialization directory. `create_directory`
+/// fails when a previous process left the same pid/sequence name behind, so a
+/// reused pid can never adopt a stale tree.
+auto create_materialization_root() -> result<std::string> {
+    static std::once_flag sweep_once;
+    std::call_once(sweep_once, sweep_stale_materializations);
+    static std::atomic<std::uint64_t> sequence{0};
+    const auto base{fmt::format("{}/refrain-content-generation",
+                                core::io::temp_directory())};
+    for (int attempt{0}; attempt < 128; ++attempt) {
+        const auto candidate{fmt::format(
+            "{}-{}-{}", base, platform::process_id(), sequence.fetch_add(1))};
+        std::error_code error;
+        if (std::filesystem::create_directory(std::filesystem::path{candidate},
+                                              error)) {
+            return candidate;
+        }
+        if (error) {
+            return std::unexpected{make_error(
+                error_code::io_error,
+                "failed to create the content generation directory '" +
+                    candidate + "': " + error.message())};
+        }
+    }
+    return std::unexpected{make_error(
+        error_code::io_error,
+        "failed to create a unique content generation directory under the "
+        "temporary directory")};
+}
+
+/// One parsed tag document: the declared values and whether it replaces the
+/// values of the lower-priority packs.
+struct parsed_tag_file {
+    bool replace{false};
+    std::vector<data::json::value> values{};
+};
+
+auto parse_tag_file(std::string_view text, std::string_view path)
+    -> result<parsed_tag_file> {
+    auto parsed{data::json::value::parse(text)};
+    if (!parsed) {
+        return std::unexpected{
+            make_error(parsed.error().code,
+                       "tag document '" + std::string{path} +
+                           "' is invalid: " + parsed.error().message)};
+    }
+    parsed_tag_file file{};
+    if (const auto *replace{parsed->find("replace")}; replace != nullptr) {
+        file.replace = replace->as_bool().value_or(false);
+    }
+    const auto *values{parsed->find("values")};
+    if (values == nullptr || !values->is_array()) {
+        return std::unexpected{make_error(error_code::parse_error,
+                                          "tag document '" + std::string{path} +
+                                              "' has no values array")};
+    }
+    const auto array{values->as_array()};
+    if (!array) {
+        return std::unexpected{array.error()};
+    }
+    file.values.assign(array->begin(), array->end());
+    return file;
+}
+
+/// Merge tag values with the datapack rules: an installed document provides
+/// the lowest-priority values, and every view layer above it either appends its
+/// values or, with `replace: true`, clears everything below it first.
+auto merged_tag_values(const data::content_view &view,
+                       std::string_view base_data_root, std::string_view path)
+    -> result<std::vector<data::json::value>> {
+    std::vector<data::json::value> merged{};
+    if (!base_data_root.empty()) {
+        std::string installed{base_data_root};
+        installed.push_back('/');
+        installed += path.substr(std::string_view{"data/"}.size());
+        if (core::io::is_regular_file(installed)) {
+            auto text{core::io::read_text(installed)};
+            if (!text) {
+                return std::unexpected{text.error()};
+            }
+            auto parsed{parse_tag_file(*text, path)};
+            if (!parsed) {
+                return std::unexpected{parsed.error()};
+            }
+            merged = std::move(parsed->values);
+        }
+    }
+    for (const auto *layer : view.packs().packs()) {
+        if (layer->find(path) == nullptr) {
+            continue;
+        }
+        auto bytes{layer->read(path)};
+        if (!bytes) {
+            return std::unexpected{bytes.error()};
+        }
+        const std::string_view text{
+            reinterpret_cast<const char *>(bytes->data()), bytes->size()};
+        auto parsed{parse_tag_file(text, path)};
+        if (!parsed) {
+            return std::unexpected{parsed.error()};
+        }
+        if (parsed->replace) {
+            merged.clear();
+        }
+        merged.append_range(std::move(parsed->values));
+    }
+    return merged;
+}
+
+/// Write one merged tag document into the materialized tree. The loaders read
+/// tags per kind from separate directories, so every tag path the view touches
+/// is written with the merged value list.
+auto write_merged_tag(const data::content_view &view,
+                      std::string_view base_data_root, std::string_view root,
+                      std::string_view path) -> status {
+    auto values{merged_tag_values(view, base_data_root, path)};
+    if (!values) {
+        return std::unexpected{values.error()};
+    }
+    std::string text{"{\"values\": ["};
+    bool first{true};
+    for (const auto &value : *values) {
+        if (!first) {
+            text += ", ";
+        }
+        first = false;
+        text += value.dump();
+    }
+    text += "]}";
+    std::string destination{root};
+    destination.push_back('/');
+    destination += path;
+    if (auto created{core::io::create_directories(
+            core::io::parent_directory(destination))};
+        !created) {
+        return created;
+    }
+    return core::io::write_text(destination, text);
+}
+
+/// Every tag document path the view touches, sorted. A path that occurs in
+/// several view layers is merged once.
+auto view_tag_paths(const data::content_view &view)
+    -> std::vector<std::string> {
+    std::set<std::string> paths{};
+    for (const auto *layer : view.packs().packs()) {
+        for (const auto &entry : layer->entries()) {
+            if (is_tag_document_path(entry.path)) {
+                paths.insert(entry.path);
+            }
+        }
+    }
+    return {paths.begin(), paths.end()};
 }
 
 /// `<namespace>/<path>` to the document id `<namespace>:<path>`.
@@ -106,6 +403,10 @@ struct dimension_shared_data {
     block_default_map block_defaults{};
     jint generation_min_y{0};
     jint generation_height{0};
+    /// Registry mapping of the content generation the data was loaded for.
+    /// Null for a boot generator. Used to seed a per-generator state table in
+    /// content-key order.
+    std::shared_ptr<const data::registry_generation> registries{};
 };
 
 dimension_generator::dimension_generator(
@@ -187,7 +488,9 @@ auto dimension_generator::load_shared(dimension_generator_config config)
         return std::unexpected{biome_source.error()};
     }
 
-    auto tags = load_block_tags(config.data_root);
+    result<block_tag_set> tags{config.block_tags != nullptr
+                                   ? result<block_tag_set>{*config.block_tags}
+                                   : load_block_tags(config.data_root)};
     if (!tags) {
         return std::unexpected{tags.error()};
     }
@@ -247,6 +550,7 @@ auto dimension_generator::load_shared(dimension_generator_config config)
         return std::unexpected{loaded.error()};
     }
     shared->block_defaults = std::move(*block_defaults);
+    shared->registries = config.registries;
     return std::shared_ptr<const dimension_shared_data>{std::move(shared)};
 }
 
@@ -292,6 +596,20 @@ auto dimension_generator::create(
     // generator keeps the spelling-only behaviour.
     if (!shared->block_defaults.empty()) {
         states->set_block_defaults(shared->block_defaults);
+    }
+    // Seed the view-defined block names in content-key order, so generation
+    // data that names one resolves without depending on which block the
+    // generator happens to ask for first. Chunk generation resolves entries by
+    // name; the mapping's numeric ids are not consumed or persisted here.
+    if (shared->registries != nullptr) {
+        for (const auto &entry :
+             shared->registries->entries(data::registry_kind::block)) {
+            const auto name{entry.location.to_string()};
+            if (states->find(name).has_value()) {
+                continue;
+            }
+            static_cast<void>(states->intern(name, states->infer_traits(name)));
+        }
     }
     return std::unique_ptr<dimension_generator>{
         new dimension_generator{std::move(config), std::move(shared),
@@ -673,6 +991,207 @@ auto dimension_generator::generate_terrain(const chunk_pos &pos,
     }
     chunk->set_status(chunk_status::terrain);
     return chunk;
+}
+
+struct generation_materialization {
+    std::string root{};
+
+    ~generation_materialization() { remove_tree(root); }
+
+    generation_materialization() = default;
+    generation_materialization(const generation_materialization &) = delete;
+    auto operator=(const generation_materialization &)
+        -> generation_materialization & = delete;
+    generation_materialization(generation_materialization &&) = delete;
+    auto operator=(generation_materialization &&)
+        -> generation_materialization & = delete;
+};
+
+generation_data::generation_data(
+    std::shared_ptr<const data::content_view> view,
+    std::shared_ptr<const data::registry_generation> registries,
+    std::uint64_t view_generation, std::uint64_t registry_generation)
+    : view_{std::move(view)}, registries_{std::move(registries)},
+      view_generation_{view_generation},
+      registry_generation_{registry_generation} {}
+
+generation_data::~generation_data() = default;
+
+auto generation_data::build(
+    std::shared_ptr<const data::content_view> view,
+    std::shared_ptr<const data::registry_generation> registries,
+    std::uint64_t view_generation, std::uint64_t registry_generation,
+    std::string_view base_data_root, std::string_view base_templates_root)
+    -> result<std::shared_ptr<const generation_data>> {
+    if (view == nullptr) {
+        return std::unexpected{
+            fail("a content generation needs a published content view")};
+    }
+    if (registries == nullptr) {
+        registries = std::make_shared<const data::registry_generation>(
+            view->registries());
+    }
+    auto generation{std::shared_ptr<generation_data>{
+        new generation_data{std::move(view), std::move(registries),
+                            view_generation, registry_generation}}};
+    bool has_generation_input{false};
+    for (const auto &file : generation->view_->packs().list()) {
+        if (is_generation_input_path(file.path)) {
+            has_generation_input = true;
+            break;
+        }
+    }
+    if (has_generation_input) {
+        // The view changes a document chunk generation reads: compose the
+        // merged datapack once for every generator bound to this generation.
+        auto holder{std::make_shared<generation_materialization>()};
+        auto root{create_materialization_root()};
+        if (!root) {
+            return std::unexpected{root.error()};
+        }
+        holder->root = std::move(*root);
+        const auto data_target{holder->root + "/data"};
+        if (auto created{core::io::create_directories(data_target)}; !created) {
+            return std::unexpected{created.error()};
+        }
+        if (!base_data_root.empty() && core::io::is_directory(base_data_root)) {
+            if (auto copied{copy_tree(base_data_root, data_target)}; !copied) {
+                return std::unexpected{copied.error()};
+            }
+        }
+        if (!base_templates_root.empty() &&
+            core::io::is_directory(base_templates_root)) {
+            if (auto copied{copy_tree(base_templates_root, data_target)};
+                !copied) {
+                return std::unexpected{copied.error()};
+            }
+        }
+        // The worldgen loaders read the reports and the block table from the
+        // installed root that contains the data directory, not from the data
+        // directory itself. Materialize those siblings so the merged root keeps
+        // the layout the loaders expect.
+        if (!base_data_root.empty()) {
+            const auto installed_root{
+                core::io::parent_directory(base_data_root)};
+            const auto reports_source{installed_root + "/reports"};
+            if (core::io::is_directory(reports_source)) {
+                if (auto copied{
+                        copy_tree(reports_source, holder->root + "/reports")};
+                    !copied) {
+                    return std::unexpected{copied.error()};
+                }
+            }
+            const auto table_source{installed_root + "/tables.rvtb"};
+            if (core::io::is_regular_file(table_source)) {
+                auto bytes{core::io::read_file(table_source)};
+                if (!bytes) {
+                    return std::unexpected{bytes.error()};
+                }
+                if (auto written{core::io::write_file(
+                        holder->root + "/tables.rvtb", *bytes)};
+                    !written) {
+                    return std::unexpected{written.error()};
+                }
+            }
+        }
+        // Overlay the view's documents. Tag documents are merged with the
+        // datapack rules below instead of copied verbatim, because tags from
+        // different packs merge rather than replace each other.
+        for (const auto &file : generation->view_->packs().list()) {
+            if (!file.path.starts_with("data/") ||
+                is_tag_document_path(file.path)) {
+                continue;
+            }
+            auto bytes{generation->view_->packs().read(file.path)};
+            if (!bytes) {
+                return std::unexpected{bytes.error()};
+            }
+            const auto destination{holder->root + "/" + file.path};
+            if (auto created{core::io::create_directories(
+                    core::io::parent_directory(destination))};
+                !created) {
+                return std::unexpected{created.error()};
+            }
+            if (auto written{core::io::write_file(destination, *bytes)};
+                !written) {
+                return std::unexpected{written.error()};
+            }
+        }
+        // Every tag kind is merged per document: `replace: true` clears the
+        // installed values and the view layers above them, otherwise the values
+        // append. A non-block tag therefore keeps the installed values a loader
+        // such as the biome tag reader needs.
+        for (const auto &path : view_tag_paths(*generation->view_)) {
+            if (auto written{write_merged_tag(
+                    *generation->view_, base_data_root, holder->root, path)};
+                !written) {
+                return std::unexpected{written.error()};
+            }
+        }
+        // The worldgen loaders list their document and tag directories for
+        // every namespace of a root without checking that the directory
+        // exists. An installed namespace ships them all; a view namespace may
+        // carry only a recipe or one document, so the materialized tree gives
+        // every namespace the empty directories a loader may list.
+        static constexpr std::array<std::string_view, 14> namespace_dirs{
+            "tags/block",
+            "tags/worldgen/biome",
+            "worldgen/biome",
+            "worldgen/block_state_provider",
+            "worldgen/carver",
+            "worldgen/density_function",
+            "worldgen/feature",
+            "worldgen/material_condition",
+            "worldgen/material_rule",
+            "worldgen/noise",
+            "worldgen/placed_feature",
+            "worldgen/structure",
+            "worldgen/structure_set",
+            "worldgen/template_pool",
+        };
+        if (auto namespaces{core::io::list_directory(data_target)};
+            namespaces) {
+            for (const auto &name : *namespaces) {
+                std::string namespace_root{data_target};
+                namespace_root.push_back('/');
+                namespace_root += name;
+                if (!core::io::is_directory(namespace_root)) {
+                    continue;
+                }
+                for (const auto directory : namespace_dirs) {
+                    std::string path{namespace_root};
+                    path.push_back('/');
+                    path += directory;
+                    if (auto created{core::io::create_directories(path)};
+                        !created) {
+                        return std::unexpected{created.error()};
+                    }
+                }
+            }
+        }
+        generation->materialized_ = std::move(holder);
+        generation->data_root_ = data_target;
+        generation->templates_root_ = data_target;
+    } else {
+        generation->data_root_ = std::string{base_data_root};
+        generation->templates_root_ = std::string{base_templates_root};
+    }
+    // Block tags come from the merged tree when one exists, so they follow the
+    // same per-tag merge rule as every other tag kind.
+    if (!generation->data_root_.empty() &&
+        core::io::is_directory(generation->data_root_)) {
+        auto loaded{load_block_tags(generation->data_root_)};
+        if (!loaded) {
+            return std::unexpected{loaded.error()};
+        }
+        generation->block_tags_ = std::move(*loaded);
+    }
+    generation->overlays_generation_content_ = has_generation_input;
+    return std::shared_ptr<const generation_data>{std::move(generation)};
+}
+
+auto materialization_cleanup_failures() noexcept -> std::uint64_t {
+    return g_materialization_cleanup_failures.load();
 }
 
 } // namespace refrain::worldgen

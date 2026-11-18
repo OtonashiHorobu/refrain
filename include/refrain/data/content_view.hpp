@@ -7,8 +7,11 @@
 #include <refrain/core/error.hpp>
 #include <refrain/data/checksum.hpp>
 #include <refrain/data/datapack.hpp>
+#include <refrain/data/registry.hpp>
+#include <refrain/data/resource_location.hpp>
 #include <refrain/data/vfs.hpp>
 
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -35,8 +38,8 @@ namespace refrain::data {
 // frees data another thread is still reading.
 //
 // Thread safety: a fully built view is immutable, so `entries()`, `find()`,
-// `tags()`, `packs()`, `registry_inputs()` and the diagnostics are safe from
-// multiple threads once `build()` returned. `build()` itself is
+// `tags()`, `packs()`, `registry_inputs()`, `registries()` and the diagnostics
+// are safe from multiple threads once `build()` returned. `build()` itself is
 // self-contained (no process-wide state) and may run on a worker thread next to
 // the live view.
 
@@ -84,10 +87,10 @@ struct content_view_build_options {
 /// of the registry containers the server freezes at startup.
 ///
 /// `path` is the merged virtual path, `content` the BLAKE3 digest of the file
-/// bytes. Registry inputs are the only part of a view whose change a running
-/// server cannot apply: the block/item/entity registries are frozen in memory
-/// when the server starts, and an existing chunk palette keeps the generation
-/// it was written with.
+/// bytes. How a change to one of these files can be applied depends on its
+/// class (see `classify_registry_input_path`): a per-entry document becomes a
+/// new immutable `registry_generation`, while a registry container keeps its
+/// numeric identities frozen in memory and needs a restart.
 struct registry_input {
     std::string path{};
     digest32 content{};
@@ -107,6 +110,198 @@ struct registry_input {
 /// (`tables.rvtb`, `protocol_registry.json`).
 [[nodiscard]] auto is_registry_input_path(std::string_view path) noexcept
     -> bool;
+
+/// Which content registry a registry input path names.
+enum class registry_kind : std::uint8_t {
+    block = 0,
+    item = 1,
+    entity_type = 2,
+};
+
+inline constexpr std::size_t registry_kind_count = 3;
+
+/// Directory name of a registry kind (`block`, `item`, `entity_type`).
+[[nodiscard]] auto registry_kind_name(registry_kind kind) noexcept
+    -> std::string_view;
+
+/// How a registry input changes the running server.
+enum class registry_input_class : std::uint8_t {
+    /// A per-entry registry document (`data/<namespace>/block/...` and the
+    /// other registry directories). A view can name the entries such a
+    /// document defines, so the content can be applied as a new immutable
+    /// generation.
+    document = 0,
+    /// A registry container (`tables.rvtb`, `protocol_registry.json`). The
+    /// runtime freezes the numeric identities it holds when the server starts:
+    /// the block/item tables and the wire registry catalog. Replacing one while
+    /// the server runs cannot be applied as a generation, so it stays
+    /// restart-required.
+    container = 1,
+};
+
+/// Classify `path` as a registry input, or return null when it is reloadable
+/// datapack content.
+[[nodiscard]] auto classify_registry_input_path(std::string_view path) noexcept
+    -> std::optional<registry_input_class>;
+
+/// Registry kind named by a registry document path, or null for any other
+/// path.
+[[nodiscard]] auto registry_kind_for_path(std::string_view path) noexcept
+    -> std::optional<registry_kind>;
+
+/// One entry of one registry generation.
+///
+/// `id` is the generation-scoped numeric id, assigned by the canonical
+/// `namespace:path` key of the entries in ascending order. The assignment is a
+/// pure function of the view content, so two builds of the same content assign
+/// the same ids and two different views never share an id space. The id is an
+/// identity for consumers of the data layer; chunk generation resolves block
+/// names on demand and a stored palette keeps canonical block-state keys rather
+/// than numeric ids, so no registry document change is generation-observable by
+/// itself. Generated chunk content changes only through reloadable worldgen
+/// documents and tag documents.
+struct registry_entry {
+    registry_kind kind{registry_kind::block};
+    registry_id id{};
+    resource_location location{};
+    digest32 content{};
+    /// Merged virtual path of the document that defines the entry.
+    std::string path{};
+
+    [[nodiscard]] friend auto operator==(const registry_entry &,
+                                         const registry_entry &)
+        -> bool = default;
+};
+
+/// Immutable id mapping of the block, item and entity registries one view
+/// defines.
+///
+/// The mapping covers the per-entry registry documents of the view. It is
+/// built in content-key order (canonical `namespace:path` ascending, per
+/// registry kind) and records the content digest of every defining document,
+/// so it is deterministic and detects an edit even when the path is unchanged.
+/// A reader holds the generation it started with; a published view never
+/// mutates a generation, so a consumer that captured a generation keeps it and
+/// new chunks can be bound to the newest one.
+///
+/// The mapping covers the three registry kinds uniformly and is a data-layer
+/// identity: it records the entry name set and each defining document digest.
+/// Chunk generation resolves block names on demand from the reloadable worldgen
+/// documents and tag documents, not from this mapping, so a changed registry
+/// document does not change generated chunk content by itself. A document that
+/// cannot define an entry (a non-JSON file under a registry directory, for
+/// example) is not part of a mapping; a reload that changes such a path is
+/// refused as restart-required instead of publishing an unchanged mapping.
+class registry_generation {
+  public:
+    registry_generation() = default;
+
+    /// Derive the mapping from the registry inputs of one view. Inputs that
+    /// are registry containers are ignored: they are not per-entry documents.
+    [[nodiscard]] static auto build(std::span<const registry_input> inputs)
+        -> registry_generation;
+
+    [[nodiscard]] auto empty() const noexcept -> bool;
+
+    /// Number of entries of one registry kind.
+    [[nodiscard]] auto size(registry_kind kind) const noexcept -> std::size_t;
+
+    /// Total number of entries across the three registries.
+    [[nodiscard]] auto entry_count() const noexcept -> std::size_t;
+
+    /// Entries of one kind in ascending id order (which is ascending canonical
+    /// content key).
+    [[nodiscard]] auto entries(registry_kind kind) const noexcept
+        -> std::span<const registry_entry>;
+
+    /// The entry one location names, or null when this generation does not
+    /// define it.
+    [[nodiscard]] auto find(registry_kind kind,
+                            const resource_location &location) const noexcept
+        -> const registry_entry *;
+
+    /// BLAKE3 of the canonical encoding of every entry, kind by kind in
+    /// content-key order. Two equal mappings have equal fingerprints; a
+    /// changed document digest changes it.
+    [[nodiscard]] auto fingerprint() const noexcept -> const digest32 &;
+
+    [[nodiscard]] friend auto operator==(const registry_generation &,
+                                         const registry_generation &)
+        -> bool = default;
+
+  private:
+    std::array<std::vector<registry_entry>, registry_kind_count> entries_{};
+    digest32 fingerprint_{};
+};
+
+/// Which reload policy the registry change of a candidate view needs.
+enum class registry_change_kind : std::uint8_t {
+    /// No registry input changed.
+    none = 0,
+    /// Only per-entry registry documents changed: the change can be published
+    /// as a new immutable generation.
+    documents = 1,
+    /// A registry container changed: the numeric identities the runtime froze
+    /// at startup cannot be replaced, so the change is restart-required.
+    containers = 2,
+    /// Both classes changed. The reload is refused as one unit instead of
+    /// applying the document half, which would leave the content store and the
+    /// frozen containers describing different registries.
+    mixed = 3,
+};
+
+/// The registry-input difference between the live view and a candidate view.
+struct registry_change {
+    registry_change_kind kind{registry_change_kind::none};
+    /// Paths of registry inputs the candidate adds, sorted.
+    std::vector<std::string> added{};
+    /// Paths of registry inputs the candidate no longer ships, sorted.
+    std::vector<std::string> removed{};
+    /// Paths of registry inputs whose content digest changed, sorted.
+    std::vector<std::string> changed{};
+    /// Changed paths that are registry documents in form but cannot define a
+    /// registry entry (a non-JSON file under a registry directory, or a
+    /// malformed entry path), sorted. Such a change is restart-required: it
+    /// would alter the input fingerprint without changing the mapping.
+    std::vector<std::string> unsupported{};
+
+    [[nodiscard]] auto empty() const noexcept -> bool {
+        return kind == registry_change_kind::none;
+    }
+
+    /// True when the change can be published as a new registry generation.
+    [[nodiscard]] auto hot_appliable() const noexcept -> bool {
+        return kind == registry_change_kind::documents;
+    }
+
+    /// True when the change needs a server restart.
+    [[nodiscard]] auto restart_required() const noexcept -> bool {
+        return kind == registry_change_kind::containers ||
+               kind == registry_change_kind::mixed;
+    }
+
+    /// Every changed path, sorted, regardless of input class.
+    [[nodiscard]] auto paths() const -> std::vector<std::string>;
+
+    /// Changed paths that are per-entry registry documents, sorted.
+    [[nodiscard]] auto document_paths() const -> std::vector<std::string>;
+
+    /// Changed paths that are registry containers, sorted.
+    [[nodiscard]] auto container_paths() const -> std::vector<std::string>;
+
+    /// True when the change adds or removes a registry entry name. The mapping
+    /// records the name set; chunk generation resolves block names on demand,
+    /// so this is a data-layer classification and not a claim that generated
+    /// chunk content changes. Only reloadable worldgen documents and tag
+    /// documents change generated content.
+    [[nodiscard]] auto entry_names_changed() const noexcept -> bool {
+        return !added.empty() || !removed.empty();
+    }
+
+    /// One operator-facing sentence naming the added, removed and changed
+    /// paths; empty when the change is empty.
+    [[nodiscard]] auto description() const -> std::string;
+};
 
 /// Immutable, validated content view over one layer stack.
 class content_view {
@@ -182,6 +377,15 @@ class content_view {
     [[nodiscard]] auto registry_inputs() const noexcept
         -> std::span<const registry_input>;
 
+    /// Immutable block/item/entity id mapping this view defines.
+    ///
+    /// The generation is a pure function of the view's registry documents: ids
+    /// are assigned in content-key order per registry kind and the document
+    /// digests are recorded. A view that defines no documents yields an empty
+    /// generation with the same behaviour as an absent one.
+    [[nodiscard]] auto registries() const noexcept
+        -> const registry_generation &;
+
     /// BLAKE3 of the canonical encoding of `registry_inputs()`. Two views with
     /// the same registry fingerprint would leave the running registries
     /// unchanged.
@@ -202,6 +406,7 @@ class content_view {
     std::vector<content_source> skipped_sources_{};
     std::vector<std::string> warnings_{};
     std::vector<registry_input> registry_inputs_{};
+    registry_generation registries_{};
     datapack_stats stats_{};
     kind_counts counts_{};
     digest32 registry_fingerprint_{};
@@ -213,11 +418,19 @@ class content_view {
 [[nodiscard]] auto format_content_view_summary(const content_view &view)
     -> std::string;
 
+/// Diff the registry inputs of two views and classify how a reload may apply
+/// the difference.
+[[nodiscard]] auto classify_registry_change(const content_view &current,
+                                            const content_view &candidate)
+    -> registry_change;
+
 /// Describe how the registry inputs of two views differ, or return an empty
 /// string when the registry fingerprints match.
 ///
 /// The text names the added, removed and changed paths (bounded to a handful
 /// each) so a refused reload tells the operator which files need a restart.
+/// `classify_registry_change` returns the same difference with the reload
+/// policy attached.
 [[nodiscard]] auto describe_registry_change(const content_view &current,
                                             const content_view &candidate)
     -> std::string;

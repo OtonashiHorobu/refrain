@@ -803,7 +803,7 @@ datapack content layer, not the composition, so they reload on their own path:
 `mods reload-data` (console or op `/mods reload-data`) rebuilds the layered
 content view from the same stack the server came up with, loads and validates
 it off the tick, and publishes it at the next tick boundary. Readers take the
-live view once per tick, so the previous view stays mapped until the last
+live snapshot once per tick, so the previous view stays mapped until the last
 reader drops its snapshot and a tick that started on it finishes on it.
 
 The gate is `[lifecycle] hot_reload_data` in `config/mods_admin.toml`, off by
@@ -811,17 +811,38 @@ default. A failed rebuild rolls back: the live generation stays and the error
 names the layer and the path, which makes a broken edit visible without taking
 the server down.
 
-Block, item and entity registries are not part of the view. The server freezes
-them at start and existing chunks keep the palette generation they were written
-with; a pack whose reload would add, remove or edit a registry document
-(`data/<namespace>/block/...`, `data/<namespace>/item/...`,
-`data/<namespace>/entity_type/...`, or a shipped `tables.rvtb` /
-`protocol_registry.json`) is refused with `restart required` and the changed
-files are named. Mod code and the provider composition are the other half of a
-reload and go through `mods reload <id>` and `hot_reload`, not `hot_reload_data`.
-Chunk generation starts its workers from the game-data directory at boot, so
-changed worldgen documents are picked up by newly generated chunks after a
-restart in this build.
+Chunk generation reads the published generation. When a publish advances it, a
+tile worker composes the view over the installed game-data directory and builds
+a new generator for the newest generation; the generator it replaces finishes
+the tile it was producing, so no tile ever mixes two generations. Tag documents
+merge with the datapack rules for every tag kind: `"replace": true` clears the
+installed values and the lower view layers, otherwise the values append, so a
+biome tag keeps the installed values a feature predicate or structure match
+needs unless the view replaces it. A view that changes no document chunk
+generation reads produces byte-identical chunks. The merged tree is a temporary
+directory removed when the last generator that captured the generation is
+destroyed, and a leftover tree from a crashed process is swept when a process
+first materializes a content generation. The experimental per-chunk scheduler
+keeps its boot content because its frozen shared block-state table cannot be
+rebuilt safely; the service reports that capability, so a registry-document
+reload is refused with restart required named for that path instead of
+publishing a generation nothing rebinds. The tile path reloads.
+
+Block, item and entity registry documents become immutable registry generations:
+the entry ids of a generation are assigned per registry kind in content-key
+order and each entry records its document digest, a snapshot keeps the
+generation it started with, and a published change advances the generation for
+chunks generated afterwards. The mapping is a data-layer identity: chunk
+generation resolves block names on demand from the reloadable worldgen documents
+and tag documents, and a stored palette keeps canonical block-state keys, not
+numeric ids, so existing chunks need no remap and no registry document change is
+generation-observable by itself. A registry document path that cannot define an
+entry is refused as restart-required. A pack that ships `tables.rvtb` or
+`protocol_registry.json` changes the numeric identities the runtime froze at
+startup, so that class is refused with `restart required` and the changed files
+are named; a pack that changes both classes is refused as one unit. Mod code and
+the provider composition are the other half of a reload and go through
+`mods reload <id>` and `hot_reload`, not `hot_reload_data`.
 
 ### Native retire and quarantine
 

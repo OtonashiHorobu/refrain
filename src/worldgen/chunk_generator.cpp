@@ -88,14 +88,35 @@ auto same_beard(const structure::structure_beard &left,
     return true;
 }
 
+/// Datapack `data` root the generator reads: the bound generation's merged
+/// tree when it has one, the configured boot root otherwise.
+auto effective_data_root(const chunk_generator_config &config)
+    -> const std::string & {
+    return config.generation != nullptr ? config.generation->data_root()
+                                        : config.data_root;
+}
+
+/// Structure template root of the bound generation, or the configured boot
+/// root.
+auto effective_templates_root(const chunk_generator_config &config)
+    -> const std::string & {
+    return config.generation != nullptr ? config.generation->templates_root()
+                                        : config.templates_root;
+}
+
 auto dimension_config_for(const chunk_generator_config &config)
     -> dimension_generator_config {
-    return dimension_generator_config{
-        .data_root = config.data_root,
+    auto dimension = dimension_generator_config{
+        .data_root = effective_data_root(config),
         .kind = config.kind,
         .seed = config.seed,
         .fixed_biome = config.fixed_biome,
     };
+    if (config.generation != nullptr) {
+        dimension.block_tags = &config.generation->block_tags();
+        dimension.registries = config.generation->registries_handle();
+    }
+    return dimension;
 }
 
 auto target_status(generation_target target) -> chunk_status {
@@ -363,7 +384,7 @@ chunk_generator::chunk_generator(
 namespace {
 
 auto validate_generator_config(const chunk_generator_config &config) -> status {
-    if (config.data_root.empty()) {
+    if (effective_data_root(config).empty()) {
         return std::unexpected{
             fail(error_code::invalid_argument,
                  "chunk generator has no content data root")};
@@ -407,7 +428,7 @@ auto chunk_generator::load_shared_data(const chunk_generator_config &config)
     shared->dimension = std::move(*dimension_shared);
 
     if (needs_structures || needs_features) {
-        auto loaded = feature::load_feature_data(config.data_root);
+        auto loaded = feature::load_feature_data(effective_data_root(config));
         if (!loaded) {
             return std::unexpected{loaded.error()};
         }
@@ -436,7 +457,8 @@ auto chunk_generator::load_shared_data(const chunk_generator_config &config)
         }
     }
     if (needs_structures) {
-        auto loaded = structure::load_structure_data(config.data_root);
+        auto loaded =
+            structure::load_structure_data(effective_data_root(config));
         if (!loaded) {
             return std::unexpected{loaded.error()};
         }
@@ -463,6 +485,13 @@ auto chunk_generator::create(chunk_generator_config config)
 
 auto chunk_generator::create_scheduler_shared(chunk_generator_config config)
     -> result<scheduler_shared_state> {
+    if (config.generation != nullptr) {
+        return std::unexpected{make_error(
+            error_code::unsupported,
+            "the experimental chunk scheduler cannot rebuild its frozen "
+            "shared content for a published content generation; it keeps its "
+            "boot content and a reload needs a restart")};
+    }
     if (const auto valid = validate_generator_config(config); !valid) {
         return std::unexpected{valid.error()};
     }
@@ -520,7 +549,7 @@ auto chunk_generator::create_with_shared(
     std::unique_ptr<structure::structure_template_manager> templates;
     if (config.target != generation_target::terrain) {
         templates = std::make_unique<structure::structure_template_manager>(
-            config.templates_root, (*dimension)->states());
+            effective_templates_root(config), (*dimension)->states());
     }
     return std::unique_ptr<chunk_generator>{new chunk_generator{
         std::move(config), std::move(shared), std::move(*dimension),

@@ -4,16 +4,87 @@
 
 #include <refrain/server/world_bootstrap.hpp>
 
+#include <refrain/core/log.hpp>
+#include <refrain/data/content_view.hpp>
+#include <refrain/server/content_reload_inputs.hpp>
 #include <refrain/world/create.hpp>
 #include <refrain/world/proto_bridge.hpp>
 #include <refrain/worldgen/chunk_generator.hpp>
+#include <refrain/worldgen/dimension_generator.hpp>
 
 #include <fmt/format.h>
 
+#include <cstdint>
+#include <memory>
+#include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace refrain::server {
+
+namespace {
+
+constexpr refrain::log::logger log_bootstrap{"world-bootstrap"};
+
+/// The content view the runtime will publish as generation 1, taken from the
+/// composition-root handoff and put back when the spawn prefill returns.
+///
+/// The handoff is published before the runtime starts and consumed later by
+/// the tick loop, so the spawn prefill takes it for the duration of the call;
+/// the next start would mount the same layers the first streamed chunks will
+/// use. This keeps the spawn chunks and the streamed chunks on one generation.
+class bootstrap_content_handoff {
+  public:
+    bootstrap_content_handoff() : inputs_{take_content_reload_inputs()} {}
+
+    bootstrap_content_handoff(const bootstrap_content_handoff &) = delete;
+    auto operator=(const bootstrap_content_handoff &)
+        -> bootstrap_content_handoff & = delete;
+
+    ~bootstrap_content_handoff() {
+        if (inputs_) {
+            publish_content_reload_inputs(std::move(*inputs_));
+        }
+    }
+
+    [[nodiscard]] auto initial() const
+        -> const std::shared_ptr<const data::content_view> & {
+        static const std::shared_ptr<const data::content_view> empty{};
+        return inputs_ ? inputs_->initial : empty;
+    }
+
+  private:
+    std::optional<content_reload_inputs> inputs_{};
+};
+
+/// The generation the spawn prefill binds, or null when the boot view changes
+/// no document chunk generation reads. Mirrors the first-generator rule of the
+/// chunk generation service, so a fresh world is filled from one generation.
+[[nodiscard]] auto
+spawn_generation(std::shared_ptr<const data::content_view> view,
+                 const world_bootstrap_config &config)
+    -> std::shared_ptr<const worldgen::generation_data> {
+    auto registries{
+        std::make_shared<const data::registry_generation>(view->registries())};
+    auto built{worldgen::generation_data::build(std::move(view), registries, 1U,
+                                                1U, config.data_root,
+                                                config.templates_root)};
+    if (!built) {
+        log_bootstrap.error(
+            "failed to bind the spawn area to content view generation 1, so "
+            "the spawn area uses the installed content: {}",
+            built.error().message);
+        return nullptr;
+    }
+    if (!(*built)->overlays_generation_content() &&
+        (*built)->registries().empty()) {
+        return nullptr;
+    }
+    return *built;
+}
+
+} // namespace
 
 auto generate_spawn_area(world_port &world,
                          const world_bootstrap_config &config,
@@ -24,6 +95,14 @@ auto generate_spawn_area(world_port &world,
             make_error(error_code::invalid_argument,
                        "spawn generation needs the datapack data root")};
     }
+    // Generate the spawn area from the same content generation the chunk
+    // service will stream with. The handoff is taken and restored, so the
+    // runtime still receives the boot view it expects.
+    bootstrap_content_handoff handoff{};
+    std::shared_ptr<const worldgen::generation_data> generation{};
+    if (handoff.initial() != nullptr) {
+        generation = spawn_generation(handoff.initial(), config);
+    }
     auto generator{
         worldgen::chunk_generator::create(worldgen::chunk_generator_config{
             .data_root = config.data_root,
@@ -31,6 +110,7 @@ auto generate_spawn_area(world_port &world,
             .seed = config.seed,
             .kind = worldgen::dimension_kind::overworld,
             .target = worldgen::generation_target::full,
+            .generation = std::move(generation),
         })};
     if (!generator) {
         return std::unexpected{generator.error()};

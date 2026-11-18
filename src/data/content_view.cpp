@@ -14,6 +14,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <map>
+#include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -146,26 +148,302 @@ auto to_string(content_source_kind kind) noexcept -> std::string_view {
     return "unknown";
 }
 
-auto is_registry_input_path(std::string_view path) noexcept -> bool {
-    constexpr std::string_view data_prefix{"data/"};
-    if (path == "tables.rvtb" || path == "protocol_registry.json") {
-        return true;
+auto registry_kind_name(registry_kind kind) noexcept -> std::string_view {
+    switch (kind) {
+    case registry_kind::block:
+        return "block";
+    case registry_kind::item:
+        return "item";
+    case registry_kind::entity_type:
+        return "entity_type";
     }
+    return "block";
+}
+
+auto registry_kind_for_path(std::string_view path) noexcept
+    -> std::optional<registry_kind> {
+    constexpr std::string_view data_prefix{"data/"};
     if (!path.starts_with(data_prefix)) {
-        return false;
+        return std::nullopt;
     }
     const auto rest{path.substr(data_prefix.size())};
     const auto namespace_end{rest.find('/')};
     if (namespace_end == std::string_view::npos) {
-        return false;
+        return std::nullopt;
     }
     const auto kind_start{namespace_end + 1U};
     const auto kind_end{rest.find('/', kind_start)};
     if (kind_end == std::string_view::npos || kind_end + 1U >= rest.size()) {
-        return false;
+        return std::nullopt;
     }
     const auto kind{rest.substr(kind_start, kind_end - kind_start)};
-    return kind == "block" || kind == "item" || kind == "entity_type";
+    if (kind == "block") {
+        return registry_kind::block;
+    }
+    if (kind == "item") {
+        return registry_kind::item;
+    }
+    if (kind == "entity_type") {
+        return registry_kind::entity_type;
+    }
+    return std::nullopt;
+}
+
+auto classify_registry_input_path(std::string_view path) noexcept
+    -> std::optional<registry_input_class> {
+    if (path == "tables.rvtb" || path == "protocol_registry.json") {
+        return registry_input_class::container;
+    }
+    if (registry_kind_for_path(path).has_value()) {
+        return registry_input_class::document;
+    }
+    return std::nullopt;
+}
+
+auto is_registry_input_path(std::string_view path) noexcept -> bool {
+    return classify_registry_input_path(path).has_value();
+}
+
+namespace {
+
+/// Path of the document that defines a registry entry, relative to its
+/// registry directory, with the document suffix removed.
+[[nodiscard]] auto registry_entry_path(std::string_view path) noexcept
+    -> std::optional<std::pair<std::string, std::string>> {
+    constexpr std::string_view data_prefix{"data/"};
+    if (!path.starts_with(data_prefix)) {
+        return std::nullopt;
+    }
+    auto rest{path.substr(data_prefix.size())};
+    const auto namespace_end{rest.find('/')};
+    if (namespace_end == std::string_view::npos) {
+        return std::nullopt;
+    }
+    std::string name{rest.substr(0, namespace_end)};
+    rest.remove_prefix(namespace_end + 1U);
+    const auto kind_end{rest.find('/')};
+    if (kind_end == std::string_view::npos || kind_end + 1U >= rest.size()) {
+        return std::nullopt;
+    }
+    std::string entry{rest.substr(kind_end + 1U)};
+    constexpr std::string_view suffix{".json"};
+    if (entry.size() <= suffix.size() ||
+        entry.compare(entry.size() - suffix.size(), suffix.size(), suffix) !=
+            0) {
+        return std::nullopt;
+    }
+    entry.resize(entry.size() - suffix.size());
+    return std::pair{std::move(name), std::move(entry)};
+}
+
+/// Append a registry entry's canonical form to a fingerprint buffer.
+void append_registry_entry(std::vector<std::byte> &out,
+                           const registry_entry &entry) {
+    append_field(out, registry_kind_name(entry.kind));
+    append_size(out, static_cast<std::uint64_t>(entry.id.value()));
+    append_field(out, entry.location.to_string());
+    out.append_range(
+        std::as_bytes(std::span{entry.content.data(), entry.content.size()}));
+}
+
+} // namespace
+
+registry_generation
+registry_generation::build(std::span<const registry_input> inputs) {
+    registry_generation generation{};
+    std::array<std::map<std::string, registry_entry>, registry_kind_count>
+        by_key{};
+    for (const auto &input : inputs) {
+        const auto kind{registry_kind_for_path(input.path)};
+        if (!kind) {
+            continue;
+        }
+        const auto parts{registry_entry_path(input.path)};
+        if (!parts) {
+            continue;
+        }
+        auto location{resource_location::make(parts->first, parts->second)};
+        if (!location) {
+            continue;
+        }
+        registry_entry entry{
+            .kind = *kind,
+            .id = registry_id{},
+            .location = std::move(*location),
+            .content = input.content,
+            .path = input.path,
+        };
+        const auto key{entry.location.to_string()};
+        by_key[static_cast<std::size_t>(*kind)].emplace(key, std::move(entry));
+    }
+    std::vector<std::byte> buffer{};
+    for (std::size_t index{0}; index < registry_kind_count; ++index) {
+        auto &entries{generation.entries_[index]};
+        entries.reserve(by_key[index].size());
+        std::uint32_t next_id{0};
+        for (auto &[key, entry] : by_key[index]) {
+            entry.id = registry_id{next_id++};
+            append_registry_entry(buffer, entry);
+            entries.push_back(std::move(entry));
+        }
+    }
+    generation.fingerprint_ = blake3(buffer);
+    return generation;
+}
+
+auto registry_generation::empty() const noexcept -> bool {
+    return std::ranges::all_of(
+        entries_, [](const auto &entries) { return entries.empty(); });
+}
+
+auto registry_generation::size(registry_kind kind) const noexcept
+    -> std::size_t {
+    return entries_[static_cast<std::size_t>(kind)].size();
+}
+
+auto registry_generation::entry_count() const noexcept -> std::size_t {
+    std::size_t count{0};
+    for (const auto &entries : entries_) {
+        count += entries.size();
+    }
+    return count;
+}
+
+auto registry_generation::entries(registry_kind kind) const noexcept
+    -> std::span<const registry_entry> {
+    return entries_[static_cast<std::size_t>(kind)];
+}
+
+auto registry_generation::find(registry_kind kind,
+                               const resource_location &location) const noexcept
+    -> const registry_entry * {
+    for (const auto &entry : entries_[static_cast<std::size_t>(kind)]) {
+        if (entry.location == location) {
+            return &entry;
+        }
+    }
+    return nullptr;
+}
+
+auto registry_generation::fingerprint() const noexcept -> const digest32 & {
+    return fingerprint_;
+}
+
+auto registry_change::paths() const -> std::vector<std::string> {
+    std::set<std::string> unique{};
+    for (const auto *group : {&added, &removed, &changed}) {
+        unique.insert(group->begin(), group->end());
+    }
+    return {unique.begin(), unique.end()};
+}
+
+auto registry_change::document_paths() const -> std::vector<std::string> {
+    std::vector<std::string> result{};
+    for (auto &path : paths()) {
+        if (classify_registry_input_path(path) ==
+            registry_input_class::document) {
+            result.push_back(std::move(path));
+        }
+    }
+    return result;
+}
+
+auto registry_change::container_paths() const -> std::vector<std::string> {
+    std::vector<std::string> result{};
+    for (auto &path : paths()) {
+        if (classify_registry_input_path(path) ==
+            registry_input_class::container) {
+            result.push_back(std::move(path));
+        }
+    }
+    return result;
+}
+
+auto registry_change::description() const -> std::string {
+    if (empty()) {
+        return {};
+    }
+    constexpr std::size_t max_named{3};
+    std::string text{};
+    const auto append = [&text](std::string_view label,
+                                const std::vector<std::string> &paths) {
+        if (paths.empty()) {
+            return;
+        }
+        if (!text.empty()) {
+            text += "; ";
+        }
+        text += label;
+        text += ' ';
+        text += join_limited(paths, max_named);
+    };
+    append("added", added);
+    append("removed", removed);
+    append("changed", changed);
+    append("unsupported registry document", unsupported);
+    return text;
+}
+
+auto classify_registry_change(const content_view &current,
+                              const content_view &candidate)
+    -> registry_change {
+    registry_change change{};
+    std::map<std::string, digest32> live{};
+    for (const auto &input : current.registry_inputs()) {
+        live.emplace(input.path, input.content);
+    }
+    std::map<std::string, digest32> next{};
+    for (const auto &input : candidate.registry_inputs()) {
+        next.emplace(input.path, input.content);
+    }
+    for (const auto &[path, content] : next) {
+        const auto found{live.find(path)};
+        if (found == live.end()) {
+            change.added.push_back(path);
+        } else if (found->second != content) {
+            change.changed.push_back(path);
+        }
+    }
+    for (const auto &[path, content] : live) {
+        static_cast<void>(content);
+        if (!next.contains(path)) {
+            change.removed.push_back(path);
+        }
+    }
+    bool has_document{false};
+    bool has_container{false};
+    for (const auto *group :
+         {&change.added, &change.removed, &change.changed}) {
+        for (const auto &path : *group) {
+            switch (classify_registry_input_path(path).value_or(
+                registry_input_class::container)) {
+            case registry_input_class::document:
+                // A document that cannot name a registry entry (a stray file
+                // under a registry directory, or a malformed path) would change
+                // the input fingerprint without changing the generation
+                // mapping. Refuse it as restart-required and report it as an
+                // unsupported document path instead of as a container.
+                if (registry_entry_path(path).has_value()) {
+                    has_document = true;
+                } else {
+                    has_container = true;
+                    change.unsupported.push_back(path);
+                }
+                break;
+            case registry_input_class::container:
+                has_container = true;
+                break;
+            }
+        }
+    }
+    if (has_document && has_container) {
+        change.kind = registry_change_kind::mixed;
+    } else if (has_container) {
+        change.kind = registry_change_kind::containers;
+    } else if (has_document) {
+        change.kind = registry_change_kind::documents;
+    }
+    return change;
 }
 
 content_view::content_view() = default;
@@ -218,6 +496,7 @@ auto content_view::build(std::span<const content_source> sources,
     if (view.packs_.pack_count() == 0) {
         view.registry_fingerprint_ =
             digest_registry_inputs(view.registry_inputs_);
+        view.registries_ = registry_generation::build(view.registry_inputs_);
         return view;
     }
     auto loaded{datapack_set::load(
@@ -264,6 +543,7 @@ auto content_view::build(std::span<const content_source> sources,
             registry_input{.path = entry.path, .content = blake3(*bytes)});
     }
     view.registry_fingerprint_ = digest_registry_inputs(view.registry_inputs_);
+    view.registries_ = registry_generation::build(view.registry_inputs_);
     return view;
 }
 
@@ -327,6 +607,10 @@ auto content_view::registry_inputs() const noexcept
     return registry_inputs_;
 }
 
+auto content_view::registries() const noexcept -> const registry_generation & {
+    return registries_;
+}
+
 auto content_view::registry_fingerprint() const noexcept -> const digest32 & {
     return registry_fingerprint_;
 }
@@ -352,50 +636,7 @@ auto describe_registry_change(const content_view &current,
     if (current.registry_fingerprint() == candidate.registry_fingerprint()) {
         return {};
     }
-    const auto current_inputs{current.registry_inputs()};
-    const auto candidate_inputs{candidate.registry_inputs()};
-    std::map<std::string, digest32> live{};
-    for (const auto &input : current_inputs) {
-        live.emplace(input.path, input.content);
-    }
-    std::vector<std::string> added{};
-    std::vector<std::string> changed{};
-    for (const auto &input : candidate_inputs) {
-        const auto found{live.find(input.path)};
-        if (found == live.end()) {
-            added.push_back(input.path);
-        } else if (found->second != input.content) {
-            changed.push_back(input.path);
-        }
-    }
-    std::map<std::string, digest32> next{};
-    for (const auto &input : candidate_inputs) {
-        next.emplace(input.path, input.content);
-    }
-    std::vector<std::string> removed{};
-    for (const auto &input : current_inputs) {
-        if (!next.contains(input.path)) {
-            removed.push_back(input.path);
-        }
-    }
-    constexpr std::size_t max_named{3};
-    std::string text{};
-    const auto append = [&text](std::string_view kind,
-                                const std::vector<std::string> &paths) {
-        if (paths.empty()) {
-            return;
-        }
-        if (!text.empty()) {
-            text += "; ";
-        }
-        text += kind;
-        text += ' ';
-        text += join_limited(paths, max_named);
-    };
-    append("added", added);
-    append("removed", removed);
-    append("changed", changed);
-    return text;
+    return classify_registry_change(current, candidate).description();
 }
 
 } // namespace refrain::data

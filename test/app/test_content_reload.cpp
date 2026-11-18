@@ -2,8 +2,9 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 
-// Content view epoch: off-thread rebuild, validation rollback, registry-change
-// refusal, hot gate and the non-blocking tick-boundary publish.
+// Content view epoch: off-thread rebuild, validation rollback, registry
+// generations and container refusals, hot gate and the non-blocking
+// tick-boundary publish.
 
 #include <refrain/app/content_reload.hpp>
 #include <refrain/core/io.hpp>
@@ -50,6 +51,20 @@ constexpr std::string_view recipe_beta{
         return false;
     }
     return io::write_text(target.string(), text).has_value();
+}
+
+[[nodiscard]] auto write_bytes(const std::filesystem::path &root,
+                               std::string_view relative, std::string_view text)
+    -> bool {
+    const auto target{root / std::filesystem::path{std::string{relative}}};
+    std::error_code error;
+    std::filesystem::create_directories(target.parent_path(), error);
+    if (error) {
+        return false;
+    }
+    return io::write_file(target.string(),
+                          std::as_bytes(std::span{text.data(), text.size()}))
+        .has_value();
 }
 
 [[nodiscard]] auto directory_source(const std::filesystem::path &root)
@@ -249,34 +264,141 @@ const suite content_reload_tests = [] {
         expect(service.generation() == 2U);
     };
 
-    "content reload/a registry change is refused as restart-required"_test =
-        [] {
-            fixture f{};
-            auto initial{f.initial_view()};
-            expect(initial != nullptr);
-            if (!initial) {
-                return;
-            }
-            app::content_reload service{
-                app::content_view_snapshot{.generation = 1, .view = initial},
-                f.enabled_options(),
-                [dir = f.pack_dir] { return build_view(dir); }};
-            expect(write_file(f.pack_dir, "data/test/block/ruby.json",
-                              R"({"type":"minecraft:block"})"));
-            expect(static_cast<bool>(service.request()));
-            const auto committed{wait_for_commit(service)};
-            expect(!committed.pending);
-            expect(committed.failed);
-            expect(committed.restart_required);
-            expect(!committed.published);
-            expect(committed.error.find("data/test/block/ruby.json") !=
-                   std::string::npos);
-            expect(committed.error.find("registry") != std::string::npos);
-            expect(service.generation() == 1U);
-            if (const auto live{service.snapshot()}; live.view) {
-                expect(live.view->registry_inputs().empty());
-            }
-        };
+    "content reload/a registry document change publishes a new immutable "
+    "generation"_test = [] {
+        fixture f{};
+        auto initial{f.initial_view()};
+        expect(initial != nullptr);
+        if (!initial) {
+            return;
+        }
+        app::content_reload service{
+            app::content_view_snapshot{.generation = 1, .view = initial},
+            f.enabled_options(),
+            [dir = f.pack_dir] { return build_view(dir); }};
+        const auto before{service.snapshot()};
+        expect(before.generation == 1U);
+        expect(before.registry_generation == 1U);
+        expect(before.registries != nullptr);
+        if (before.registries != nullptr) {
+            expect(before.registries->empty());
+        }
+        expect(write_file(f.pack_dir, "data/test/block/ruby.json",
+                          R"({"type":"minecraft:block"})"));
+        expect(static_cast<bool>(service.request()));
+        const auto committed{wait_for_commit(service)};
+        expect(!committed.pending);
+        expect(committed.published);
+        expect(!committed.failed);
+        expect(!committed.restart_required);
+        expect(committed.registry_generation_published);
+        expect(service.generation() == 2U);
+        expect(service.registry_generation() == 2U);
+        const auto after{service.snapshot()};
+        expect(after.generation == 2U);
+        expect(after.registry_generation == 2U);
+        expect(after.registries != nullptr);
+        if (after.registries != nullptr) {
+            expect(after.registries->size(data::registry_kind::block) == 1U);
+        }
+        // The snapshot taken before the publish keeps the generation it
+        // started with: no reader observes a mapping swap under it.
+        expect(before.generation == 1U);
+        expect(before.registry_generation == 1U);
+        expect(before.registries != nullptr);
+        if (before.registries != nullptr) {
+            expect(before.registries->empty());
+        }
+        expect(static_cast<bool>(committed.lines.size() >= 2U));
+        bool named_registry_generation{false};
+        for (const auto &line : committed.lines) {
+            named_registry_generation =
+                named_registry_generation ||
+                line.find("registry generation 2") != std::string::npos;
+        }
+        expect(named_registry_generation);
+        // A data-only reload afterwards keeps the registry generation; it is
+        // published with the same mapping.
+        expect(
+            write_file(f.pack_dir, "data/test/recipe/beta.json", recipe_beta));
+        expect(static_cast<bool>(service.request()));
+        const auto data_only{wait_for_commit(service)};
+        expect(data_only.published);
+        expect(!data_only.registry_generation_published);
+        expect(service.generation() == 3U);
+        expect(service.registry_generation() == 2U);
+        const auto last{service.snapshot()};
+        expect(last.registries != nullptr);
+        if (last.registries != nullptr) {
+            expect(last.registries->size(data::registry_kind::block) == 1U);
+        }
+    };
+
+    "content reload/a registry container change is refused as "
+    "restart-required"_test = [] {
+        fixture f{};
+        auto initial{f.initial_view()};
+        expect(initial != nullptr);
+        if (!initial) {
+            return;
+        }
+        app::content_reload service{
+            app::content_view_snapshot{.generation = 1, .view = initial},
+            f.enabled_options(),
+            [dir = f.pack_dir] { return build_view(dir); }};
+        expect(write_bytes(f.pack_dir, "tables.rvtb", "registry-table"));
+        expect(static_cast<bool>(service.request()));
+        const auto committed{wait_for_commit(service)};
+        expect(!committed.pending);
+        expect(committed.failed);
+        expect(committed.restart_required);
+        expect(!committed.published);
+        expect(!committed.registry_generation_published);
+        expect(committed.error.find("tables.rvtb") != std::string::npos);
+        expect(committed.error.find("registry") != std::string::npos);
+        expect(service.generation() == 1U);
+        expect(service.registry_generation() == 1U);
+        if (const auto live{service.snapshot()}; live.view) {
+            expect(live.view->registry_inputs().empty());
+        }
+    };
+
+    "content reload/a mixed registry change is refused as one unit"_test = [] {
+        fixture f{};
+        auto initial{f.initial_view()};
+        expect(initial != nullptr);
+        if (!initial) {
+            return;
+        }
+        app::content_reload service{
+            app::content_view_snapshot{.generation = 1, .view = initial},
+            f.enabled_options(),
+            [dir = f.pack_dir] { return build_view(dir); }};
+        expect(write_file(f.pack_dir, "data/test/block/ruby.json",
+                          R"({"type":"minecraft:block"})"));
+        expect(write_bytes(f.pack_dir, "tables.rvtb", "registry-table"));
+        expect(static_cast<bool>(service.request()));
+        const auto committed{wait_for_commit(service)};
+        expect(committed.failed);
+        expect(committed.restart_required);
+        expect(!committed.published);
+        expect(!committed.registry_generation_published);
+        // Neither half is applied: the error names both changed files and the
+        // live view stays as it was.
+        expect(committed.error.find("data/test/block/ruby.json") !=
+               std::string::npos);
+        expect(committed.error.find("tables.rvtb") != std::string::npos);
+        expect(service.generation() == 1U);
+        expect(service.registry_generation() == 1U);
+        const auto live{service.snapshot()};
+        expect(live.view != nullptr);
+        if (live.view) {
+            expect(live.view->registry_inputs().empty());
+        }
+        if (live.registries) {
+            expect(live.registries->empty());
+        }
+    };
 
     "content reload/a disabled hot gate refuses the request"_test = [] {
         fixture f{};
@@ -344,5 +466,113 @@ const suite content_reload_tests = [] {
         const auto published{wait_for_commit(service)};
         expect(published.published);
         expect(service.generation() == 2U);
+    };
+
+    "content reload/a digest-only registry change reports unchanged chunk "
+    "output"_test = [] {
+        fixture f{};
+        expect(write_file(f.pack_dir, "data/test/block/ruby.json",
+                          R"({"type":"minecraft:block","note":"v1"})"));
+        auto initial{f.initial_view()};
+        expect(initial != nullptr);
+        if (!initial) {
+            return;
+        }
+        app::content_reload service{
+            app::content_view_snapshot{.generation = 1, .view = initial},
+            f.enabled_options(),
+            [dir = f.pack_dir] { return build_view(dir); }};
+        // Changing the document digest without changing the entry name keeps
+        // every name chunk generation resolves; the published line says the
+        // chunk output is unchanged.
+        expect(write_file(f.pack_dir, "data/test/block/ruby.json",
+                          R"({"type":"minecraft:block","note":"v2"})"));
+        expect(static_cast<bool>(service.request()));
+        const auto committed{wait_for_commit(service)};
+        expect(committed.published);
+        expect(committed.registry_generation_published);
+        expect(service.registry_generation() == 2U);
+        bool names_unchanged{false};
+        for (const auto &line : committed.lines) {
+            names_unchanged =
+                names_unchanged ||
+                line.find("entry names are unchanged") != std::string::npos;
+        }
+        expect(names_unchanged);
+        const auto live{service.snapshot()};
+        expect(live.registries != nullptr);
+        if (live.registries != nullptr) {
+            expect(live.registries->size(data::registry_kind::block) == 1U);
+        }
+    };
+
+    "content reload/refuses a registry generation the active path cannot "
+    "bind"_test = [] {
+        // The chunk-generation service reports what its path can bind; a
+        // composition that selects the experimental scheduler publishes an
+        // unsupported capability, and a document reload is refused.
+        app::publish_registry_rebind_capability(app::registry_rebind_capability{
+            .supported = false,
+            .reason = "the experimental chunk scheduler keeps its boot content",
+        });
+        fixture f{};
+        auto initial{f.initial_view()};
+        expect(initial != nullptr);
+        if (!initial) {
+            app::clear_registry_rebind_capability();
+            return;
+        }
+        app::content_reload service{
+            app::content_view_snapshot{.generation = 1, .view = initial},
+            f.enabled_options(),
+            [dir = f.pack_dir] { return build_view(dir); }};
+        expect(write_file(f.pack_dir, "data/test/block/ruby.json",
+                          R"({"type":"minecraft:block"})"));
+        expect(static_cast<bool>(service.request()));
+        const auto committed{wait_for_commit(service)};
+        expect(committed.failed);
+        expect(committed.restart_required);
+        expect(!committed.published);
+        expect(!committed.registry_generation_published);
+        expect(committed.error.find("data/test/block/ruby.json") !=
+               std::string::npos);
+        bool named_reason{false};
+        for (const auto &line : committed.lines) {
+            named_reason =
+                named_reason ||
+                line.find("experimental chunk scheduler") != std::string::npos;
+        }
+        expect(named_reason);
+        expect(service.generation() == 1U);
+        expect(service.registry_generation() == 1U);
+        app::clear_registry_rebind_capability();
+    };
+
+    "content reload/refuses a changed registry document that cannot define an "
+    "entry"_test = [] {
+        fixture f{};
+        auto initial{f.initial_view()};
+        expect(initial != nullptr);
+        if (!initial) {
+            return;
+        }
+        app::content_reload service{
+            app::content_view_snapshot{.generation = 1, .view = initial},
+            f.enabled_options(),
+            [dir = f.pack_dir] { return build_view(dir); }};
+        // A non-JSON file under a registry directory cannot name an entry. The
+        // refusal says so instead of calling the path a registry container.
+        expect(write_file(f.pack_dir, "data/test/block/notes", "notes"));
+        expect(static_cast<bool>(service.request()));
+        const auto committed{wait_for_commit(service)};
+        expect(committed.failed);
+        expect(committed.restart_required);
+        expect(!committed.published);
+        expect(committed.error.find("cannot define a registry entry") !=
+               std::string::npos);
+        expect(committed.error.find("data/test/block/notes") !=
+               std::string::npos);
+        expect(service.generation() == 1U);
+        expect(service.registry_generation() == 1U);
     };
 };

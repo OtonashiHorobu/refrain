@@ -4,10 +4,13 @@
 
 #include <refrain/server/chunk_generation.hpp>
 
+#include <refrain/app/content_reload.hpp>
 #include <refrain/core/log.hpp>
 #include <refrain/platform/thread.hpp>
+#include <refrain/server/content_reload_inputs.hpp>
 #include <refrain/world/proto_bridge.hpp>
 #include <refrain/worldgen/chunk_generator.hpp>
+#include <refrain/worldgen/dimension_generator.hpp>
 
 #include <fmt/format.h>
 
@@ -15,6 +18,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <limits>
+#include <memory>
 #include <string>
 #include <system_error>
 #include <tuple>
@@ -25,6 +29,51 @@ namespace refrain::server {
 namespace {
 
 constexpr refrain::log::logger log_generation{"chunk-gen"};
+
+/// The generator configuration a tile worker starts from. A non-null
+/// `generation` replaces the boot roots with the merged generation tree and
+/// binds the registry mapping; null keeps the boot content.
+[[nodiscard]] auto tile_generator_config(
+    const chunk_generation::config &settings,
+    std::shared_ptr<const worldgen::generation_data> generation)
+    -> worldgen::chunk_generator_config {
+    worldgen::chunk_generator_config generator{};
+    generator.data_root = settings.data_root;
+    generator.templates_root = settings.templates_root;
+    generator.seed = settings.seed;
+    generator.kind = worldgen::dimension_kind::overworld;
+    generator.target = worldgen::generation_target::full;
+    generator.tile_size = settings.tile_size;
+    generator.generation = std::move(generation);
+    return generator;
+}
+
+/// Compose the published content view into a chunk-generation snapshot. The
+/// installed data root stays the base layer; the view is the overlay, so a
+/// data-only reload costs no copy and produces the same chunks.
+[[nodiscard]] auto build_generation(const chunk_generation::config &settings,
+                                    const app::content_view_snapshot &snapshot)
+    -> result<std::shared_ptr<const worldgen::generation_data>> {
+    if (!snapshot.view) {
+        return std::unexpected{
+            make_error(error_code::unknown,
+                       "the published content view names no view to bind chunk "
+                       "generation to")};
+    }
+    return worldgen::generation_data::build(
+        snapshot.view, snapshot.registries, snapshot.generation,
+        snapshot.registry_generation, settings.data_root,
+        settings.templates_root);
+}
+
+/// Monotonic store for the applied-epoch counters: several workers report the
+/// epoch they applied and a late report of an older epoch never lowers it.
+void store_max(std::atomic<std::uint64_t> &target,
+               std::uint64_t value) noexcept {
+    auto current{target.load()};
+    while (current < value && !target.compare_exchange_weak(current, value)) {
+    }
+}
 
 /// The pool never grows past this, whatever the host reports: the generator is
 /// memory bound well before it is CPU bound.
@@ -313,6 +362,19 @@ auto chunk_generation::start(config settings)
             fmt::format("chunk generation could not start its workers: {}",
                         error.what()))};
     }
+    // Tell the content reload service what this path can bind. The production
+    // tile path can publish a registry generation; the experimental scheduler
+    // keeps its boot content and must refuse a document reload instead of
+    // reporting a publish that nothing rebinds.
+    app::publish_registry_rebind_capability(
+        service->settings_.experimental_chunk_pipeline
+            ? app::registry_rebind_capability{
+                  .supported = false,
+                  .reason = "the experimental chunk scheduler keeps its boot "
+                            "content, so applying a registry generation needs a "
+                            "restart",
+              }
+            : app::registry_rebind_capability{});
     log_generation.info(
         "started chunk generation with {} workers, credit {} and the {} path",
         service->settings_.worker_count, service->admission_.credits(),
@@ -507,6 +569,27 @@ void chunk_generation::update_admission(const admission_sample &sample) {
 }
 
 auto chunk_generation::dispatch(std::uint64_t tick_elapsed_ns) -> std::size_t {
+    if (scheduler_ != nullptr) {
+        // The experimental scheduler runs one frozen shared block-state table
+        // over the boot content. A published content generation cannot rebuild
+        // that table without invalidating the ids its worker generators already
+        // resolved, so the scheduler keeps the boot content and the reload
+        // reaches this path only after a restart.
+        const auto snapshot{server::published_content_view()};
+        if (!scheduler_baseline_recorded_) {
+            scheduler_baseline_recorded_ = true;
+            scheduler_observed_generation_ = snapshot.generation;
+        } else if (snapshot.generation != scheduler_observed_generation_) {
+            scheduler_observed_generation_ = snapshot.generation;
+            if (!scheduler_reload_notice_.exchange(true)) {
+                log_generation.warn(
+                    "the experimental chunk scheduler keeps its boot content "
+                    "after content view generation {}, so a reload needs a "
+                    "restart to change this path",
+                    snapshot.generation);
+            }
+        }
+    }
     const auto headroom_ns{
         static_cast<std::uint64_t>(settings_.admission.budget_ms *
                                    settings_.admission.headroom * 1'000'000.0)};
@@ -668,6 +751,68 @@ auto chunk_generation::worker_count() const noexcept -> std::size_t {
     return settings_.worker_count;
 }
 
+auto chunk_generation::bind_generation(
+    const app::content_view_snapshot &snapshot)
+    -> result<std::shared_ptr<const worldgen::generation_data>> {
+    std::unique_lock lock{generation_mutex_};
+    for (;;) {
+        if (generation_cache_ != nullptr &&
+            generation_cache_epoch_ == snapshot.generation) {
+            return generation_cache_;
+        }
+        if (generation_failed_epoch_ == snapshot.generation) {
+            return std::unexpected{
+                make_error(error_code::unknown, generation_failure_reason_)};
+        }
+        if (!generation_composing_) {
+            break;
+        }
+        // Another worker composes an epoch. Wait, then re-check: the result may
+        // be this epoch's, another epoch may have been published meanwhile, or
+        // the slot may be free again.
+        generation_cv_.wait(lock);
+    }
+    generation_composing_ = true;
+    ++generation_compose_attempts_;
+    lock.unlock();
+    auto built{build_generation(settings_, snapshot)};
+    lock.lock();
+    generation_composing_ = false;
+    if (built) {
+        // A late composition of an older epoch must not overwrite the newer
+        // cached one, so the store is epoch-ordered.
+        if (snapshot.generation >= generation_cache_epoch_) {
+            generation_cache_ = *built;
+            generation_cache_epoch_ = snapshot.generation;
+        }
+    } else {
+        generation_failed_epoch_ = snapshot.generation;
+        generation_failure_reason_ = built.error().message;
+    }
+    generation_cv_.notify_all();
+    return built;
+}
+
+auto chunk_generation::bound_generation() const -> std::uint64_t {
+    return bound_generation_.load();
+}
+
+auto chunk_generation::bound_registry_generation() const -> std::uint64_t {
+    return bound_registry_generation_.load();
+}
+
+auto chunk_generation::generation_rebuilds() const -> std::uint64_t {
+    return generation_rebuilds_.load();
+}
+
+auto chunk_generation::generation_rebuild_failures() const -> std::uint64_t {
+    return generation_rebuild_failures_.load();
+}
+
+auto chunk_generation::generation_compose_attempts() const -> std::uint64_t {
+    return generation_compose_attempts_.load();
+}
+
 void chunk_generation::stop() {
     {
         const std::lock_guard lock{mutex_};
@@ -683,6 +828,9 @@ void chunk_generation::stop() {
     if (scheduler_ != nullptr) {
         scheduler_->clear();
     }
+    // No chunk-generation path is running after this point; the default
+    // capability matches a server without one.
+    app::clear_registry_rebind_capability();
 }
 
 void chunk_generation::run(std::size_t worker) {
@@ -706,6 +854,13 @@ void chunk_generation::run(std::size_t worker) {
     // columns went unanswered.
     std::unique_ptr<worldgen::chunk_generator> generator{};
     std::optional<std::string> generator_error{};
+    // The published epochs this worker has observed and the applied ones it
+    // reported. A failed bind observes the epoch but does not apply it, so the
+    // service-level applied counters never claim content the worker is not
+    // serving.
+    std::uint64_t observed_view_generation{0};
+    std::uint64_t observed_registry_generation{0};
+    bool bound_overlay{false};
     for (;;) {
         refrain::world::chunk_pos origin{};
         {
@@ -717,20 +872,37 @@ void chunk_generation::run(std::size_t worker) {
             origin = work_.front();
             work_.pop_front();
         }
+        const auto snapshot{server::published_content_view()};
         if (!generator) {
             if (generator_error) {
                 fail_task(origin, *generator_error);
                 continue;
             }
+            // The first generator keeps the boot content unless the published
+            // view carries documents chunk generation reads or a registry
+            // mapping, in which case it binds the newest generation right
+            // away. A view that changes nothing generation reads (the ordinary
+            // recipe/loot reload) leaves the boot roots in place, so no data is
+            // parsed twice and the first chunk is produced exactly as before.
+            std::shared_ptr<const worldgen::generation_data> generation{};
+            bool bind_failed{false};
+            if (snapshot.view && snapshot.generation != 0) {
+                auto built{bind_generation(snapshot)};
+                if (!built) {
+                    bind_failed = true;
+                    ++generation_rebuild_failures_;
+                    log_generation.error(
+                        "the chunk generator cannot bind content view "
+                        "generation {}: {}",
+                        snapshot.generation, built.error().message);
+                } else if ((*built)->overlays_generation_content() ||
+                           !(*built)->registries().empty()) {
+                    bound_overlay = (*built)->overlays_generation_content();
+                    generation = std::move(*built);
+                }
+            }
             auto created{worldgen::chunk_generator::create(
-                worldgen::chunk_generator_config{
-                    .data_root = settings_.data_root,
-                    .templates_root = settings_.templates_root,
-                    .seed = settings_.seed,
-                    .kind = worldgen::dimension_kind::overworld,
-                    .target = worldgen::generation_target::full,
-                    .tile_size = settings_.tile_size,
-                })};
+                tile_generator_config(settings_, std::move(generation)))};
             if (!created) {
                 if (!generator_failure_reported_.exchange(true)) {
                     log_generation.error(
@@ -742,6 +914,75 @@ void chunk_generation::run(std::size_t worker) {
                 continue;
             }
             generator = std::move(*created);
+            observed_view_generation = snapshot.generation;
+            observed_registry_generation = snapshot.registry_generation;
+            if (!bind_failed) {
+                store_max(bound_generation_, snapshot.generation);
+                store_max(bound_registry_generation_,
+                          snapshot.registry_generation);
+            }
+        } else if (snapshot.generation != observed_view_generation ||
+                   snapshot.registry_generation !=
+                       observed_registry_generation) {
+            // A tick-boundary publish advanced the live generation: rebuild
+            // this worker's generator for the newest snapshot before it starts
+            // the next chunk. The old generator finished the previous chunk,
+            // and queued tiles stay queued; nothing here blocks the tick that
+            // published.
+            result<std::shared_ptr<const worldgen::generation_data>> built{
+                std::unexpected{make_error(error_code::unknown,
+                                           "the published snapshot names no "
+                                           "content view")}};
+            if (snapshot.view && snapshot.generation != 0) {
+                built = bind_generation(snapshot);
+            }
+            bool applied{false};
+            if (built) {
+                const bool overlays{(*built)->overlays_generation_content()};
+                const bool needs_rebind{overlays ||
+                                        (*built)->registry_generation() !=
+                                            observed_registry_generation ||
+                                        bound_overlay};
+                if (!needs_rebind) {
+                    // Data-only reload: chunk generation reads none of it, so
+                    // the generator stays and the chunks stay identical.
+                    applied = true;
+                } else if (auto created{worldgen::chunk_generator::create(
+                               tile_generator_config(settings_,
+                                                     std::move(*built)))};
+                           created) {
+                    generator = std::move(*created);
+                    bound_overlay = overlays;
+                    ++generation_rebuilds_;
+                    log_generation.debug(
+                        "rebuilt the chunk generator for content view "
+                        "generation {}",
+                        snapshot.generation);
+                    applied = true;
+                }
+            }
+            if (!applied) {
+                ++generation_rebuild_failures_;
+                auto reported{rebind_failure_reported_.load()};
+                if (reported < snapshot.generation &&
+                    rebind_failure_reported_.compare_exchange_strong(
+                        reported, snapshot.generation)) {
+                    log_generation.error(
+                        "failed to bind chunk generation to content view "
+                        "generation {}, so the previous content keeps serving: "
+                        "{}",
+                        snapshot.generation,
+                        built ? "the generator could not load the new content"
+                              : built.error().message);
+                }
+            }
+            observed_view_generation = snapshot.generation;
+            observed_registry_generation = snapshot.registry_generation;
+            if (applied) {
+                store_max(bound_generation_, snapshot.generation);
+                store_max(bound_registry_generation_,
+                          snapshot.registry_generation);
+            }
         }
         auto &engine{*generator};
         auto protos{engine.generate_tile(

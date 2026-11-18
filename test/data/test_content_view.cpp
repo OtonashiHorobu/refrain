@@ -358,4 +358,300 @@ const suite content_view_tests = [] {
         }
         expect(single->fingerprint() != layered->fingerprint());
     };
+
+    "content view/registry generations assign ids in content-key order"_test =
+        [] {
+            scratch_directory scratch{};
+            const auto pack_dir{scratch.path() / "pack"};
+            // Deliberately written in non-sorted order: the generation sorts
+            // by canonical content key, never by file creation order.
+            expect(write_file(pack_dir, "data/test/block/zeta.json",
+                              R"({"type":"minecraft:block"})"));
+            expect(write_file(pack_dir, "data/test/block/alpha.json",
+                              R"({"type":"minecraft:block"})"));
+            expect(write_file(pack_dir, "data/test/item/beta.json",
+                              R"({"type":"minecraft:item"})"));
+            expect(write_file(pack_dir, "data/test/entity_type/mob.json",
+                              R"({"type":"minecraft:entity_type"})"));
+            expect(write_bytes(pack_dir, "tables.rvtb", "registry-table"));
+            auto built{data::content_view::build(
+                layers({directory_source(pack_dir)}))};
+            expect(static_cast<bool>(built));
+            if (!built) {
+                return;
+            }
+            const auto &generation{built->registries()};
+            expect(!generation.empty());
+            expect(generation.entry_count() == 4U);
+            expect(generation.size(data::registry_kind::block) == 2U);
+            expect(generation.size(data::registry_kind::item) == 1U);
+            expect(generation.size(data::registry_kind::entity_type) == 1U);
+            // The registry container is not a per-entry document and never
+            // enters the id mapping.
+            const auto blocks{generation.entries(data::registry_kind::block)};
+            expect(blocks.size() == 2U);
+            if (blocks.size() == 2U) {
+                expect(blocks[0].location.to_string() == "test:alpha");
+                expect(blocks[0].id == data::registry_id{0});
+                expect(blocks[0].path == "data/test/block/alpha.json");
+                expect(blocks[1].location.to_string() == "test:zeta");
+                expect(blocks[1].id == data::registry_id{1});
+            }
+            auto alpha{data::resource_location::parse("test:alpha")};
+            auto missing{data::resource_location::parse("test:missing")};
+            expect(alpha.has_value());
+            expect(missing.has_value());
+            if (alpha && missing) {
+                expect(generation.find(data::registry_kind::block, *alpha) !=
+                       nullptr);
+                expect(generation.find(data::registry_kind::block, *missing) ==
+                       nullptr);
+            }
+            expect(generation.fingerprint() != data::digest32{});
+        };
+
+    "content view/a registry generation is deterministic and detects an "
+    "edited document"_test = [] {
+        scratch_directory scratch{};
+        const auto pack_dir{scratch.path() / "pack"};
+        expect(write_file(pack_dir, "data/test/block/alpha.json",
+                          R"({"type":"minecraft:block"})"));
+        expect(write_file(pack_dir, "data/test/block/zeta.json",
+                          R"({"type":"minecraft:block"})"));
+        auto first{
+            data::content_view::build(layers({directory_source(pack_dir)}))};
+        auto second{
+            data::content_view::build(layers({directory_source(pack_dir)}))};
+        expect(static_cast<bool>(first));
+        expect(static_cast<bool>(second));
+        if (!first || !second) {
+            return;
+        }
+        expect(first->registries() == second->registries());
+        const auto old_generation{first->registries()};
+        // Editing one document changes that entry's digest and the generation
+        // fingerprint, and leaves the old generation untouched.
+        expect(write_file(pack_dir, "data/test/block/alpha.json",
+                          R"({"type":"minecraft:block","note":"v2"})"));
+        auto edited{
+            data::content_view::build(layers({directory_source(pack_dir)}))};
+        expect(static_cast<bool>(edited));
+        if (!edited) {
+            return;
+        }
+        expect(edited->registries().fingerprint() !=
+               old_generation.fingerprint());
+        auto alpha{data::resource_location::parse("test:alpha")};
+        expect(alpha.has_value());
+        if (alpha) {
+            const auto *old_entry{
+                old_generation.find(data::registry_kind::block, *alpha)};
+            const auto *new_entry{
+                edited->registries().find(data::registry_kind::block, *alpha)};
+            expect(old_entry != nullptr);
+            expect(new_entry != nullptr);
+            if (old_entry != nullptr && new_entry != nullptr) {
+                expect(old_entry->content != new_entry->content);
+                // Ids are a function of the key set, so the same key keeps the
+                // same id across generations; the content digest changes.
+                expect(old_entry->id == new_entry->id);
+            }
+        }
+    };
+
+    "content view/classifies registry changes for the reload policy"_test = [] {
+        scratch_directory scratch{};
+        const auto live{scratch.path() / "live"};
+        expect(write_documents(live));
+        expect(write_file(live, "data/test/block/ruby.json",
+                          R"({"type":"minecraft:block"})"));
+        expect(write_bytes(live, "tables.rvtb", "registry-table-v1"));
+        auto current{
+            data::content_view::build(layers({directory_source(live)}))};
+        expect(static_cast<bool>(current));
+        if (!current) {
+            return;
+        }
+        // No registry input changed: the change is not registry-affecting.
+        const auto recipe_only{scratch.path() / "recipe-only"};
+        expect(write_documents(recipe_only));
+        expect(
+            write_file(recipe_only, "data/test/recipe/beta.json", recipe_beta));
+        expect(write_file(recipe_only, "data/test/block/ruby.json",
+                          R"({"type":"minecraft:block"})"));
+        expect(write_bytes(recipe_only, "tables.rvtb", "registry-table-v1"));
+        auto recipe_candidate{
+            data::content_view::build(layers({directory_source(recipe_only)}))};
+        expect(static_cast<bool>(recipe_candidate));
+        if (recipe_candidate) {
+            const auto change{
+                data::classify_registry_change(*current, *recipe_candidate)};
+            expect(change.empty());
+            expect(!change.hot_appliable());
+            expect(!change.restart_required());
+        }
+        // A changed per-entry document is hot-appliable as a new generation.
+        const auto documents{scratch.path() / "documents"};
+        expect(write_documents(documents));
+        expect(write_file(documents, "data/test/block/ruby.json",
+                          R"({"type":"minecraft:block","note":"v2"})"));
+        expect(write_bytes(documents, "tables.rvtb", "registry-table-v1"));
+        auto document_candidate{
+            data::content_view::build(layers({directory_source(documents)}))};
+        expect(static_cast<bool>(document_candidate));
+        if (document_candidate) {
+            const auto change{
+                data::classify_registry_change(*current, *document_candidate)};
+            expect(change.kind == data::registry_change_kind::documents);
+            expect(change.hot_appliable());
+            expect(!change.restart_required());
+            const auto named{change.document_paths()};
+            expect(named.size() == 1U);
+            expect(!named.empty() &&
+                   named.front() == "data/test/block/ruby.json");
+            expect(change.container_paths().empty());
+            expect(change.description().find("changed") != std::string::npos);
+            expect(change.description().find("data/test/block/ruby.json") !=
+                   std::string::npos);
+        }
+        // A changed registry container is restart-required and names the file.
+        const auto containers{scratch.path() / "containers"};
+        expect(write_documents(containers));
+        expect(write_file(containers, "data/test/block/ruby.json",
+                          R"({"type":"minecraft:block"})"));
+        expect(write_bytes(containers, "tables.rvtb", "registry-table-v2"));
+        auto container_candidate{
+            data::content_view::build(layers({directory_source(containers)}))};
+        expect(static_cast<bool>(container_candidate));
+        if (container_candidate) {
+            const auto change{
+                data::classify_registry_change(*current, *container_candidate)};
+            expect(change.kind == data::registry_change_kind::containers);
+            expect(change.restart_required());
+            expect(!change.hot_appliable());
+            const auto named{change.container_paths()};
+            expect(named.size() == 1U);
+            expect(!named.empty() && named.front() == "tables.rvtb");
+            expect(change.description().find("tables.rvtb") !=
+                   std::string::npos);
+        }
+        // Both classes changed: the reload must be refused as one unit.
+        const auto mixed{scratch.path() / "mixed"};
+        expect(write_documents(mixed));
+        expect(write_file(mixed, "data/test/block/ruby.json",
+                          R"({"type":"minecraft:block","note":"v3"})"));
+        expect(write_bytes(mixed, "tables.rvtb", "registry-table-v2"));
+        auto mixed_candidate{
+            data::content_view::build(layers({directory_source(mixed)}))};
+        expect(static_cast<bool>(mixed_candidate));
+        if (mixed_candidate) {
+            const auto change{
+                data::classify_registry_change(*current, *mixed_candidate)};
+            expect(change.kind == data::registry_change_kind::mixed);
+            expect(change.restart_required());
+            expect(change.paths().size() == 2U);
+            expect(change.document_paths().size() == 1U);
+            expect(change.container_paths().size() == 1U);
+        }
+    };
+
+    "content view/separates entry-name changes from digest-only changes"_test =
+        [] {
+            scratch_directory scratch{};
+            const auto live{scratch.path() / "live"};
+            expect(write_file(live, "data/test/block/alpha.json",
+                              R"({"type":"minecraft:block"})"));
+            expect(write_file(live, "data/test/item/beta.json",
+                              R"({"type":"minecraft:item"})"));
+            auto current{
+                data::content_view::build(layers({directory_source(live)}))};
+            expect(static_cast<bool>(current));
+            if (!current) {
+                return;
+            }
+            // Same entry names, changed document digest: the mapping changes
+            // but chunk generation resolves the same names.
+            const auto edited{scratch.path() / "edited"};
+            expect(write_file(edited, "data/test/block/alpha.json",
+                              R"({"type":"minecraft:block","note":"v2"})"));
+            expect(write_file(edited, "data/test/item/beta.json",
+                              R"({"type":"minecraft:item"})"));
+            auto edited_view{
+                data::content_view::build(layers({directory_source(edited)}))};
+            expect(static_cast<bool>(edited_view));
+            if (edited_view) {
+                const auto change{
+                    data::classify_registry_change(*current, *edited_view)};
+                expect(change.kind == data::registry_change_kind::documents);
+                expect(change.changed.size() == 1U);
+                expect(change.added.empty());
+                expect(change.removed.empty());
+                expect(!change.entry_names_changed());
+                expect(current->registries().fingerprint() !=
+                       edited_view->registries().fingerprint());
+            }
+            // Added and removed documents are entry-name changes.
+            const auto renamed{scratch.path() / "renamed"};
+            expect(write_file(renamed, "data/test/block/gamma.json",
+                              R"({"type":"minecraft:block"})"));
+            expect(write_file(renamed, "data/test/item/beta.json",
+                              R"({"type":"minecraft:item"})"));
+            auto renamed_view{
+                data::content_view::build(layers({directory_source(renamed)}))};
+            expect(static_cast<bool>(renamed_view));
+            if (renamed_view) {
+                const auto change{
+                    data::classify_registry_change(*current, *renamed_view)};
+                expect(change.kind == data::registry_change_kind::documents);
+                expect(change.entry_names_changed());
+                expect(change.added.size() == 1U);
+                expect(change.removed.size() == 1U);
+            }
+        };
+
+    "content view/refuses a changed registry document that names no entry"_test =
+        [] {
+            scratch_directory scratch{};
+            const auto live{scratch.path() / "live"};
+            expect(write_file(live, "data/test/block/alpha.json",
+                              R"({"type":"minecraft:block"})"));
+            auto current{
+                data::content_view::build(layers({directory_source(live)}))};
+            expect(static_cast<bool>(current));
+            if (!current) {
+                return;
+            }
+            const auto stray{scratch.path() / "stray"};
+            expect(write_file(stray, "data/test/block/alpha.json",
+                              R"({"type":"minecraft:block"})"));
+            // A non-JSON file under a registry directory is a registry input
+            // but cannot define an entry; publishing it would change the input
+            // fingerprint without changing the mapping, so the reload is
+            // classified as restart-required instead.
+            expect(write_file(stray, "data/test/block/notes", "notes"));
+            auto stray_view{
+                data::content_view::build(layers({directory_source(stray)}))};
+            expect(static_cast<bool>(stray_view));
+            if (stray_view) {
+                const auto change{
+                    data::classify_registry_change(*current, *stray_view)};
+                expect(change.restart_required());
+                expect(!change.hot_appliable());
+                expect(change.unsupported.size() == 1U);
+                expect(!change.unsupported.empty() &&
+                       change.unsupported.front() == "data/test/block/notes");
+                expect(change.container_paths().empty());
+                expect(change.description().find("data/test/block/notes") !=
+                       std::string::npos);
+                expect(change.description().find(
+                           "unsupported registry document") !=
+                       std::string::npos);
+                auto notes{data::resource_location::parse("test:notes")};
+                expect(notes.has_value());
+                if (notes) {
+                    expect(stray_view->registries().find(
+                               data::registry_kind::block, *notes) == nullptr);
+                }
+            }
+        };
 };
