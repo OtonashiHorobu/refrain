@@ -1489,12 +1489,6 @@ auto host::add_loader_instance(std::string_view loader_id,
 auto host::register_mod_loader_from_mod(std::string_view loader_id,
                                         const provider_api &api,
                                         std::string_view version) -> status {
-    if (current_mod_.empty() || current_plan_ == nullptr) {
-        return std::unexpected{
-            fail(error_code::not_initialized,
-                 "register_provider() for the mod loader service is only legal "
-                 "from a mod factory during load()")};
-    }
     if (staging_) {
         return std::unexpected{fail(
             error_code::unsupported,
@@ -1503,6 +1497,12 @@ auto host::register_mod_loader_from_mod(std::string_view loader_id,
                         "part of the bootstrap composition and changing it "
                         "needs a process restart",
                         current_mod_, loader_id))};
+    }
+    if (current_mod_.empty() || current_plan_ == nullptr) {
+        return std::unexpected{
+            fail(error_code::not_initialized,
+                 "register_provider() for the mod loader service is only legal "
+                 "from a mod factory during load()")};
     }
     // A loader provider is host-level code. A guest a sandboxed loader
     // executes can never become the environment other guests run in.
