@@ -2398,7 +2398,11 @@ auto host::load(const composition &plan, const package_resolver &resolve)
         // activate provider code and which loaders are part of it, so project
         // it once before any factory runs. The registration path reads the
         // declared loader plan from `current_plan_` until it is published.
-        planned_providers planned{plan_providers(plan)};
+        auto planned_result{plan_providers(plan)};
+        if (!planned_result) {
+            return std::unexpected{std::move(planned_result.error())};
+        }
+        const planned_providers &planned{*planned_result};
         current_plan_ = &plan;
 
         // The bootstrap set is derived from the plan and the manifests: every
@@ -2549,9 +2553,21 @@ auto host::load(const composition &plan, const package_resolver &resolve)
     return result;
 }
 
-auto host::plan_providers(const composition &plan) -> planned_providers {
+auto host::plan_providers(const composition &plan)
+    -> result<planned_providers> {
     planned_providers planned{};
     for (const auto &resolved : plan.providers) {
+        // The bound is checked before any wrapper slot name is formed, so a
+        // hand-built composition beyond the reader's bound fails closed with a
+        // diagnostic instead of constructing a position the reader rejects.
+        if (resolved.wrappers.size() > max_chain_wrappers) {
+            return std::unexpected{fail(
+                error_code::unsupported,
+                fmt::format("chain binding for service '{}' declares {} "
+                            "wrappers, more than the supported bound of {}",
+                            resolved.service, resolved.wrappers.size(),
+                            max_chain_wrappers))};
+        }
         // `role` selects which slot table records the reference: the reserved
         // default instance (exclusive provider or chain base), an `instanced`
         // instance name, or one chain wrapper position.
@@ -3152,7 +3168,11 @@ auto host::stage_composition_locked(const composition &next,
         }
     }
 
-    const auto planned{plan_providers(next)};
+    auto planned_result{plan_providers(next)};
+    if (!planned_result) {
+        return std::unexpected{std::move(planned_result.error())};
+    }
+    const planned_providers &planned{*planned_result};
     const auto is_reload{[&options](std::string_view id) {
         return contains_id(options.reload, id);
     }};

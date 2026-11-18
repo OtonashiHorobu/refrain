@@ -149,6 +149,25 @@ auto wrapper_vtable() -> const refrain_services_permissions_vtable & {
     return table;
 }
 
+/// A wrapper table whose generated 16-byte header is valid but whose `reload`
+/// slot is missing: the host accepts the ABI header, so only the chain
+/// composition can notice that the table cannot answer the whole contract.
+auto wrapper_vtable_missing_slot()
+    -> const refrain_services_permissions_vtable & {
+    static const refrain_services_permissions_vtable table{
+        .struct_size = REFRAIN_SERVICES_PERMISSIONS_VTABLE_SIZE,
+        .abi_major = REFRAIN_SERVICES_PERMISSIONS_ABI_MAJOR,
+        .abi_minor = REFRAIN_SERVICES_PERMISSIONS_ABI_MINOR,
+        .abi_patch = REFRAIN_SERVICES_PERMISSIONS_ABI_PATCH,
+        .query = &wrapper_query,
+        .default_result = &wrapper_query,
+        .has = &wrapper_has,
+        .revision = &wrapper_revision,
+        .reload = nullptr,
+    };
+    return table;
+}
+
 /// The fake clean loader of the lifecycle tests: it registers one provider for
 /// the wrapper it loads and reports every load, reload and unload call.
 struct clean_loader_state {
@@ -172,6 +191,9 @@ struct clean_loader_state {
     /// Registration of a chain wrapper passes the reserved default instance
     /// explicitly, which the host must refuse.
     bool explicit_default_instance{false};
+    /// The registered wrapper table has a valid ABI header but a missing
+    /// function slot.
+    bool incomplete_vtable{false};
     /// Set by the unload slot when it ran while a wrapper query was still
     /// blocked, which would mean the retire path skipped the drain.
     bool unloaded_while_query_blocked{false};
@@ -212,7 +234,8 @@ struct clean_loader_state {
             generation->owned_result = second_owned_result;
         }
         const mod::provider_api api{
-            .vtable = &wrapper_vtable(),
+            .vtable = incomplete_vtable ? &wrapper_vtable_missing_slot()
+                                        : &wrapper_vtable(),
             .self = generation.get(),
             .abi_major = REFRAIN_SERVICES_PERMISSIONS_ABI_MAJOR,
         };
@@ -1131,6 +1154,36 @@ const suite chain_lifecycle_tests = [] {
         expect(raced_answer == permission_result::denied);
         expect(client.query(player(), owned_home) ==
                permission_result::allowed);
+    };
+
+    "chain lifecycle/an incomplete wrapper table denies instead of falling "
+    "back to the base"_test = [] {
+        lifecycle_fixture fixture{grant_home_policy};
+        // The host validates the generated ABI header, which this table keeps;
+        // its missing `reload` slot is only visible to the chain composition.
+        fixture.loader().incomplete_vtable = true;
+        auto loaded{fixture.load()};
+        expect(static_cast<bool>(loaded))
+            << (loaded ? std::string{} : loaded.error().message);
+        if (!loaded) {
+            return;
+        }
+        auto bound{bind_client(fixture.host())};
+        expect(static_cast<bool>(bound));
+        if (!bound) {
+            return;
+        }
+        const auto &client{*bound};
+        // The base policy alone would grant the node the wrapper generation
+        // owns; the unusable wrapper table must deny instead of being dropped.
+        expect(client.default_result(player(), owned_home) ==
+               permission_result::allowed);
+        expect(client.query(player(), owned_home) == permission_result::denied);
+        // The unusable state is cached for the epoch, so repeated queries keep
+        // denying without re-composing or logging for every call.
+        expect(client.query(player(), owned_home) == permission_result::denied);
+        expect(client.revision() != 0U);
+        expect(!client.reload().has_value());
     };
 
     "chain lifecycle/a declared wrapper without a provider contract fails "

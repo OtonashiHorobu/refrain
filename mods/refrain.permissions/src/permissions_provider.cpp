@@ -541,6 +541,8 @@ class provider_impl final : public permissions::admin {
             if (!position.has_value()) {
                 continue;
             }
+            const auto reference{
+                fmt::format("{}@{}", slot.provider.id, slot.provider.version)};
             const auto *api{
                 static_cast<const mod::provider_api *>(slot.provider.instance)};
             if (api == nullptr || api->vtable == nullptr ||
@@ -550,16 +552,34 @@ class provider_impl final : public permissions::admin {
                 // the wrapper would widen permissions, so the whole state is
                 // marked unusable and queries deny until the next epoch.
                 complete = false;
+                log_permissions.warn(
+                    "permission chain wrapper '{}' on slot '{}' has no "
+                    "callable provider table; queries are denied until the "
+                    "next composition epoch",
+                    reference, slot.instance);
+                continue;
+            }
+            auto link{permissions::make_provider_link(
+                reference,
+                *static_cast<const refrain_services_permissions_vtable *>(
+                    api->vtable),
+                api->self)};
+            if (!permissions::complete(link)) {
+                // The generated ABI header the host validates is only the
+                // first four words: a table can advertise a valid contract and
+                // still miss a function slot. The declared chain cannot be
+                // walked with it, and skipping the wrapper would drop its deny.
+                complete = false;
+                log_permissions.warn(
+                    "permission chain wrapper '{}' on slot '{}' has an "
+                    "incomplete provider table; queries are denied until the "
+                    "next composition epoch",
+                    reference, slot.instance);
                 continue;
             }
             links.push_back(chain_link{
                 .position = *position,
-                .link = permissions::make_provider_link(
-                    fmt::format("{}@{}", slot.provider.id,
-                                slot.provider.version),
-                    *static_cast<const refrain_services_permissions_vtable *>(
-                        api->vtable),
-                    api->self),
+                .link = std::move(link),
                 .handle = slot,
             });
         }
@@ -632,6 +652,21 @@ class provider_impl final : public permissions::admin {
         return state;
     }
 
+    /// Publish a state that denies every query because the declared chain
+    /// cannot be applied; the revision stays monotonic for the caches keyed by
+    /// it. Used for the defensive cases where a complete link set cannot be
+    /// built at all.
+    [[nodiscard]] auto make_unusable_state(std::uint64_t epoch) const
+        -> std::shared_ptr<const chain_state> {
+        const auto previous{chain_.load(std::memory_order_acquire)};
+        const auto floor{previous != nullptr ? previous->revision->value.load(
+                                                   std::memory_order_acquire)
+                                             : std::uint64_t{0}};
+        return make_state(epoch,
+                          previous != nullptr ? previous->revision_offset : 0,
+                          fallback_chain_, {}, floor + 1, false);
+    }
+
     /// Compose the chain from one registry snapshot. A link-set change gets a
     /// monotonic revision offset so the facade revision keeps increasing even
     /// when the raw sum drops (a retired wrapper carried revision too). An
@@ -647,21 +682,8 @@ class provider_impl final : public permissions::admin {
         const auto previous{chain_.load(std::memory_order_acquire)};
         if (!resolved) {
             // A wrapper slot is active but unusable: publish a state that
-            // denies instead of a chain with the wrapper dropped, and keep the
-            // revision monotonic for the caches keyed by it.
-            const auto floor{
-                previous != nullptr
-                    ? previous->revision->value.load(std::memory_order_acquire)
-                    : std::uint64_t{0}};
-            log_permissions.warn(
-                "a permission chain wrapper slot is active but holds no "
-                "usable provider table; queries are denied until the next "
-                "composition epoch, the base resolver is not used as a "
-                "fallback");
-            return make_state(snapshot.epoch,
-                              previous != nullptr ? previous->revision_offset
-                                                  : 0,
-                              fallback_chain_, {}, floor + 1, false);
+            // denies instead of a chain with the wrapper dropped.
+            return make_unusable_state(snapshot.epoch);
         }
         std::vector<permissions::provider_link> wrappers{};
         wrappers.reserve(links.size());
@@ -671,11 +693,14 @@ class provider_impl final : public permissions::admin {
         auto composed{permissions::provider_chain::create(std::move(wrappers),
                                                           base_link())};
         if (!composed) {
+            // The base-only fallback would drop every wrapper deny, so a
+            // composition that cannot be built is published as a denying
+            // state instead.
             log_permissions.warn(
-                "failed to compose the permission chain, keeping the base "
-                "resolver alone: {}",
+                "failed to compose the permission chain, queries are denied "
+                "until the next composition epoch: {}",
                 composed.error().message);
-            return fallback_state_;
+            return make_unusable_state(snapshot.epoch);
         }
         auto chain{std::make_shared<const permissions::provider_chain>(
             std::move(*composed))};

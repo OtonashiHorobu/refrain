@@ -653,9 +653,12 @@ class host {
     [[nodiscard]] auto verify_contract_composition() const -> status;
 
     /// Project a composition's provider selection onto the per-mod slot map
-    /// the factory permission checks and the plan verification use.
+    /// the factory permission checks and the plan verification use. Fails with
+    /// `unsupported` when a chain binding declares more wrappers than the
+    /// position bound, before a slot name beyond the reader's bound is formed.
     [[nodiscard]] static auto
-    plan_providers(const refrain::mod::composition &plan) -> planned_providers;
+    plan_providers(const refrain::mod::composition &plan)
+        -> result<planned_providers>;
 
     /// Read + gate one mod and (when the plan selected it as provider) call its
     /// static factory.
