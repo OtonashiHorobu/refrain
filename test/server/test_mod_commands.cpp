@@ -215,7 +215,6 @@ const suite mod_console_tests = [] {
             cfg.console_level = refrain::log::level::off;
             cfg.file_path = log_path.string();
             cfg.file_level = refrain::log::level::info;
-            cfg.enable_colors = false;
             expect(static_cast<bool>(refrain::log::init(cfg)));
             commands.execute("mods list", tick);
             commands.execute("mods reload refrain.test.manager", tick);
@@ -260,7 +259,6 @@ const suite mod_console_tests = [] {
         cfg.console_level = refrain::log::level::off;
         cfg.file_path = log_path.string();
         cfg.file_level = refrain::log::level::info;
-        cfg.enable_colors = false;
         expect(static_cast<bool>(refrain::log::init(cfg)));
         commands.execute("mods uninstall some.mod", tick);
         refrain::log::shutdown();
@@ -292,7 +290,6 @@ const suite mod_console_tests = [] {
             cfg.console_level = refrain::log::level::off;
             cfg.file_path = log_path.string();
             cfg.file_level = refrain::log::level::info;
-            cfg.enable_colors = false;
             expect(static_cast<bool>(refrain::log::init(cfg)));
             commands.execute("mods list", tick);
             refrain::log::shutdown();

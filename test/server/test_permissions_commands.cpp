@@ -462,7 +462,6 @@ const suite permissions_console_tests = [] {
         cfg.console_level = refrain::log::level::off;
         cfg.file_path = log_path.string();
         cfg.file_level = refrain::log::level::info;
-        cfg.enable_colors = false;
         expect(static_cast<bool>(refrain::log::init(cfg)));
         server::tick_metrics metrics{};
         server::console_commands commands{

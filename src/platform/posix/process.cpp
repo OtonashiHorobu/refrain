@@ -336,6 +336,10 @@ auto unset_environment_variable(std::string_view name) -> status {
     return status_ok();
 }
 
+auto stderr_is_terminal() noexcept -> bool {
+    return ::isatty(STDERR_FILENO) != 0;
+}
+
 void trigger_segmentation_fault() noexcept {
     // Genuine null dereference inside the platform layer: the compiler is not
     // allowed to optimize it away, and any installed fault handler sees a real

@@ -17,11 +17,14 @@
 #include <atomic>
 #include <charconv>
 #include <cstddef>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <string>
 #include <string_view>
+
+#include <io.h>
 
 namespace refrain::platform {
 
@@ -382,6 +385,10 @@ auto unset_environment_variable(std::string_view name) -> status {
             error_code::io_error, "failed to unset an environment variable")};
     }
     return status_ok();
+}
+
+auto stderr_is_terminal() noexcept -> bool {
+    return ::_isatty(::_fileno(stderr)) != 0;
 }
 
 void trigger_segmentation_fault() noexcept {

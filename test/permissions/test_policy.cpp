@@ -704,7 +704,6 @@ const suite warning_tests = [] {
             settings.console_level = refrain::log::level::off;
             settings.file_path = log_path.string();
             settings.file_level = refrain::log::level::warn;
-            settings.enable_colors = false;
             const auto initialized{refrain::log::init(settings)};
             expect(static_cast<bool>(initialized))
                 << "cannot capture the policy warnings";

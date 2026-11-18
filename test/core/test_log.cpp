@@ -4,18 +4,23 @@
 
 #include <refrain/core/log.hpp>
 
+#include <refrain/platform/process.hpp>
+
 #include <boost/ut.hpp>
 
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <system_error>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #if !defined(_WIN32)
@@ -92,6 +97,98 @@ class fd_redirect {
     return std::string{std::istreambuf_iterator<char>{in},
                        std::istreambuf_iterator<char>{}};
 }
+
+/// Pin an environment variable for the lifetime of the guard and restore the
+/// previous state afterwards. The colour tests set `NO_COLOR` and
+/// `REFRAIN_COLOR` explicitly so neither the developer's shell nor the CI
+/// environment can make them order-dependent, and no test leaks an override
+/// into the rest of the suite.
+class environment_guard {
+  public:
+    environment_guard(std::string name, std::optional<std::string> value)
+        : name_{std::move(name)}, saved_{current_value()} {
+        apply(value);
+    }
+
+    environment_guard(const environment_guard &) = delete;
+    auto operator=(const environment_guard &) -> environment_guard & = delete;
+
+    ~environment_guard() { apply(saved_); }
+
+  private:
+    [[nodiscard]] auto current_value() const -> std::optional<std::string> {
+        const char *value{std::getenv(name_.c_str())};
+        if (value == nullptr) {
+            return std::nullopt;
+        }
+        return std::string{value};
+    }
+
+    void apply(const std::optional<std::string> &value) noexcept {
+        static_cast<void>(
+            value.has_value()
+                ? refrain::platform::set_environment_variable(name_, *value)
+                : refrain::platform::unset_environment_variable(name_));
+    }
+
+    std::string name_;
+    std::optional<std::string> saved_;
+};
+
+/// Remove SGR escape sequences (`ESC [ ... m`) so a coloured capture can be
+/// compared with the plain capture byte for byte.
+[[nodiscard]] auto strip_ansi(std::string_view text) -> std::string {
+    std::string plain{};
+    plain.reserve(text.size());
+    std::size_t index{0};
+    while (index < text.size()) {
+        if (text[index] == '\x1b' && index + 1 < text.size() &&
+            text[index + 1] == '[') {
+            index += 2;
+            while (index < text.size() &&
+                   ((text[index] >= '0' && text[index] <= '9') ||
+                    text[index] == ';')) {
+                ++index;
+            }
+            if (index < text.size() && text[index] == 'm') {
+                ++index;
+            }
+            continue;
+        }
+        plain.push_back(text[index]);
+        ++index;
+    }
+    return plain;
+}
+
+/// Strip the leading `[HH:MM:SS] ` so two captures made in different seconds
+/// still compare equal.
+[[nodiscard]] auto after_timestamp(std::string_view line) -> std::string_view {
+    const auto bracket{line.find("] ")};
+    return bracket == std::string_view::npos ? line : line.substr(bracket + 2);
+}
+
+#if !defined(_WIN32)
+/// Capture everything the console sink writes to stderr while logging one
+/// message. stderr is a regular file, so the stream is not a terminal.
+[[nodiscard]] auto capture_console(const refrain::log::config &cfg,
+                                   std::string_view message) -> std::string {
+    refrain::log::shutdown();
+    const auto directory = scratch_directory();
+    const auto err_path = directory / "console-colour.txt";
+    {
+        const fd_redirect capture_err{STDERR_FILENO, err_path};
+        expect(static_cast<bool>(refrain::log::init(cfg)));
+        refrain::log::set_thread_name("console");
+        refrain::log::write(refrain::log::level::info, message);
+        refrain::log::shutdown();
+    }
+    const auto text = read_text(err_path);
+    std::error_code error;
+    fs::remove_all(directory, error);
+    return text;
+}
+#endif
 
 [[maybe_unused]] const suite tests = [] {
     "log/level names round-trip"_test = [] {
@@ -238,7 +335,7 @@ class fd_redirect {
 
             refrain::log::config cfg{};
             cfg.console_level = refrain::log::level::info;
-            cfg.enable_colors = false;
+            cfg.console_color = refrain::log::color_mode::never;
             initialized = static_cast<bool>(refrain::log::init(cfg));
             refrain::log::info("console direction probe {}", 7);
             refrain::log::shutdown(); // flushes the console sink
@@ -447,6 +544,149 @@ class fd_redirect {
         std::error_code error;
         fs::remove_all(directory, error);
     };
+
+    // The console pattern colours the level and nothing else: the markers sit
+    // between the thread name and the level, and the closing bracket still
+    // follows the level exactly as before.
+    "log/console pattern marks the level field for colour"_test = [] {
+        const auto pattern{refrain::log::console_pattern()};
+        expect(pattern == "[%H:%M:%S] [%N/%^%l%$] %v") << pattern;
+        expect(pattern.find("%^%l%$") != std::string_view::npos) << pattern;
+    };
+
+    // Documented precedence: REFRAIN_COLOR overrides the configured mode,
+    // NO_COLOR only takes part in the automatic choice, and an explicit
+    // `always` wins over NO_COLOR.
+    "log/console colour resolution follows the documented precedence"_test =
+        [] {
+            using refrain::log::color_mode;
+            using refrain::log::console_color_enabled;
+
+            // automatic: an interactive terminal without NO_COLOR only.
+            expect(console_color_enabled(color_mode::automatic, true, false));
+            expect(!console_color_enabled(color_mode::automatic, true, true));
+            expect(!console_color_enabled(color_mode::automatic, false, false));
+            expect(!console_color_enabled(color_mode::automatic, false, true));
+
+            // always: explicit, so it wins over NO_COLOR and redirection.
+            expect(console_color_enabled(color_mode::always, true, true));
+            expect(console_color_enabled(color_mode::always, false, true));
+            expect(console_color_enabled(color_mode::always, false, false));
+
+            // never: plain even on an interactive terminal.
+            expect(!console_color_enabled(color_mode::never, true, false));
+            expect(!console_color_enabled(color_mode::never, true, true));
+        };
+
+#if !defined(_WIN32)
+    // A forced `always` writes the level's ANSI escape; stripping the escape
+    // must give back the plain line byte for byte, so the colour mode never
+    // changes the text that scripts and goldens parse.
+    "log/forced colour wraps the level and leaves the line unchanged"_test =
+        [] {
+            const environment_guard refrain_color{"REFRAIN_COLOR",
+                                                  std::nullopt};
+            const environment_guard no_color{"NO_COLOR", std::nullopt};
+
+            refrain::log::config coloured{};
+            coloured.console_level = refrain::log::level::info;
+            coloured.console_color = refrain::log::color_mode::always;
+            const auto coloured_text{capture_console(coloured, "colour probe")};
+
+            refrain::log::config plain{};
+            plain.console_level = refrain::log::level::info;
+            plain.console_color = refrain::log::color_mode::never;
+            const auto plain_text{capture_console(plain, "colour probe")};
+
+            // `info` is green; the reset closes the range before the bracket.
+            // The thread label and the message stay outside the escape.
+            expect(coloured_text.find(
+                       "[console/\x1b[32minfo\x1b[m] colour probe") !=
+                   std::string::npos)
+                << coloured_text;
+            expect(after_timestamp(strip_ansi(coloured_text)) ==
+                   after_timestamp(plain_text))
+                << coloured_text << " vs " << plain_text;
+        };
+
+    // CI, piped captures and the golden files compare the bytes of stderr, so
+    // the default and the explicit `never` stay plain when it is redirected.
+    "log/redirected console stays escape-free"_test = [] {
+        const environment_guard refrain_color{"REFRAIN_COLOR", std::nullopt};
+        const environment_guard no_color{"NO_COLOR", std::nullopt};
+
+        for (const auto mode : {refrain::log::color_mode::never,
+                                refrain::log::color_mode::automatic}) {
+            refrain::log::config cfg{};
+            cfg.console_level = refrain::log::level::info;
+            cfg.console_color = mode;
+            const auto text{capture_console(cfg, "plain probe")};
+            expect(text.find("\x1b[") == std::string::npos) << text;
+            expect(after_timestamp(text) ==
+                   std::string_view{"[console/info] plain probe\n"})
+                << text;
+        }
+    };
+
+    // REFRAIN_COLOR overrides the configured mode in both directions, and an
+    // unknown value is ignored instead of guessed.
+    "log/REFRAIN_COLOR overrides the configured colour mode"_test = [] {
+        const environment_guard no_color{"NO_COLOR", std::nullopt};
+
+        {
+            const environment_guard override_mode{"REFRAIN_COLOR", "never"};
+            refrain::log::config cfg{};
+            cfg.console_level = refrain::log::level::info;
+            cfg.console_color = refrain::log::color_mode::always;
+            const auto text{capture_console(cfg, "override probe")};
+            expect(text.find("\x1b[") == std::string::npos) << text;
+        }
+        {
+            const environment_guard override_mode{"REFRAIN_COLOR", "always"};
+            refrain::log::config cfg{};
+            cfg.console_level = refrain::log::level::info;
+            cfg.console_color = refrain::log::color_mode::never;
+            const auto text{capture_console(cfg, "override probe")};
+            expect(text.find("\x1b[32minfo\x1b[m") != std::string::npos)
+                << text;
+        }
+        {
+            // An unknown value falls back to the configured mode.
+            const environment_guard override_mode{"REFRAIN_COLOR", "bogus"};
+            refrain::log::config cfg{};
+            cfg.console_level = refrain::log::level::info;
+            cfg.console_color = refrain::log::color_mode::never;
+            const auto text{capture_console(cfg, "override probe")};
+            expect(text.find("\x1b[") == std::string::npos) << text;
+        }
+    };
+
+    // NO_COLOR disables the automatic choice, but a caller that explicitly
+    // asks for colour still gets it.
+    "log/always keeps colour even when NO_COLOR is set"_test = [] {
+        {
+            const environment_guard no_color{"NO_COLOR", "1"};
+            const environment_guard override_mode{"REFRAIN_COLOR", "always"};
+            refrain::log::config cfg{};
+            cfg.console_level = refrain::log::level::info;
+            cfg.console_color = refrain::log::color_mode::automatic;
+            const auto text{capture_console(cfg, "no-color probe")};
+            expect(text.find("\x1b[32minfo\x1b[m") != std::string::npos)
+                << text;
+        }
+        {
+            // `auto` on a redirected stderr stays plain even when the
+            // configured mode would colour.
+            const environment_guard no_color{"NO_COLOR", "1"};
+            const environment_guard override_mode{"REFRAIN_COLOR", "auto"};
+            refrain::log::config cfg{};
+            cfg.console_level = refrain::log::level::info;
+            cfg.console_color = refrain::log::color_mode::always;
+            const auto text{capture_console(cfg, "no-color probe")};
+            expect(text.find("\x1b[") == std::string::npos) << text;
+        }
+    };
+#endif
 };
 
 } // namespace

@@ -29,6 +29,38 @@ enum class level : std::int8_t {
 
 [[nodiscard]] auto level_from_string(std::string_view name) noexcept -> level;
 
+/// Policy for ANSI colour on the console sink.
+///
+/// The rotating file sink never carries escape sequences, so a captured log
+/// file stays greppable regardless of this policy.
+enum class color_mode : std::uint8_t {
+    /// Colour only when stderr is an interactive terminal and `NO_COLOR` is
+    /// unset or empty.
+    automatic = 0,
+    /// Colour unconditionally, including when stderr is redirected.
+    always,
+    /// Plain text, even on an interactive terminal.
+    never,
+};
+
+/// Resolve whether the console sink emits colour.
+///
+/// `stderr_terminal` is the result of `platform::stderr_is_terminal()` and
+/// `no_color` is true when `NO_COLOR` holds a non-empty value. `automatic`
+/// needs both a terminal and no `NO_COLOR`; `always` wins over `NO_COLOR`
+/// because an explicit request for colour must not be undone by a broad
+/// environment hint; `never` always disables.
+[[nodiscard]] auto console_color_enabled(color_mode mode, bool stderr_terminal,
+                                         bool no_color) noexcept -> bool;
+
+/// Pattern of the console sink.
+///
+/// The `%^`/`%$` markers delimit the colour range around the level only, so a
+/// coloured line differs from a plain one inside `[.../level]` and nowhere
+/// else. The same pattern is installed on the colour and the plain sink; the
+/// markers emit nothing when the sink does not colour.
+[[nodiscard]] auto console_pattern() noexcept -> std::string_view;
+
 struct config {
     /// Console sink level. `off` disables the console sink entirely.
     ///
@@ -41,7 +73,10 @@ struct config {
     /// Optional file sink (rotating by size). Empty path = disabled.
     std::string file_path{};
     level file_level{level::debug};
-    bool enable_colors{true};
+    /// Colour policy for the console sink. The default keeps redirected
+    /// output plain; `REFRAIN_COLOR` overrides it and `NO_COLOR` disables
+    /// `automatic`.
+    color_mode console_color{color_mode::automatic};
     /// Opt-in asynchronous logger (dedicated queue + background thread). The
     /// server and tools keep the synchronous default; tests disable it. The
     /// synchronous logger flushes on `info` and above plus at shutdown(), so a

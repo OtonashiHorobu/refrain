@@ -10,6 +10,7 @@
 #include <boost/ut.hpp>
 
 #include <cstdint>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -18,7 +19,10 @@
 #if !defined(_WIN32)
 // White-box POSIX test of the platform layer itself (see the allow-list entry
 // in tools/platform_check.py): observing "died by signal" requires spawning a
-// real child process and inspecting waitpid()'s status.
+// real child process and inspecting waitpid()'s status, and observing terminal
+// detection requires replacing the stderr descriptor.
+#include <fcntl.h>
+#include <stdlib.h>
 #include <sys/resource.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -268,6 +272,70 @@ suite<"platform/process"> process_tests = [] {
             }
             refrain::platform::restore_fault_handlers();
         };
+#endif
+
+#if !defined(_WIN32)
+    // The console log sink colours only an interactive terminal; this probe is
+    // what keeps a redirected stderr (CI, pipes, files) plain.
+    "platform/process: stderr is not a terminal when redirected"_test = [] {
+        const refrain::test_support::scratch_directory scratch;
+        const auto path{scratch.path() / "stderr.txt"};
+        auto terminal{true};
+        {
+            const int saved{::dup(STDERR_FILENO)};
+            expect(saved >= 0);
+            const int file{
+                ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600)};
+            expect(file >= 0);
+            if (file >= 0) {
+                (void)::dup2(file, STDERR_FILENO);
+                (void)::close(file);
+            }
+            terminal = refrain::platform::stderr_is_terminal();
+            std::fflush(nullptr);
+            if (saved >= 0) {
+                (void)::dup2(saved, STDERR_FILENO);
+                (void)::close(saved);
+            }
+        }
+        expect(!terminal);
+    };
+
+#if defined(__linux__)
+    // A redirected stream alone would also pass if the probe always returned
+    // false; a pseudo-terminal proves the positive case.
+    "platform/process: stderr is a terminal on a pseudo-terminal"_test = [] {
+        const int master{::posix_openpt(O_RDWR | O_NOCTTY)};
+        if (master < 0) {
+            return; // no pseudo-terminal support in this environment
+        }
+        if (::grantpt(master) != 0 || ::unlockpt(master) != 0) {
+            (void)::close(master);
+            return;
+        }
+        const char *slave_name{::ptsname(master)};
+        if (slave_name == nullptr) {
+            (void)::close(master);
+            return;
+        }
+        const int slave{::open(slave_name, O_RDWR | O_NOCTTY)};
+        if (slave < 0) {
+            (void)::close(master);
+            return;
+        }
+        const int saved{::dup(STDERR_FILENO)};
+        (void)::dup2(slave, STDERR_FILENO);
+        const auto terminal{refrain::platform::stderr_is_terminal()};
+        std::fflush(nullptr);
+        if (saved >= 0) {
+            (void)::dup2(saved, STDERR_FILENO);
+            (void)::close(saved);
+        }
+        (void)::close(slave);
+        (void)::close(master);
+        expect(terminal);
+    };
+#endif
 #endif
 };
 

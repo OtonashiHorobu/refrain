@@ -166,7 +166,6 @@ suite console_player_tests = [] {
         cfg.console_level = refrain::log::level::off;
         cfg.file_path = log_path.string();
         cfg.file_level = refrain::log::level::info;
-        cfg.enable_colors = false;
         expect(static_cast<bool>(refrain::log::init(cfg)));
         commands.execute("pos Bob", tick);
         commands.execute("pos", tick);
