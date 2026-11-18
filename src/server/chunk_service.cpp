@@ -94,11 +94,12 @@ void chunk_service::set_entity_source(
 }
 
 void chunk_service::attach(play_gateway &gateway, chunk_packet_source source,
-                           chunk_streamer::backlog_limits backlog) {
+                           chunk_streamer::backlog_limits backlog,
+                           chunk_streamer::budget_clock budget_clock) {
     gateway_ = &gateway;
     source_ = source;
     backlog_ = backlog.clamped();
-    streamer_.emplace(gateway, source, backlog_);
+    streamer_.emplace(gateway, source, backlog_, std::move(budget_clock));
     streamer_->set_chunk_requester([this](std::int32_t x, std::int32_t z) {
         return generation_ != nullptr &&
                generation_->request(refrain::world::chunk_pos{x, z});

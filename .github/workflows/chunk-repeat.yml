@@ -1,0 +1,141 @@
+# SPDX-License-Identifier: MIT
+#
+# SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
+#
+# Repeated chunk streaming. A single pass is not evidence for a timing-sensitive
+# suite: the same case can pass alone and fail when the host is busy, so this
+# job runs the streamer, cache and service suites repeatedly while the spare
+# cores are kept busy and fails on the first repetition that fails.
+#
+# The job needs no datapack. The content-backed reload suite returns early
+# without one, so a CI pass says nothing about it; the local repeat command for
+# that suite is documented in docs/testing.md and driven by
+# scripts/dev/repeat-chunk-tests.sh --reload.
+#
+# Design constraints:
+#   * follows the linux-build job's toolchain, Conan cache and ccache setup;
+#   * every action is pinned to a full commit like the other workflows;
+#   * no repository secret is used: the repeat gate is public and datapack-free.
+#
+# ASCII-only YAML: CI logs/errors stay in English for tool compatibility.
+
+name: chunk-repeat
+
+on:
+  schedule:
+    # Nightly on the default branch. The job is bounded: 20 repetitions of the
+    # datapack-free cases plus one whole-suite pass under the same load.
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: chunk-repeat-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CONAN_VERSION: "2.31.2"
+  CMAKE_VERSION: "4.4.4"
+  REFRAIN_CONAN_PROFILE: gcc-release
+  CMAKE_GENERATOR: Ninja
+  # Keep Conan output stable/verbose in CI logs.
+  CONAN_LOGIN_USERNAME: ""
+  CONAN_NON_INTERACTIVE: "1"
+
+# Container jobs default to `sh`; the steps use bash-only syntax.
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  repeat:
+    name: repeat chunk suites
+    runs-on: ubuntu-24.04
+    container:
+      image: gcc:16
+    timeout-minutes: 120
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 1G
+      CCACHE_COMPRESS: "true"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Mark the workspace as safe for git
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Install toolchain
+        run: |
+          set -euo pipefail
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ninja-build ccache python3 python3-pip git ca-certificates
+          python3 -m pip install --break-system-packages \
+            "conan==${CONAN_VERSION}" "cmake==${CMAKE_VERSION}"
+          gcc --version | head -1
+          conan --version
+          cmake --version | head -1
+          ninja --version
+
+      - name: Restore Conan cache
+        id: conan-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.conan2
+          key: conan-${{ runner.os }}-${{ hashFiles('conanfile.py', 'conan/recipes/**', 'conan/locks/**') }}
+          restore-keys: |
+            conan-${{ runner.os }}-
+
+      # The regular build job writes this cache from the default branch, so a
+      # nightly run reuses its objects instead of compiling the tree from cold.
+      - name: Restore ccache
+        id: ccache-restore
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .ccache
+          key: ccache-linux-build-${{ github.sha }}
+          restore-keys: |
+            ccache-linux-build-
+
+      - name: Create Conan profile
+        run: bash scripts/bootstrap.sh --profile-only
+
+      - name: Build vendor recipes
+        run: python3 tools/vendor_export.py --build --profile "${REFRAIN_CONAN_PROFILE}"
+
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          test -f conan/locks/vendor.lock || {
+            echo "conan/locks/vendor.lock is missing; dependencies must be pinned" >&2
+            exit 1
+          }
+          conan install . -pr "${REFRAIN_CONAN_PROFILE}" --build=missing \
+            -o "&:lto=False" --lockfile=conan/locks/vendor.lock
+
+      - name: Configure
+        run: >-
+          cmake --preset conan-release
+          -DCMAKE_C_COMPILER_LAUNCHER=ccache
+          -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+      - name: Build
+        run: cmake --build --preset conan-release -j "$(nproc)"
+
+      - name: Repeat the chunk suites under load
+        run: |
+          set -euo pipefail
+          source build/Release/generators/conanrun.sh
+          scripts/dev/repeat-chunk-tests.sh --repeats 20 --full-suite 2>&1 \
+            | tee chunk-repeat.log
+
+      - name: Upload failure logs
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: chunk-repeat-logs
+          path: |
+            chunk-repeat.log
+            build/Release/CMakeCache.txt
+          if-no-files-found: ignore
