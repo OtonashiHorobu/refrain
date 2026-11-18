@@ -56,14 +56,7 @@ constexpr std::size_t k_max_mod_count{4096};
                    (value >= '0' && value <= '9') || value == '_';
         });
     };
-    if (valid_slot(key)) {
-        return true;
-    }
-    if (!is_valid_service_id(key)) {
-        return false;
-    }
-    const auto colon{key.find(':')};
-    return key.substr(0, colon) != "refrain";
+    return valid_slot(key) || is_custom_service_id(key);
 }
 
 /// Instance names used by instanced provider bindings: lowercase

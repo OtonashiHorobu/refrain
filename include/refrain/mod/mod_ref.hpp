@@ -64,4 +64,10 @@ inline constexpr std::size_t max_mod_id_length = 128;
 /// segments. These are the ids generated from RIDL (`service_id` constants).
 [[nodiscard]] auto is_valid_service_id(std::string_view id) noexcept -> bool;
 
+/// Custom service contract ids: a valid `namespace:name` id whose namespace is
+/// not the reserved `refrain` namespace. A mod package may declare and provide
+/// these in its manifest; `refrain` is reserved for the host runtime and the
+/// first-party contracts generated from RIDL.
+[[nodiscard]] auto is_custom_service_id(std::string_view id) noexcept -> bool;
+
 } // namespace refrain::mod

@@ -32,7 +32,6 @@
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
-#include <limits>
 #include <map>
 #include <memory>
 #include <new>
@@ -387,29 +386,6 @@ void tighten_upper(version_interval &interval, const core::semver &bound,
     }
 }
 
-/// Exclusive upper bound of `^bound` (npm caret semantics); nullopt when the
-/// next major/minor/patch component is not representable.
-[[nodiscard]] auto caret_upper(const core::semver &bound)
-    -> std::optional<core::semver> {
-    constexpr auto maximum{std::numeric_limits<std::uint32_t>::max()};
-    if (bound.major != 0) {
-        if (bound.major == maximum) {
-            return std::nullopt;
-        }
-        return core::semver{.major = bound.major + 1U};
-    }
-    if (bound.minor != 0) {
-        if (bound.minor == maximum) {
-            return std::nullopt;
-        }
-        return core::semver{.minor = bound.minor + 1U};
-    }
-    if (bound.patch == maximum) {
-        return std::nullopt;
-    }
-    return core::semver{.patch = bound.patch + 1U};
-}
-
 [[nodiscard]] auto
 to_interval(const std::vector<core::version_comparator> &group)
     -> version_interval {
@@ -434,20 +410,19 @@ to_interval(const std::vector<core::version_comparator> &group)
             break;
         case core::range_operator::caret: {
             tighten_lower(interval, comparator.bound, true);
-            const auto upper{caret_upper(comparator.bound)};
-            if (upper.has_value()) {
-                tighten_upper(interval, *upper, false);
+            if (core::semver_detail::caret_has_upper(comparator.bound)) {
+                tighten_upper(
+                    interval,
+                    core::semver_detail::caret_upper(comparator.bound), false);
             }
             break;
         }
         case core::range_operator::tilde: {
             tighten_lower(interval, comparator.bound, true);
-            if (comparator.bound.minor !=
-                std::numeric_limits<std::uint32_t>::max()) {
-                tighten_upper(interval,
-                              {.major = comparator.bound.major,
-                               .minor = comparator.bound.minor + 1U},
-                              false);
+            if (core::semver_detail::tilde_has_upper(comparator.bound)) {
+                tighten_upper(
+                    interval,
+                    core::semver_detail::tilde_upper(comparator.bound), false);
             }
             break;
         }
@@ -463,7 +438,10 @@ to_interval(const std::vector<core::version_comparator> &group)
     return interval;
 }
 
-/// True when every version of `inner` lies inside `outer`.
+/// True when every version of `inner` lies inside `outer`. An unbounded inner
+/// side needs an unbounded outer side (otherwise the outer bound excludes
+/// versions the inner range still accepts), while an unbounded outer side
+/// covers every bound on that side.
 [[nodiscard]] auto interval_within(const version_interval &inner,
                                    const version_interval &outer) -> bool {
     if (inner.empty) {
@@ -473,30 +451,32 @@ to_interval(const std::vector<core::version_comparator> &group)
         return false;
     }
     if (inner.has_lower) {
-        if (!outer.has_lower) {
-            return false;
+        if (outer.has_lower) {
+            const auto order{core::compare(outer.lower, inner.lower)};
+            if (order == std::strong_ordering::greater) {
+                return false;
+            }
+            if (order == std::strong_ordering::equal && inner.lower_inclusive &&
+                !outer.lower_inclusive) {
+                return false;
+            }
         }
-        const auto order{core::compare(outer.lower, inner.lower)};
-        if (order == std::strong_ordering::greater) {
-            return false;
-        }
-        if (order == std::strong_ordering::equal && inner.lower_inclusive &&
-            !outer.lower_inclusive) {
-            return false;
-        }
+    } else if (outer.has_lower) {
+        return false;
     }
     if (inner.has_upper) {
-        if (!outer.has_upper) {
-            return false;
+        if (outer.has_upper) {
+            const auto order{core::compare(outer.upper, inner.upper)};
+            if (order == std::strong_ordering::less) {
+                return false;
+            }
+            if (order == std::strong_ordering::equal && inner.upper_inclusive &&
+                !outer.upper_inclusive) {
+                return false;
+            }
         }
-        const auto order{core::compare(outer.upper, inner.upper)};
-        if (order == std::strong_ordering::less) {
-            return false;
-        }
-        if (order == std::strong_ordering::equal && inner.upper_inclusive &&
-            !outer.upper_inclusive) {
-            return false;
-        }
+    } else if (outer.has_upper) {
+        return false;
     }
     return true;
 }
@@ -526,17 +506,6 @@ to_interval(const std::vector<core::version_comparator> &group)
         }
     }
     return true;
-}
-
-/// Contract service ids use the `namespace:name` form; the `refrain` namespace
-/// is reserved for the host and first-party contracts generated from RIDL.
-[[nodiscard]] auto is_custom_contract_service(std::string_view service)
-    -> bool {
-    const auto colon{service.find(':')};
-    if (colon == std::string_view::npos || colon == 0) {
-        return false;
-    }
-    return service.substr(0, colon) != "refrain";
 }
 
 // ---------------------------------------------------------------------------
@@ -2825,6 +2794,13 @@ auto host::stage_composition_locked(const composition &next,
         }
     }
 
+    // The contract check needs the complete staged view: publish the retiring
+    // set first, so a reloaded declaration owner is replaced in the effective
+    // mod set instead of appearing twice, and an uninstalled owner is absent.
+    staged_retire_mods_ = std::move(retiring);
+    staged_retire_reasons_ = std::move(retire_reasons);
+    staged_drain_timeout_ = options.drain_timeout;
+
     if (auto contracts{verify_contract_composition()}; !contracts) {
         const auto failure{std::move(contracts.error())};
         abort_staged_internals();
@@ -2837,9 +2813,6 @@ auto host::stage_composition_locked(const composition &next,
         return std::unexpected{failure};
     }
 
-    staged_retire_mods_ = std::move(retiring);
-    staged_retire_reasons_ = std::move(retire_reasons);
-    staged_drain_timeout_ = options.drain_timeout;
     staged_next_composition_ = next;
     staging_ = false;
 
@@ -3269,11 +3242,12 @@ auto host::check_contract_provider(const contract_record &record,
         return std::unexpected{fail(
             error_code::version_mismatch,
             fmt::format(
-                "mod '{}' registers a provider for custom contract '{}' "
-                "version {}: the vtable declares struct_size {} but the "
-                "contract descriptor expects {}",
-                current_mod_, definition.service, definition.version.text(),
-                header.struct_size, definition.vtable_size))};
+                "mod '{}' registers a provider for custom contract '{}': the "
+                "vtable declares version {}.{}.{} with struct_size {} but the "
+                "contract descriptor declares version {} with struct_size {}",
+                current_mod_, definition.service, header.abi_major,
+                header.abi_minor, header.abi_patch, header.struct_size,
+                definition.version.text(), definition.vtable_size))};
     }
     const auto expected_major{definition.version.major};
     const auto expected_minor{definition.version.minor};
@@ -3285,11 +3259,12 @@ auto host::check_contract_provider(const contract_record &record,
             fail(error_code::version_mismatch,
                  fmt::format(
                      "mod '{}' registers a provider for custom contract '{}': "
-                     "the vtable ABI header is {}.{}.{} but the contract "
-                     "descriptor declares version {}",
+                     "the vtable declares version {}.{}.{} with struct_size {} "
+                     "but the contract descriptor declares version {} with "
+                     "struct_size {}",
                      current_mod_, definition.service, header.abi_major,
-                     header.abi_minor, header.abi_patch,
-                     definition.version.text()))};
+                     header.abi_minor, header.abi_patch, header.struct_size,
+                     definition.version.text(), definition.vtable_size))};
     }
     return status_ok();
 }
@@ -3379,18 +3354,70 @@ auto host::verify_contract_composition() const -> status {
                                      "compatibility declaration",
                                      requirement.service))};
             }
-            if (!range_within(*required, *compatible)) {
+            if (!core::satisfies(definition.version, *required) ||
+                !range_within(*required, *compatible)) {
                 return std::unexpected{fail(
                     error_code::version_mismatch,
                     fmt::format("mod '{}' requires custom contract '{}' range "
                                 "'{}' but mod '{}' declares contract version "
-                                "{} with compatible range '{}'; require a "
-                                "range inside the declared band",
+                                "{} with compatible range '{}'; the declared "
+                                "version must satisfy the required range and "
+                                "the range must lie inside the declared band",
                                 mod->id, requirement.service,
                                 requirement.version, owner.id,
                                 definition.version.text(),
                                 definition.compatible))};
             }
+        }
+    }
+
+    // An active provider table must still match the declaration that is about
+    // to be published. A hot epoch can reload the declaring mod without
+    // touching the trusted provider that serves the service, so the table
+    // registered against the previous descriptor is re-checked here.
+    const auto active_view{
+        [this](std::string_view service,
+               std::string_view instance) -> std::optional<provider_info> {
+            if (staging_) {
+                return services_.staged_active_provider(service, instance);
+            }
+            return services_.active_provider(service, instance);
+        }};
+    for (const auto *mod : effective) {
+        for (const auto &slot : mod->provided_slots) {
+            const auto declared_it{declared.find(slot.service)};
+            if (declared_it == declared.end()) {
+                continue;
+            }
+            const auto active{active_view(slot.service, slot.instance)};
+            if (!active.has_value() || active->id != mod->id) {
+                continue;
+            }
+            const auto *api{
+                static_cast<const provider_api *>(active->instance)};
+            if (api == nullptr || api->vtable == nullptr) {
+                continue;
+            }
+            const auto &definition{*declared_it->second.definition};
+            vtable_header header{};
+            std::memcpy(&header, api->vtable, sizeof(header));
+            if (header.struct_size == definition.vtable_size &&
+                header.abi_major == definition.version.major &&
+                header.abi_minor == definition.version.minor &&
+                header.abi_patch == definition.version.patch) {
+                continue;
+            }
+            return std::unexpected{fail(
+                error_code::version_mismatch,
+                fmt::format("mod '{}' has an active provider table for custom "
+                            "contract '{}' that does not match the published "
+                            "declaration: the table declares version {}.{}.{} "
+                            "with struct_size {} but the contract descriptor "
+                            "declares version {} with struct_size {}",
+                            mod->id, slot.service, header.abi_major,
+                            header.abi_minor, header.abi_patch,
+                            header.struct_size, definition.version.text(),
+                            definition.vtable_size))};
         }
     }
     return status_ok();
@@ -3492,7 +3519,7 @@ auto host::register_provider(std::string_view service,
     // A custom service id may only be provided against the contract a loaded
     // mod declares: the declaring owner (or a mod the owner lists as trusted)
     // registers a provider table whose vtable header matches the descriptor.
-    if (is_custom_contract_service(service)) {
+    if (is_custom_service_id(service)) {
         const auto *record{find_contract_definition(service)};
         if (record == nullptr) {
             return std::unexpected{fail(

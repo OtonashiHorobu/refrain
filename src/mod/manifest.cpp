@@ -359,17 +359,6 @@ constexpr std::uint32_t k_min_contract_vtable_size{16};
 /// Upper bound keeps a corrupt descriptor from claiming an absurd size.
 constexpr std::uint32_t k_max_contract_vtable_size{1U << 20U};
 
-/// Custom contract service ids use a namespace the host does not own: service
-/// ids are `namespace:name` and `refrain` is reserved for host and first-party
-/// contracts generated from RIDL.
-[[nodiscard]] auto is_custom_service_id(std::string_view id) noexcept -> bool {
-    if (!is_valid_service_id(id)) {
-        return false;
-    }
-    const auto colon{id.find(':')};
-    return id.substr(0, colon) != "refrain";
-}
-
 /// A release SemVer triple with a non-zero major: the vtable ABI header can
 /// only carry major/minor/patch, so prerelease/build metadata is meaningless
 /// here.

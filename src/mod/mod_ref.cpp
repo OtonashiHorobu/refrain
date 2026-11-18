@@ -175,4 +175,11 @@ auto is_valid_service_id(std::string_view id) noexcept -> bool {
            std::all_of(name_part.begin(), name_part.end(), is_name_char);
 }
 
+auto is_custom_service_id(std::string_view id) noexcept -> bool {
+    if (!is_valid_service_id(id)) {
+        return false;
+    }
+    return id.substr(0, id.find(':')) != "refrain";
+}
+
 } // namespace refrain::mod

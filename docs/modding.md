@@ -433,7 +433,9 @@ A provider whose vtable header disagrees with the descriptor fails with
 `version_mismatch` naming the declared version, the header version and the two
 sizes. When the provider is not the declaring mod, the declaration owner must
 be loaded first; list it in the provider's `[requires]` so the load order
-guarantees it. Reserved host ids cannot be shadowed by a custom declaration: a
+guarantees it. A hot epoch re-checks every still-active custom provider table
+against the declaration it republishes, so reloading a declaration cannot leave
+an older trusted table serving the new contract. Reserved host ids cannot be shadowed by a custom declaration: a
 `[contracts]` entry in the `refrain` namespace is rejected when the manifest is
 parsed.
 
@@ -447,11 +449,18 @@ re-queries after a `stale` result. A replaced or unloaded provider reports
 `stale` for cached handles and `not_found` for new queries.
 
 Version conformance happens before activation. After assembling the whole
-composition the host compares every consumer's required range with the
-declaring mod's `compatible` band and fails with `version_mismatch` naming both
-mods and both versions. Two mods declaring the same service id fail at load,
-naming both mods; a differing ABI is a `version_mismatch` and an identical
-declaration is an `already_exists` conflict.
+composition the host requires the declared contract version to satisfy every
+consumer's required range, requires that range to lie inside the declaring
+mod's `compatible` band, and fails with `version_mismatch` naming both mods and
+both versions. Two mods declaring the same service id fail at load, naming both
+mods; a differing ABI is a `version_mismatch` and an identical declaration is an
+`already_exists` conflict.
+
+The requirement is checked when the composition is assembled, not on every
+query. Any mod that knows a custom service id can call `query_service` without
+declaring `[contract_requires]`, so the manifest declaration is a composition
+guarantee rather than a query-time authorization check; a deployment that needs
+that isolation must restrict the packages it installs.
 
 `refrain-tools mods check --mods <dir>` prints every descriptor it parsed
 (`contracts: example:shop@1.0.0 vtable 32 compatible ...`), so a malformed
