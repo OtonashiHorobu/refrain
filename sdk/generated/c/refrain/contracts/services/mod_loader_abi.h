@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 0596e2c96392a578
+// Schema hash: a4cbf5b67e2cecb5
 
 #ifndef REFRAIN_GENERATED_C_REFRAIN_CONTRACTS_SERVICES_MOD_LOADER_ABI_H
 #define REFRAIN_GENERATED_C_REFRAIN_CONTRACTS_SERVICES_MOD_LOADER_ABI_H
@@ -71,7 +71,11 @@ struct refrain_services_mod_loader_mod_loader_capabilities {
     // The loader can load new instances while the host is running.
     uint8_t supports_hot_install;
     uint8_t reserved_1[1];
-}; // refrain_services_mod_loader_mod_loader_capabilities size = 32
+    // Mod package that provides this loader; empty for a loader the host
+    // owns. A package-provided loader must name the mod that registered it,
+    // and the host treats a later change as declared-capability drift.
+    refrain_str provider;
+}; // refrain_services_mod_loader_mod_loader_capabilities size = 48
 #define REFRAIN_SERVICES_MOD_LOADER_MOD_LOADER_CAPABILITIES_SIZE ((uint32_t)sizeof(refrain_services_mod_loader_mod_loader_capabilities))
 
 // Manifest subset the host hands to a loader. Strings are borrowed for the
@@ -113,7 +117,7 @@ struct refrain_services_mod_loader_mod_load_request {
 
 #define REFRAIN_SERVICES_MOD_LOADER_SERVICE_ID "refrain:mod.loader"
 #define REFRAIN_SERVICES_MOD_LOADER_ABI_MAJOR 1u
-#define REFRAIN_SERVICES_MOD_LOADER_ABI_MINOR 1u
+#define REFRAIN_SERVICES_MOD_LOADER_ABI_MINOR 2u
 #define REFRAIN_SERVICES_MOD_LOADER_ABI_PATCH 0u
 #define REFRAIN_SERVICES_MOD_LOADER_SIDE REFRAIN_SIDE_SERVER
 #define REFRAIN_SERVICES_MOD_LOADER_THREAD REFRAIN_THREAD_MAIN

@@ -9,6 +9,8 @@
 
 #include <boost/ut.hpp>
 
+#include <fmt/format.h>
+
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -771,6 +773,179 @@ list = []
         expect(text.find("[instanced:rwf] (default)") != std::string::npos);
         expect(text.find("[instanced:memory] (default)") == std::string::npos);
         expect(text.find("mods_dir: mods, extra-mods") != std::string::npos);
+    };
+};
+
+const suite gamepack_loader_tests = [] {
+    "gamepack/loader declarations parse and sort by loader id"_test = [] {
+        auto text{std::string{valid_manifest}};
+        text += "\n[loaders]\n";
+        text += "\"com.example.beta\" = \"refrain.loader.beta@^1.0.0\"\n";
+        text += "\"com.example.alpha\" = "
+                "\"refrain.loader.alpha@>=1.0.0 <2.0.0\"\n";
+        const auto spec{parse_spec(text)};
+        expect(static_cast<bool>(spec));
+        if (!spec) {
+            return;
+        }
+        expect(spec->loaders.size() == 2U);
+        if (spec->loaders.size() != 2U) {
+            return;
+        }
+        expect(spec->loaders[0].id == "com.example.alpha");
+        expect(spec->loaders[0].provider.id == "refrain.loader.alpha");
+        expect(spec->loaders[0].provider.range == ">=1.0.0 <2.0.0");
+        expect(spec->loaders[1].id == "com.example.beta");
+        const auto *found{spec->find_loader("com.example.beta")};
+        expect(found != nullptr);
+        if (found != nullptr) {
+            expect(found->provider.text() == "refrain.loader.beta@^1.0.0");
+        }
+        expect(spec->find_loader("com.example.missing") == nullptr);
+    };
+
+    "gamepack/host-owned loader ids cannot be declared by a gamepack"_test =
+        [] {
+            for (const auto *id :
+                 {"builtin", "native", "wasm", "lua", "bukkit"}) {
+                auto text{std::string{valid_manifest}};
+                text += fmt::format("\n[loaders]\n\"{}\" = "
+                                    "\"refrain.loader.demo@^1.0.0\"\n",
+                                    id);
+                const auto spec{parse_spec(text)};
+                expect(!spec) << id;
+                if (!spec) {
+                    expect(spec.error().code ==
+                           refrain::error_code::permission_denied)
+                        << id;
+                    expect(spec.error().message.find(id) != std::string::npos)
+                        << id;
+                    expect(spec.error().message.find("reserved") !=
+                           std::string::npos)
+                        << id;
+                }
+            }
+            // The first-party namespace is reserved as well.
+            auto text{std::string{valid_manifest}};
+            text += "\n[loaders]\n\"refrain.custom\" = "
+                    "\"refrain.loader.demo@^1.0.0\"\n";
+            const auto spec{parse_spec(text)};
+            expect(!spec);
+            if (!spec) {
+                expect(spec.error().code ==
+                       refrain::error_code::permission_denied);
+            }
+        };
+
+    "gamepack/malformed loader declarations are rejected"_test = [] {
+        // Not a table.
+        auto not_table{std::string{R"(loaders = "x"
+
+[gamepack]
+id = "refrain.test.loaders"
+version = "1.0.0"
+side = "server"
+abi = "1"
+auto_scan = false
+
+[mods]
+list = ["refrain.content.vanilla@1.0.0"]
+)"}};
+        const auto table_spec{parse_spec(not_table)};
+        expect(!table_spec);
+        if (!table_spec) {
+            expect(table_spec.error().code == refrain::error_code::parse_error);
+        }
+        // Invalid and unqualified loader ids.
+        for (const auto *id : {"Bad_ID", "example"}) {
+            auto text{std::string{valid_manifest}};
+            text += fmt::format("\n[loaders]\n\"{}\" = "
+                                "\"refrain.loader.demo@^1.0.0\"\n",
+                                id);
+            const auto spec{parse_spec(text)};
+            expect(!spec) << id;
+            if (!spec) {
+                expect(spec.error().code ==
+                       refrain::error_code::invalid_argument)
+                    << id;
+            }
+        }
+        // A value that is not a mod requirement string.
+        for (const auto *value : {"\"refrain.loader.demo\"", "\"\""}) {
+            auto text{std::string{valid_manifest}};
+            text += fmt::format("\n[loaders]\n\"com.example.loader\" = "
+                                "{}\n",
+                                value);
+            const auto spec{parse_spec(text)};
+            expect(!spec) << value;
+            if (!spec) {
+                expect(spec.error().code ==
+                           refrain::error_code::invalid_argument ||
+                       spec.error().code == refrain::error_code::parse_error);
+            }
+        }
+    };
+
+    "gamepack/the provider table cannot bind the loader service"_test = [] {
+        auto text{std::string{R"([gamepack]
+id = "refrain.test.loaders"
+version = "1.0.0"
+side = "server"
+abi = "1"
+auto_scan = false
+
+[mods]
+list = ["refrain.content.vanilla@1.0.0"]
+
+[providers]
+mod_loader = "refrain.content.vanilla@^1.0.0"
+)"}};
+        const auto spec{parse_spec(text)};
+        expect(!spec);
+        if (!spec) {
+            expect(spec.error().code == refrain::error_code::invalid_argument);
+            expect(spec.error().message.find("[loaders]") != std::string::npos);
+        }
+    };
+
+    "gamepack/preview reports a declared loader provider"_test = [] {
+        auto text{std::string{valid_manifest}};
+        text += "\n[loaders]\n";
+        text += "\"com.example.loader\" = "
+                "\"refrain.content.vanilla@^1.0.0\"\n";
+        const auto plan{resolve_spec(text)};
+        expect(static_cast<bool>(plan));
+        if (!plan) {
+            return;
+        }
+        expect(plan->loaders.size() == 1U);
+        if (!plan->loaders.empty()) {
+            expect(plan->loaders.front().id == "com.example.loader");
+            expect(plan->loaders.front().provider ==
+                   "refrain.content.vanilla@1.0.0");
+            expect(plan->loader("com.example.loader") != nullptr);
+        }
+        const auto formatted{plan->format()};
+        expect(formatted.find("loaders: 1") != std::string::npos);
+        expect(formatted.find("com.example.loader -> "
+                              "refrain.content.vanilla@1.0.0") !=
+               std::string::npos);
+    };
+
+    "gamepack/a declared loader provider must be in the mod list"_test = [] {
+        auto text{std::string{valid_manifest}};
+        text += "\n[loaders]\n";
+        text += "\"com.example.loader\" = "
+                "\"refrain.loader.absent@^1.0.0\"\n";
+        const auto plan{resolve_spec(text)};
+        expect(!plan);
+        if (!plan) {
+            expect(plan.error().code == refrain::error_code::not_found);
+            expect(plan.error().message.find("com.example.loader") !=
+                   std::string::npos);
+            expect(plan.error().message.find("refrain.loader.absent") !=
+                   std::string::npos);
+        }
     };
 };
 

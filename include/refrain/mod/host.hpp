@@ -53,12 +53,21 @@ namespace kernel = refrain::kernel;
 //   1. freeze the static mod registry (deferred registration errors abort) and
 //      register the host-owned `builtin` and `native` provider instances of
 //      the instanced `refrain:mod.loader` service;
-//   2. for every mod in the gamepack load order, read its `manifest.toml` from
-//      the built-in RFSI image or the on-disk package, parse it, and enforce
-//      the same gates as before: manifest present, id/version match the
-//      gamepack pin, ABI == runtime ABI, declared side compatible with the
-//      host, host runtime requirements, and no sealed-service claim;
-//   3. resolve the manifest's effective loader id to its active
+//   2. bootstrap phase: load the mods the gamepack declares as
+//      `refrain:mod.loader` providers (`composition.loaders`) together with
+//      their transitive hard dependencies, in plan load order. A
+//      loader-providing mod runs through a host-owned loader (`builtin` or
+//      `native`) only, and its factory registers the loader instance through
+//      `register_provider("refrain:mod.loader", <loader id>, api)`. A
+//      declared loader that no mod registered fails the load naming the
+//      provider mod and the active loader ids;
+//   3. for every other mod in the gamepack load order, read its
+//      `manifest.toml` from the built-in RFSI image or the installed package,
+//      parse it, and enforce the same gates as before: manifest present,
+//      id/version match the gamepack pin, ABI == runtime ABI, declared side
+//      compatible with the host, host runtime requirements, and no
+//      sealed-service claim;
+//   4. resolve the manifest's effective loader id to its active
 //      `refrain:mod.loader` provider instance, validate the loader's declared
 //      capabilities, call the loader's `validate`, then its `load`. The host
 //      has no execution branch of its own: the builtin loader calls the static
@@ -69,11 +78,15 @@ namespace kernel = refrain::kernel;
 //      code inactive (fail-closed composition: only planned providers may
 //      claim a service). A loader id with no active provider fails the load
 //      before any mod code runs, naming the id and the active loaders;
-//   4. fail closed when a selected provider did not become active.
+//   5. fail closed when a selected provider did not become active.
 //
 // The loader's declared unload semantics (`clean`/`retire`/`restart_required`)
 // and sandbox flag are recorded on every `loaded_mod` for the lifecycle layer.
-// A sandboxed loader cannot register providers on behalf of its guest. A failed
+// A sandboxed loader cannot register providers on behalf of its guest, and a
+// mod loaded through a sandboxed loader can never register a loader instance.
+// A loader-providing mod is always restart-required: the loader service and
+// the instances other mods are dispatched through cannot be replaced while the
+// process runs, so the hot lifecycle refuses to unload or reload it. A failed
 // initial load clears everything it assembled and a later `load()` returns
 // `unsupported` (recreate the host; no partial activation is exposed). After a
 // successful load the composition is changed through the hot lifecycle
@@ -166,10 +179,10 @@ struct loaded_mod {
     std::vector<provided_slot> provided_slots{};
 };
 
-/// One loader the host bootstrap registered on the instanced
-/// `refrain:mod.loader` service. The recorded capabilities are the contract
-/// the host dispatches every mod through; `unload` is the removal guarantee
-/// the lifecycle layer honours for the mods this loader owns.
+/// One loader registered on the instanced `refrain:mod.loader` service. The
+/// recorded capabilities are the contract the host dispatches every mod
+/// through; `unload` is the removal guarantee the lifecycle layer honours for
+/// the mods this loader owns.
 struct registered_loader {
     std::string id{};
     std::string version{};
@@ -178,6 +191,11 @@ struct registered_loader {
     mod_unload_semantics unload{mod_unload_semantics::restart_required};
     bool sandboxed{false};
     bool supports_hot_install{false};
+    /// Mod package that registered the loader (empty for a host-owned loader).
+    std::string provider{};
+    /// True when the loader was registered before `load()` by the host
+    /// bootstrap instead of by a planned loader-providing mod.
+    bool host_owned{true};
 };
 
 class host;
@@ -221,22 +239,28 @@ class host {
     ///  * `already_exists` when the host already loaded successfully, or when
     ///    a loader id is registered twice;
     ///  * `parse_error` for a corrupt image or malformed manifest;
-    ///  * `not_found` when a planned mod has no manifest in the image, the
-    ///    plan's selected provider did not become active, or the manifest names
-    ///    a third-party loader the host has no active provider for;
+    ///  * `not_found` when a planned mod has no manifest in the image, a
+    ///    declared loader provider did not register the loader it was selected
+    ///    for, the plan's selected provider did not become active, or the
+    ///    manifest names a third-party loader the host has no active provider
+    ///    for;
     ///  * `unsupported` when the manifest names a first-party loader that is
-    ///    not built into this host (`wasm`, `lua`, ...), or for a mod the plan
-    ///    selected as provider that declares `[provides]` without a static
-    ///    factory;
+    ///    not built into this host (`wasm`, `lua`, ...), when a
+    ///    loader-providing mod would itself run through a loader other than the
+    ///    host-owned `builtin`/`native`, or for a mod the plan selected as
+    ///    provider that declares `[provides]` without a static factory;
     ///  * `version_mismatch` for version/ABI/side drift between the gamepack
     ///    pin, the manifest and the registered static code, for a loader whose
-    ///    declared capabilities drift from its registration, or when a provider
-    ///    vtable's ABI header disagrees with `provider_api::abi_major`;
+    ///    declared capabilities drift from its registration, for a
+    ///    package-provided loader that names a different provider mod than the
+    ///    one that registered it, or when a provider vtable's ABI header
+    ///    disagrees with `provider_api::abi_major`;
     ///  * `permission_denied` from a factory that registers a service its
     ///    manifest does not provide or the plan did not select it for, from a
-    ///    sandboxed loader trying to register a provider, or from a provider
-    ///    of a custom contract that no loaded mod declares or that the
-    ///    declaration owner does not trust;
+    ///    sandboxed loader trying to register a provider, from a mod that tries
+    ///    to register a loader it is not declared for, or from a provider of a
+    ///    custom contract that no loaded mod declares or that the declaration
+    ///    owner does not trust;
     ///  * `version_mismatch` when a custom contract provider's vtable header
     ///    disagrees with the declared contract version or vtable size, when a
     ///    consumer's required range falls outside the declared compatibility
@@ -437,11 +461,17 @@ class host {
     /// way at the start of `load()`; tests and embedders use the same call to
     /// install a fake loader.
     ///
+    /// A loader-providing mod does not use this call: its factory registers
+    /// the instance through `register_provider("refrain:mod.loader", <id>,
+    /// api)`, which the host gates on the gamepack `[loaders]` declaration,
+    /// the loading mod's package source and the loader that executes it.
+    ///
     /// The provider's `capabilities()` is queried immediately and must report
     /// `loader_id` itself, the contract ABI major the host was built against, a
     /// known unload semantics and a plausible capability struct; the recorded
     /// values are re-checked before every dispatch so a loader cannot change
-    /// its contract at runtime. `version` defaults to `1.0.0`.
+    /// its contract at runtime. `version` defaults to `1.0.0`. A bootstrap
+    /// loader is host-owned, so its capabilities must leave `provider` empty.
     auto register_mod_loader(std::string_view loader_id,
                              const provider_api &api,
                              std::string_view version = {}) -> status;
@@ -610,6 +640,26 @@ class host {
     /// host itself owns, so they ship with the host instead of being a mod.
     auto register_bootstrap_loaders() -> status;
 
+    /// Register one loader instance on the loader service and record its
+    /// contract. `provider` is the mod package that registered the instance
+    /// (empty for a host-owned loader); the contract capabilities must agree
+    /// with it. Shared by the host bootstrap and the package-provided
+    /// registration path, so both are validated and recorded identically.
+    /// `out_serial` receives the registry candidate serial when non-null.
+    auto add_loader_instance(std::string_view loader_id,
+                             const provider_api &api, std::string_view version,
+                             std::string_view provider, bool host_owned,
+                             std::uint64_t *out_serial = nullptr) -> status;
+
+    /// Package-provided loader registration: called from `register_provider()`
+    /// when the currently loading mod registers an instance of the loader
+    /// service. Enforces the bootstrap-only loader ids, the gamepack
+    /// `[loaders]` declaration, the manifest `[provides]` claim, the
+    /// first-party loader of the providing mod and the install source.
+    auto register_mod_loader_from_mod(std::string_view loader_id,
+                                      const provider_api &api,
+                                      std::string_view version) -> status;
+
     /// Active `refrain:mod.loader` provider for `loader_id` plus its recorded
     /// bootstrap registration.
     struct loader_binding {
@@ -703,6 +753,25 @@ class host {
     verify_plan_activation(const refrain::mod::composition &plan,
                            bool staged = false) const -> status;
 
+    /// Fail-closed check that every loader the plan declares was registered by
+    /// the declared provider mod during the bootstrap phase. Fails with
+    /// `not_found` naming the provider mod and the active loader ids, or with
+    /// `version_mismatch` when a loader was registered by another package.
+    [[nodiscard]] auto
+    verify_declared_loaders(const refrain::mod::composition &plan) const
+        -> status;
+
+    /// Mod ids the bootstrap phase loads: every declared loader provider plus
+    /// its transitive hard-dependency closure. Returned as a set for membership
+    /// checks; callers walk `plan.load_order` to keep the load order.
+    [[nodiscard]] auto
+    bootstrap_mod_ids(const refrain::mod::composition &plan) const
+        -> result<std::set<std::string>>;
+
+    /// `a, b` of every registered loader id, in registration order; `none`
+    /// when empty.
+    [[nodiscard]] auto registered_loader_ids() const -> std::string;
+
     /// `stage_composition()` body; the caller holds `lifecycle_mutex_`.
     [[nodiscard]] auto stage_composition_locked(
         const refrain::mod::composition &next, const package_resolver &resolve,
@@ -760,6 +829,10 @@ class host {
     /// Manifest and candidate of the mod being dispatched, borrowed for the
     /// duration of one `load_one()` call.
     const mod_manifest *current_manifest_{nullptr};
+    /// Composition being loaded, borrowed for the duration of `load()`. The
+    /// package-provided loader registration path reads the declared loader plan
+    /// from it before `plan_` is published.
+    const composition *current_plan_{nullptr};
     /// Custom contract definitions of the mod whose factory is running, copied
     /// so `find_contract_definition()` can return a stable address while the
     /// manifest is being dispatched.

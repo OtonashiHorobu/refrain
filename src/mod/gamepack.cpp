@@ -5,6 +5,7 @@
 #include <refrain/mod/gamepack.hpp>
 
 #include <refrain/contracts/abi.h>
+#include <refrain/contracts/services/mod_loader.hpp>
 #include <refrain/core/config.hpp>
 #include <refrain/core/semver.hpp>
 
@@ -353,8 +354,8 @@ constexpr std::size_t k_max_mod_count{4096};
 }
 
 [[nodiscard]] auto validate_root_keys(const config::document &doc) -> status {
-    constexpr std::array<std::string_view, 5> allowed{
-        "gamepack", "meta", "mods", "policy", "providers"};
+    constexpr std::array<std::string_view, 6> allowed{
+        "gamepack", "meta", "mods", "policy", "providers", "loaders"};
     for (const auto &key : doc.keys("")) {
         const auto known = std::any_of(
             allowed.begin(), allowed.end(),
@@ -680,6 +681,18 @@ constexpr std::size_t k_max_mod_count{4096};
                                  "'example:shop')",
                                  service))};
         }
+        // The loader service is not selected through the provider table: a
+        // package-provided loader is declared by loader id in [loaders] and
+        // the host-owned instances are registered by the host bootstrap.
+        if (matches_slot(refrain::services::mod_loader::service_id, service)) {
+            return std::unexpected{fail(
+                error_code::invalid_argument,
+                fmt::format("gamepack: [providers] cannot bind the mod loader "
+                            "service (key '{}'); declare a package-provided "
+                            "loader in [loaders] as loader id = "
+                            "\"mod@range\"",
+                            service))};
+        }
         provider_binding binding{};
         binding.service = service;
         if (auto parsed{parse_provider_value(doc, service, binding)}; !parsed) {
@@ -690,6 +703,74 @@ constexpr std::size_t k_max_mod_count{4096};
     std::sort(spec.providers.begin(), spec.providers.end(),
               [](const provider_binding &lhs, const provider_binding &rhs) {
                   return lhs.service < rhs.service;
+              });
+    return status_ok();
+}
+
+/// Parse the `[loaders]` table: literal loader id keys mapped to the
+/// `id@range` of the mod that provides that loader instance.
+///
+/// Loader ids contain dots, so every key is a quoted literal key such as
+/// `"com.example.loader" = "com.example.loader.mod@^1.0.0"`. The host-owned ids
+/// are rejected here: a package can never provide `builtin`, `native`, `wasm`,
+/// `lua`, `bukkit` or a `refrain.` id.
+[[nodiscard]] auto parse_loader_section(const config::document &doc,
+                                        gamepack_spec &spec) -> status {
+    const auto kind{doc.kind_at(std::array<std::string_view, 1>{"loaders"})};
+    if (kind == config::value_kind::missing) {
+        return status_ok();
+    }
+    if (kind != config::value_kind::table) {
+        return std::unexpected{fail(error_code::parse_error,
+                                    "gamepack: [loaders] must be a table of "
+                                    "quoted loader id = \"mod@range\" pairs")};
+    }
+
+    spec.loaders.clear();
+    for (const auto &loader_id : doc.keys("loaders")) {
+        if (auto checked{check_mod_loader_id(loader_id)}; !checked) {
+            return std::unexpected{
+                fail(checked.error().code,
+                     fmt::format("gamepack: [loaders] '{}': {}", loader_id,
+                                 checked.error().message))};
+        }
+        // The loader id is a TOML literal key inside the table, so it is never
+        // split on dots; an unquoted key arrives here as its first path
+        // segment, for which there is no string value.
+        const std::array<std::string_view, 2> value_path{"loaders", loader_id};
+        auto text{doc.get_string_at(value_path)};
+        if (!text) {
+            return std::unexpected{
+                fail(error_code::parse_error,
+                     fmt::format("gamepack: [loaders] entry '{}' must map the "
+                                 "quoted loader id to a mod requirement string "
+                                 "'<mod-id>@<range>'",
+                                 loader_id))};
+        }
+        auto requirement{parse_mod_requirement(*text)};
+        if (!requirement) {
+            return std::unexpected{
+                fail(error_code::invalid_argument,
+                     fmt::format("gamepack: loaders.\"{}\": {}", loader_id,
+                                 requirement.error().message))};
+        }
+        if (std::any_of(spec.loaders.begin(), spec.loaders.end(),
+                        [&loader_id](const loader_provider &existing) {
+                            return existing.id == loader_id;
+                        })) {
+            return std::unexpected{fail(
+                error_code::already_exists,
+                fmt::format("gamepack: loader '{}' is declared more than once",
+                            loader_id))};
+        }
+        spec.loaders.push_back(loader_provider{
+            .id = std::string{loader_id},
+            .provider = std::move(*requirement),
+        });
+    }
+    std::sort(spec.loaders.begin(), spec.loaders.end(),
+              [](const loader_provider &lhs, const loader_provider &rhs) {
+                  return lhs.id < rhs.id;
               });
     return status_ok();
 }
@@ -733,6 +814,15 @@ auto gamepack_spec::find_mod(std::string_view mod_id) const noexcept
     return match == mods.end() ? nullptr : &*match;
 }
 
+auto gamepack_spec::find_loader(std::string_view loader_id) const noexcept
+    -> const loader_provider * {
+    const auto match = std::find_if(loaders.begin(), loaders.end(),
+                                    [loader_id](const loader_provider &entry) {
+                                        return entry.id == loader_id;
+                                    });
+    return match == loaders.end() ? nullptr : &*match;
+}
+
 // ---------------------------------------------------------------------------
 // parse / resolve
 // ---------------------------------------------------------------------------
@@ -770,6 +860,9 @@ auto parse_gamepack(const core::config::document &doc,
     }
     if (auto providers{parse_provider_section(doc, *spec)}; !providers) {
         return std::unexpected{providers.error()};
+    }
+    if (auto loaders{parse_loader_section(doc, *spec)}; !loaders) {
+        return std::unexpected{loaders.error()};
     }
     return spec;
 }

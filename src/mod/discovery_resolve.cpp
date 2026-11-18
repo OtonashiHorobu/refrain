@@ -8,6 +8,7 @@
 
 #include "discovery_internal.hpp"
 
+#include <refrain/contracts/services/mod_loader.hpp>
 #include <refrain/core/semver.hpp>
 #include <refrain/data/checksum.hpp>
 
@@ -108,9 +109,14 @@ using detail::lower_id;
 /// ties follow the gamepack `[mods].list` declaration order for pinned mods and
 /// id order for auto-scanned-only mods. This is the single dependency-graph
 /// implementation (`detect_cycle` was folded into it).
+///
+/// `extra_edges` are additional prerequisite -> dependent pairs from the
+/// composition rules outside the manifest `[requires]` graph (a package that
+/// names a mod-provided loader depends on the loader's provider mod).
 [[nodiscard]] auto topological_order(
     const mod::gamepack_spec &spec, std::span<const discovered_mod *> selected,
-    const std::map<std::string, const discovered_mod *> &selected_by_id)
+    const std::map<std::string, const discovered_mod *> &selected_by_id,
+    std::span<const std::pair<std::string, std::string>> extra_edges = {})
     -> result<std::vector<const discovered_mod *>> {
     std::map<std::string, std::size_t> rank;
     for (std::size_t index{0}; index < spec.mods.size(); ++index) {
@@ -128,6 +134,7 @@ using detail::lower_id;
 
     std::map<std::string, std::size_t> indegree;
     std::map<std::string, std::vector<std::string>> dependents;
+    std::set<std::pair<std::string, std::string>> present_edges;
     for (const auto *mod : selected) {
         indegree.try_emplace(mod->id, 0);
         for (const auto &requirement : mod->required) {
@@ -135,8 +142,20 @@ using detail::lower_id;
                 continue; // a missing dependency is reported before ordering
             }
             dependents[requirement.id].push_back(mod->id);
+            present_edges.emplace(requirement.id, mod->id);
             ++indegree[mod->id];
         }
+    }
+    for (const auto &[prerequisite, dependent] : extra_edges) {
+        if (selected_by_id.find(prerequisite) == selected_by_id.end() ||
+            selected_by_id.find(dependent) == selected_by_id.end()) {
+            continue;
+        }
+        if (!present_edges.emplace(prerequisite, dependent).second) {
+            continue;
+        }
+        dependents[prerequisite].push_back(dependent);
+        ++indegree[dependent];
     }
 
     std::set<std::pair<std::size_t, std::string>> ready;
@@ -169,12 +188,154 @@ using detail::lower_id;
             }
             cycle += mod->id;
         }
-        return std::unexpected{
-            fail(error_code::mod_error,
-                 fmt::format("resolve: dependency cycle detected among: {}",
-                             cycle))};
+        auto message{
+            fmt::format("resolve: dependency cycle detected among: {}", cycle)};
+        if (!extra_edges.empty()) {
+            message +=
+                "; a package that names a mod-provided loader depends on that "
+                "loader's provider mod, so a provider whose dependency graph "
+                "leads back to a package naming its loader cannot be ordered";
+        }
+        return std::unexpected{fail(error_code::mod_error, std::move(message))};
     }
     return order;
+}
+
+/// Resolution of the gamepack `[loaders]` declarations: the loader ids and
+/// provider mods the plan publishes, plus the ordering edges they add to the
+/// dependency graph.
+struct loader_ordering {
+    std::vector<resolved_loader> loaders{};
+    /// prerequisite provider mod id -> dependent mod id
+    std::vector<std::pair<std::string, std::string>> edges{};
+};
+
+/// `a, b` for diagnostics; `none` for an empty list.
+[[nodiscard]] auto join_ids(const std::vector<std::string> &ids)
+    -> std::string {
+    std::string out;
+    for (const auto &id : ids) {
+        if (!out.empty()) {
+            out += ", ";
+        }
+        out += id;
+    }
+    return out.empty() ? std::string{"none"} : out;
+}
+
+/// Resolve every `[loaders]` declaration against the selected mod set and
+/// derive the loader ordering edges. A loader-providing mod must be selected,
+/// satisfy the declared range, declare `refrain:mod.loader` in its
+/// `[provides]` list and run through the host-owned `builtin` or `native`
+/// loader; anything else fails closed before the plan is published.
+///
+/// A manifest-level preview has no manifest data, so the `[provides]` and
+/// entry checks run only on a resolved catalog.
+[[nodiscard]] auto resolve_loaders(
+    const mod::gamepack_spec &spec,
+    const std::map<std::string, const discovered_mod *> &selected_by_id,
+    bool preview) -> result<loader_ordering> {
+    loader_ordering resolution{};
+    std::map<std::string, const discovered_mod *> providers{};
+    std::vector<std::string> declared_ids{};
+    for (const auto &declaration : spec.loaders) {
+        const auto found{selected_by_id.find(declaration.provider.id)};
+        if (found == selected_by_id.end()) {
+            return std::unexpected{
+                fail(error_code::not_found,
+                     fmt::format(
+                         "resolve: gamepack declares loader '{}' provided by "
+                         "'{}' but that mod is not in the resolved set "
+                         "(gamepack.auto_scan = {})",
+                         declaration.id, declaration.provider.text(),
+                         spec.auto_scan ? "true" : "false"))};
+        }
+        const auto *provider{found->second};
+        const auto satisfied{
+            core::satisfies(provider->version, declaration.provider.range)};
+        if (!satisfied || !*satisfied) {
+            return std::unexpected{fail(
+                error_code::version_mismatch,
+                fmt::format("resolve: gamepack declares loader '{}' provided "
+                            "by '{}' but mod '{}' resolves to version '{}'",
+                            declaration.id, declaration.provider.text(),
+                            provider->id, provider->version))};
+        }
+        if (!preview) {
+            if (!declares_service(provider->provides,
+                                  refrain::services::mod_loader::service_id)) {
+                return std::unexpected{fail(
+                    error_code::permission_denied,
+                    fmt::format("resolve: loader '{}' is declared with "
+                                "provider mod '{}' but its manifest [provides] "
+                                "does not declare '{}'",
+                                declaration.id, provider->id,
+                                refrain::services::mod_loader::service_id))};
+            }
+            const auto effective{provider->entry
+                                     ? std::string_view{provider->entry->loader}
+                                     : builtin_loader_id};
+            if (!is_host_loader_id(effective)) {
+                return std::unexpected{fail(
+                    error_code::unsupported,
+                    fmt::format(
+                        "resolve: loader '{}' is provided by mod '{}', which "
+                        "is loaded through loader '{}'; a loader-providing mod "
+                        "must run through the host-owned builtin or native "
+                        "loader, because a sandboxed guest can never become a "
+                        "loader",
+                        declaration.id, provider->id, effective))};
+            }
+        }
+        providers.emplace(declaration.id, provider);
+        declared_ids.push_back(declaration.id);
+        resolution.loaders.push_back(resolved_loader{
+            .id = declaration.id,
+            .provider = fmt::format("{}@{}", provider->id, provider->version)});
+    }
+    std::sort(resolution.loaders.begin(), resolution.loaders.end(),
+              [](const resolved_loader &lhs, const resolved_loader &rhs) {
+                  return lhs.id < rhs.id;
+              });
+
+    // A package that names a declared package-provided loader loads only after
+    // that loader's provider mod. A gamepack that declares loaders must
+    // declare every package-provided loader a selected package names, so an
+    // undeclared namespaced id fails here instead of at the first dispatch.
+    for (const auto &[id, mod] : selected_by_id) {
+        const auto effective{mod->entry ? std::string_view{mod->entry->loader}
+                                        : builtin_loader_id};
+        if (is_first_party_loader_id(effective)) {
+            continue;
+        }
+        const auto provider{providers.find(std::string{effective})};
+        if (provider == providers.end()) {
+            if (spec.loaders.empty()) {
+                continue; // embedder-registered loaders predate the plan table
+            }
+            return std::unexpected{fail(
+                error_code::not_found,
+                fmt::format("resolve: mod '{}' names loader '{}' but the "
+                            "gamepack declares no provider for it; declared "
+                            "loaders: {}",
+                            id, effective, join_ids(declared_ids)))};
+        }
+        if (provider->second->id == mod->id) {
+            return std::unexpected{fail(
+                error_code::mod_error,
+                fmt::format("resolve: mod '{}' provides loader '{}' and also "
+                            "names it as its own loader; a loader-providing "
+                            "mod runs through the host-owned builtin or "
+                            "native loader",
+                            mod->id, effective))};
+        }
+        resolution.edges.emplace_back(provider->second->id, mod->id);
+    }
+    std::sort(resolution.edges.begin(), resolution.edges.end());
+    resolution.edges.erase(
+        std::unique(resolution.edges.begin(), resolution.edges.end()),
+        resolution.edges.end());
+    return resolution;
 }
 
 [[nodiscard]] auto
@@ -461,8 +622,17 @@ resolve_impl(const mod::gamepack_spec &spec,
             }
         }
     }
+    // --- package-provided loaders -----------------------------------------
+    // The gamepack `[loaders]` declarations are the trust selection for
+    // package-provided loader instances. They add ordering edges to the
+    // dependency graph and turn an unregistered namespaced loader reference
+    // into a resolution failure.
+    auto loaders{resolve_loaders(spec, selected_by_id, preview)};
+    if (!loaders) {
+        return std::unexpected{std::move(loaders.error())};
+    }
     auto ordered_by_dependency{
-        topological_order(spec, ordered, selected_by_id)};
+        topological_order(spec, ordered, selected_by_id, loaders->edges)};
     if (!ordered_by_dependency) {
         return std::unexpected{std::move(ordered_by_dependency.error())};
     }
@@ -509,6 +679,7 @@ resolve_impl(const mod::gamepack_spec &spec,
         return std::unexpected{std::move(providers.error())};
     }
     lock.providers = std::move(*providers);
+    lock.loaders = std::move(loaders->loaders);
     return lock;
 }
 

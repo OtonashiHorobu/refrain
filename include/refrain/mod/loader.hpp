@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <refrain/core/error.hpp>
+
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -69,17 +71,33 @@ enum class mod_unload_semantics : std::uint8_t {
 [[nodiscard]] auto is_first_party_loader_id(std::string_view id) noexcept
     -> bool;
 
+/// True for the loader ids a loader-providing mod may itself be executed by:
+/// the host-owned `builtin` and `native` loaders. A loader provider is
+/// host-level code, so it cannot arrive through a sandboxed guest loader
+/// (`wasm`, `lua`) or through another package-provided loader; those would let
+/// guest code become the environment that later guests run in.
+[[nodiscard]] auto is_host_loader_id(std::string_view id) noexcept -> bool;
+
+/// Validate a loader id a mod package wants to provide. Fails closed with
+/// `invalid_argument` for a malformed id and `permission_denied` for a
+/// reserved or first-party id, naming the ids only the host may implement.
+/// The accepted id is namespaced (`com.example.loader`), never one of
+/// `builtin`, `native`, `wasm`, `lua` or `bukkit`.
+[[nodiscard]] auto check_mod_loader_id(std::string_view id) -> status;
+
 /// A loader's self-declared capabilities. `abi_major` is the loader-ABI major
 /// the provider implements and must equal the contract ABI the host was built
 /// against; `unload` is the removal guarantee the host records for the
 /// lifecycle layer; `sandboxed` forbids the loader's guests from registering
-/// providers.
+/// providers; `provider` is the mod package that provides the loader and is
+/// empty for a host-owned loader.
 struct mod_loader_capabilities {
     std::string loader_id{};
     std::uint32_t abi_major{0};
     mod_unload_semantics unload{mod_unload_semantics::restart_required};
     bool sandboxed{false};
     bool supports_hot_install{false};
+    std::string provider{};
 };
 
 /// Detail message a loader provider attaches to its most recent failed

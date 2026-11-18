@@ -2,17 +2,19 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 //
-// `refrain:mod.loader` service contract v1.1.
+// `refrain:mod.loader` service contract v1.2.
 //
 // A loader is the execution environment a mod is loaded through. The host
-// activates one provider instance per loader id it trusts (`builtin`,
-// `native`, ...) and dispatches every manifest that names that loader through
-// `validate` and `load`. A loader provider is host bootstrap code: it is not a
-// mod, it cannot be selected by a gamepack, and a sandboxed loader cannot
-// register providers on behalf of its guest.
+// activates one provider instance per loader id it trusts and dispatches every
+// manifest that names that loader through `validate` and `load`. `builtin`,
+// `native` and the first-party script loaders are registered by the host
+// bootstrap; a trusted package the gamepack declares as a loader provider may
+// add a namespaced instance during the bootstrap phase. A loader provider
+// never runs in a sandbox, and a sandboxed loader cannot register providers on
+// behalf of its guest.
 
 module refrain::services::mod_loader;
-version 1.1.0;
+version 1.2.0;
 
 import refrain::core;
 
@@ -76,6 +78,10 @@ struct mod_loader_capabilities {
     bool sandboxed;
     /// The loader can load new instances while the host is running.
     bool supports_hot_install;
+    /// Mod package that provides this loader; empty for a loader the host
+    /// owns. A package-provided loader must name the mod that registered it,
+    /// and the host treats a later change as declared-capability drift.
+    string provider;
 }
 
 /// Manifest subset the host hands to a loader. Strings are borrowed for the
@@ -108,7 +114,7 @@ struct mod_load_request {
     mod_entry_manifest manifest;
 }
 
-service mod_loader : 1.1.0 {
+service mod_loader : 1.2.0 {
     side = server;
     thread = main;
     composition = instanced;

@@ -830,6 +830,15 @@ auto composition::provider(std::string_view service) const noexcept
     return match == providers.end() ? nullptr : &*match;
 }
 
+auto composition::loader(std::string_view loader_id) const noexcept
+    -> const resolved_loader * {
+    const auto match{std::find_if(loaders.begin(), loaders.end(),
+                                  [loader_id](const resolved_loader &entry) {
+                                      return entry.id == loader_id;
+                                  })};
+    return match == loaders.end() ? nullptr : &*match;
+}
+
 auto composition::find(std::string_view id) const noexcept
     -> const candidate * {
     const auto match{
@@ -897,6 +906,12 @@ auto composition::format() const -> std::string {
             }
             break;
         }
+    }
+
+    out += fmt::format("loaders: {}\n", loaders.size());
+    for (const auto &entry : loaders) {
+        out +=
+            fmt::format("  {} -> {} (bootstrap)\n", entry.id, entry.provider);
     }
 
     if (!spec.mods_dir.empty()) {

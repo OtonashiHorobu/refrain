@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 0596e2c96392a578
+// Schema hash: a4cbf5b67e2cecb5
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
@@ -2808,7 +2808,8 @@ template <> struct custom_traits<::refrain::services::mod_loader::mod_loader_cap
         refrain::reflect::custom_field{"abi_major", &::refrain::services::mod_loader::mod_loader_capabilities::abi_major},
         refrain::reflect::custom_field{"unload", &::refrain::services::mod_loader::mod_loader_capabilities::unload},
         refrain::reflect::custom_field{"sandboxed", &::refrain::services::mod_loader::mod_loader_capabilities::sandboxed},
-        refrain::reflect::custom_field{"supports_hot_install", &::refrain::services::mod_loader::mod_loader_capabilities::supports_hot_install});
+        refrain::reflect::custom_field{"supports_hot_install", &::refrain::services::mod_loader::mod_loader_capabilities::supports_hot_install},
+        refrain::reflect::custom_field{"provider", &::refrain::services::mod_loader::mod_loader_capabilities::provider});
 };
 
 /// Generated RIDL struct 'refrain::services::mod_loader::mod_entry_manifest'.
