@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 22ed9cba76524a0f
+// Schema hash: 0596e2c96392a578
 
 #ifndef REFRAIN_GENERATED_C_REFRAIN_CONTRACTS_SERVICES_PERMISSIONS_ABI_H
 #define REFRAIN_GENERATED_C_REFRAIN_CONTRACTS_SERVICES_PERMISSIONS_ABI_H
@@ -62,9 +62,10 @@ struct refrain_services_permissions_permission_context_entry {
 }; // refrain_services_permissions_permission_context_entry size = 40
 #define REFRAIN_SERVICES_PERMISSIONS_PERMISSION_CONTEXT_ENTRY_SIZE ((uint32_t)sizeof(refrain_services_permissions_permission_context_entry))
 
-// Context a rule may match. The default resolver answers globally, so v1
-// carries the context without matching rules against it; wrapper providers
-// and later rule sets can use it without a contract change.
+// Context a rule may match: the world, the game mode and provider-defined
+// extra entries. The built-in resolver matches its configured context
+// predicates against this value and a wrapper provider may match it too. A
+// consumer that matches context rejects duplicate extra keys.
 struct refrain_services_permissions_permission_context {
     uint32_t struct_size;
     uint8_t reserved_0[4];
@@ -147,8 +148,12 @@ typedef struct refrain_services_permissions_vtable {
     // attributes: #[thread(any)]
     uint64_t (*revision)(void *self);
     // Re-read the provider configuration, publish it and return the new
-    // revision. On failure the current snapshot and revision stay in effect
-    // and the error names the offending file or key.
+    // revision. A provider updates its own snapshot atomically: on failure
+    // its snapshot and revision stay in effect and the error names the
+    // offending file or key. A chain reloads each link in turn, base first;
+    // when a later wrapper fails, the links that already reloaded keep their
+    // new snapshot because a provider has no rollback, and the error names
+    // the failing link.
     // attributes: #[thread(main)] #[can_fail]
     refrain_status (*reload)(void *self, uint64_t *out_value);
 } refrain_services_permissions_vtable; // service refrain:permissions

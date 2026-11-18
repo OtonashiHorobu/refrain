@@ -31,11 +31,20 @@
 //   [groups]
 //   moderators = ["refrain.command.*", "!refrain.permissions.admin"]
 //
+//   [contexts]
+//   creative = { gamemode = "creative" }
+//   nether = { world = "minecraft:the_nether" }
+//
+//   [context_grants]
+//   creative = { "player:<uuid>" = ["!refrain.command.gamemode"] }
+//
 // A group is a node set; a subject joins a group with an `@name` entry in
-// `[grants]`. Groups are single-level in v1: a group list may not reference
-// another group. Unknown tables, unknown keys, invalid nodes, invalid subject
-// keys and unknown groups are configuration errors rather than silently ignored
-// text, so a typo cannot widen an access rule.
+// `[grants]` or in a `[context_grants]` rule set. A join written in a context
+// rule set applies only while that context matches the query. Groups are
+// single-level in v1: a group list may not reference another group. Unknown
+// tables, unknown keys, invalid nodes, invalid subject keys, unknown groups and
+// unknown context references are configuration errors rather than silently
+// ignored text, so a typo cannot widen an access rule.
 //
 // `[ops].players` is the operator source the built-in resolver owns: a player
 // named by canonical uuid or profile name is treated as an operator and holds
@@ -57,9 +66,29 @@
 //      listed in `[ops].players` or a player at or above `[op].min_level`;
 //   5. a grant in `[defaults].nodes` allows;
 //   6. `[defaults].default` decides: `deny`, or `op` for an operator.
-// The constructed context (world, game mode, extra keys) is carried into the
-// query and validated, but v1 matches every rule globally; context rules are a
-// later, additive rule set.
+//
+// Context rules are additive to that order. `[contexts]` declares named
+// predicates over the query context (world, game mode and extra
+// provider-defined keys), and `[context_grants]` attaches rule sets to a
+// subject under one context. Every declared context whose predicate matches the
+// query applies, and its rules join the subject's rule sets in the same
+// deny-wins lattice:
+//   - a deny in any applicable set, global or contextual, denies;
+//   - otherwise a grant in any applicable set allows;
+//   - otherwise the operator, public-default and `[defaults].default` rules
+//     decide as above.
+// A context rule therefore narrows or extends one subject's access for a
+// matching context but cannot override a deny. A context rule may join a global
+// `[groups]` entry with `@name`: the group definitions stay global and
+// single-level, while that membership (and therefore the group's rules) applies
+// only to queries whose context matches the rule's context. When several
+// contexts match they are scanned in name order, and `explain()` reports the
+// first matching deny (or the first matching grant) in that order.
+//
+// A malformed query context (an empty or oversized key or value, more entries
+// than the limit, a reserved key in the extra slice, or a duplicate extra key)
+// is rejected by the resolver instead of being matched: a query the resolver
+// cannot interpret fails closed.
 
 #pragma once
 
@@ -70,6 +99,7 @@
 
 #include <cstdint>
 #include <map>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -122,6 +152,62 @@ struct subject_rules {
     std::vector<std::string> groups{};
 };
 
+/// Longest accepted context key or value in bytes. The cap keeps a query
+/// context cheap to compare and stops a malformed caller from growing a match
+/// walk without bound.
+inline constexpr std::size_t max_context_length = 255;
+
+/// Largest number of extra context entries one query may carry.
+inline constexpr std::size_t max_context_entries = 32;
+
+/// One key/value pair of a query context supplied by the caller, for example
+/// `dimension_type = "overworld"`.
+struct context_value_view {
+    std::string_view key{};
+    std::string_view value{};
+};
+
+/// Context carried by one permission query: the subject's world and game mode
+/// plus provider-defined keys. A query without a context is matched by no
+/// context rule.
+struct context_view {
+    std::string_view world{};
+    std::string_view gamemode{};
+    std::span<const context_value_view> extra{};
+};
+
+/// True when the context is structurally usable: the world, game mode, keys and
+/// values are within `max_context_length`, no extra key is empty, reserved or
+/// duplicated, and the extra slice is within `max_context_entries`. A malformed
+/// context is denied by the provider instead of being matched.
+[[nodiscard]] auto valid_context(const context_view &context) noexcept -> bool;
+
+/// One condition of a named context: the query context must carry `value` for
+/// `key`. `world` and `gamemode` address the dedicated fields of the query
+/// context; every other key addresses an extra entry.
+struct context_condition {
+    std::string key{};
+    std::string value{};
+
+    friend auto operator==(const context_condition &, const context_condition &)
+        -> bool = default;
+};
+
+/// Named context predicate: every condition must match the query context for
+/// the context to apply. Conditions are stored in configuration order.
+struct context_definition {
+    std::vector<context_condition> conditions{};
+};
+
+/// Rules attached to one configured subject under one context, keyed by the
+/// configured subject key (`player:<uuid>`, ...).
+using context_subject_rules = std::map<std::string, subject_rules, std::less<>>;
+
+/// True when every condition of `definition` matches `context`.
+[[nodiscard]] auto context_matches(const context_definition &definition,
+                                   const context_view &context) noexcept
+    -> bool;
+
 /// Fallback answer for a node no rule matched.
 enum class default_answer : std::uint8_t { deny, op };
 
@@ -142,6 +228,12 @@ struct policy {
     std::map<std::string, subject_rules, std::less<>> subjects{};
     /// Keyed by group name.
     std::map<std::string, node_set, std::less<>> groups{};
+    /// Named context predicates (`[contexts]`), keyed by context name.
+    std::map<std::string, context_definition, std::less<>> contexts{};
+    /// Context-qualified rules (`[context_grants]`): context name, then
+    /// configured subject key.
+    std::map<std::string, context_subject_rules, std::less<>>
+        context_subjects{};
 };
 
 /// A query subject without the ABI layout: the service converts the contract
@@ -160,6 +252,14 @@ struct subject_view {
 /// True when `name` is a valid group name (`[a-z0-9][a-z0-9_-]*`, at most 64
 /// bytes).
 [[nodiscard]] auto valid_group_name(std::string_view name) noexcept -> bool;
+
+/// True when `name` is a valid context name (`[a-z0-9][a-z0-9_-]*`, at most 64
+/// bytes), the name a `[context_grants]` entry uses to reference `[contexts]`.
+[[nodiscard]] auto valid_context_name(std::string_view name) noexcept -> bool;
+
+/// True when `key` is a valid context condition key: `world`, `gamemode` or an
+/// extra key (`[a-z0-9][a-z0-9_.-]*`, at most 64 bytes).
+[[nodiscard]] auto valid_context_key(std::string_view key) noexcept -> bool;
 
 /// True when `key` is a configured subject key: `console`, `player:<uuid or
 /// profile name>`, `entity:<uuid>` or `plugin:<mod id>`.
@@ -185,9 +285,12 @@ struct subject_view {
 ///
 /// `node` must be a concrete node; a malformed node is denied (fail closed)
 /// even for the console. `op_level` is the vanilla operator ladder of a player
-/// subject and is ignored for other subject kinds.
+/// subject and is ignored for other subject kinds. `context` is the caller's
+/// query context; an empty context matches no `[contexts]` predicate, so a
+/// policy without context rules answers the same way for every context.
 [[nodiscard]] auto evaluate(const policy &policy, const subject_view &subject,
-                            std::string_view node, std::uint32_t op_level)
+                            std::string_view node, std::uint32_t op_level,
+                            const context_view &context = {})
     -> services::permissions::permission_result;
 
 /// Rule text of one configured rule, with the `!` prefix of a deny.
@@ -207,6 +310,10 @@ enum class decision_source : std::uint8_t {
     group_grant,
     /// A deny in a group the subject joined.
     group_deny,
+    /// A grant in a matching context's rule set.
+    context_grant,
+    /// A deny in a matching context's rule set.
+    context_deny,
     /// A grant in `[op].nodes` for an operator subject.
     op_grant,
     /// A deny in `[op].nodes` for an operator subject.
@@ -224,25 +331,30 @@ enum class decision_source : std::uint8_t {
 };
 
 /// One query answer plus the rule that decided it. `rule` is empty when the
-/// decision came from the console rule or from the configured fallback, and
-/// `group` is set only for a decision taken through a group.
+/// decision came from the console rule or from the configured fallback,
+/// `group` is set only for a decision taken through a group and `context` only
+/// for a decision taken through a matching context.
 struct decision_explanation {
     services::permissions::permission_result result{
         services::permissions::permission_result::denied};
     decision_source source{decision_source::fallback_deny};
     std::string rule{};
     std::string group{};
+    std::string context{};
 };
 
 /// Explain one query against a policy: the same answer `evaluate()` returns,
 /// together with the rule and the rule set that produced it.
 [[nodiscard]] auto explain(const policy &policy, const subject_view &subject,
-                           std::string_view node, std::uint32_t op_level)
+                           std::string_view node, std::uint32_t op_level,
+                           const context_view &context = {})
     -> decision_explanation;
 
 /// One group of the configured policy. `nodes` are the group's rule texts in
 /// configuration order; `members` are the configured subject keys that join the
-/// group, sorted.
+/// group, sorted: the global `[grants]` memberships first, then the
+/// `[context_grants]` memberships sorted by context name and subject key, each
+/// written as `<subject key> (context '<name>')`.
 struct group_listing {
     std::string name{};
     std::vector<std::string> nodes{};

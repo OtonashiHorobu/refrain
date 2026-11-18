@@ -42,9 +42,10 @@ struct permission_context_entry {
     string value;
 }
 
-/// Context a rule may match. The default resolver answers globally, so v1
-/// carries the context without matching rules against it; wrapper providers
-/// and later rule sets can use it without a contract change.
+/// Context a rule may match: the world, the game mode and provider-defined
+/// extra entries. The built-in resolver matches its configured context
+/// predicates against this value and a wrapper provider may match it too. A
+/// consumer that matches context rejects duplicate extra keys.
 struct permission_context {
     /// Level/dimension id, for example `minecraft:overworld`.
     string world;
@@ -131,8 +132,12 @@ service permissions : 1.0.0 {
     fn revision() -> u64;
 
     /// Re-read the provider configuration, publish it and return the new
-    /// revision. On failure the current snapshot and revision stay in effect
-    /// and the error names the offending file or key.
+    /// revision. A provider updates its own snapshot atomically: on failure
+    /// its snapshot and revision stay in effect and the error names the
+    /// offending file or key. A chain reloads each link in turn, base first;
+    /// when a later wrapper fails, the links that already reloaded keep their
+    /// new snapshot because a provider has no rollback, and the error names
+    /// the failing link.
     #[thread(main)] #[can_fail]
     fn reload() -> result<u64, permission_error>;
 }

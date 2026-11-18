@@ -21,6 +21,7 @@
 #pragma once
 
 #include <refrain/core/error.hpp>
+#include <refrain/permissions/policy.hpp>
 
 #include <cstdint>
 #include <functional>
@@ -44,6 +45,21 @@ struct permissions_online_player {
     std::string world{};
     std::string gamemode{};
 };
+
+/// A player profile resolved without a live session: the canonical uuid and the
+/// profile name it belongs to. An offline-mode server derives it from the name
+/// with the same rule the login uses; an online-mode server cannot resolve a
+/// name without the account, so it only has this for a connected player.
+struct permissions_player_profile {
+    std::string uuid{};
+    std::string name{};
+};
+
+/// Resolve the deterministic profile of a player who is not connected. The
+/// composition root builds it from the session provider; an empty function
+/// means the composition has no profile service.
+using session_profile_resolver =
+    std::function<std::optional<permissions_player_profile>(std::string_view)>;
 
 /// Who runs a permission command. The console has no uuid; a player carries
 /// the canonical uuid from the session so the audit record identifies them
@@ -94,10 +110,37 @@ struct permissions_admin_state {
     /// Resolve an online player name (case-insensitive) to its identity.
     std::function<std::optional<permissions_online_player>(std::string_view)>
         find_player{};
+    /// Resolve a player who is not connected to its canonical profile.
+    /// `install_offline_profile_lookup()` fills it only when the server does
+    /// not authenticate accounts and the composition has a session provider, so
+    /// an offline-mode server derives the same deterministic profile the login
+    /// would create. Null leaves an offline subject addressable only by an
+    /// explicit `player:<uuid>` key.
+    std::function<std::optional<permissions_player_profile>(std::string_view)>
+        find_profile{};
+    /// Chain-aware answer of the active provider, including wrapper providers.
+    /// `check` uses it so a node a wrapper decided is not reported with the
+    /// base resolver's answer. Null when the composition has no permission
+    /// service.
+    std::function<services::permissions::permission_result(
+        const permissions::subject_view &, std::string_view node,
+        const permissions::context_view &)>
+        query{};
     /// Audit sink. Empty writes the formatted record through the
     /// `permissions-audit` logger.
     std::function<void(const permissions_audit_record &)> audit{};
 };
+
+/// Install the offline-subject lookup the administration commands use. A server
+/// that authenticates accounts must not map a name to a profile without the
+/// account, so the resolver is installed only when `online_mode` is false;
+/// otherwise the state keeps no profile lookup and a change can only target an
+/// explicit `player:<uuid>` subject. Returns true when a resolver was
+/// installed.
+[[nodiscard]] auto
+install_offline_profile_lookup(permissions_admin_state &state, bool online_mode,
+                               session_profile_resolver resolve_offline_profile)
+    -> bool;
 
 /// Result of one `permissions` command: the lines the frontend prints in order,
 /// then the failure text through its own error path when `ok` is false.

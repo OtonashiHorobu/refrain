@@ -85,9 +85,10 @@ struct context_entry {
     std::string_view value{};
 };
 
-/// Context of a query. v1 answers globally, so the context does not change the
-/// default resolver's answer; it is carried so wrapper providers and later rule
-/// sets can match it.
+/// Context of a query. The built-in resolver matches its `[contexts]`
+/// predicates against this value, and a wrapper provider may match it too; an
+/// empty context matches no context rule, so a policy without context rules
+/// answers the same way for every context.
 struct context {
     std::string_view world{};
     std::string_view gamemode{};

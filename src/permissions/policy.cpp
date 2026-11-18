@@ -35,8 +35,8 @@ using load_warnings = std::vector<std::string>;
 
 constexpr std::string_view player_key_prefix{"player:"};
 
-constexpr std::array<std::string_view, 5> root_tables{"defaults", "op", "ops",
-                                                      "grants", "groups"};
+constexpr std::array<std::string_view, 7> root_tables{
+    "defaults", "op", "ops", "grants", "groups", "contexts", "context_grants"};
 constexpr std::array<std::string_view, 2> default_keys{"default", "nodes"};
 constexpr std::array<std::string_view, 2> op_keys{"min_level", "nodes"};
 constexpr std::array<std::string_view, 1> ops_keys{"players"};
@@ -259,6 +259,126 @@ constexpr std::string_view group_prefix{"@"};
     return status_ok();
 }
 
+/// Parse one array of subject rules: node rules plus `@group` joins. `location`
+/// names the configuration entry in error messages; the array index is
+/// appended. Groups must already be parsed so a dangling reference is an error.
+[[nodiscard]] auto parse_subject_rules(const config::document &document,
+                                       const policy &policy_value,
+                                       std::span<const std::string> values,
+                                       std::string_view location)
+    -> result<subject_rules> {
+    subject_rules rules{};
+    for (std::size_t index{0}; index < values.size(); ++index) {
+        const auto &text{values[index]};
+        if (text.starts_with(group_prefix)) {
+            const auto group{text.substr(group_prefix.size())};
+            if (!valid_group_name(group)) {
+                return std::unexpected{policy_error(
+                    document, fmt::format("{}[{}]: invalid group name '{}'",
+                                          location, index, group))};
+            }
+            if (!policy_value.groups.contains(group)) {
+                return std::unexpected{policy_error(
+                    document,
+                    fmt::format("{}[{}] references unknown group '{}'",
+                                location, index, group))};
+            }
+            rules.groups.emplace_back(group);
+            continue;
+        }
+        auto rule{parse_rule(text, fmt::format("{}[{}]", location, index))};
+        if (!rule) {
+            return std::unexpected{
+                policy_error(document, rule.error().message)};
+        }
+        rules.nodes.add(std::move(*rule));
+    }
+    return rules;
+}
+
+/// Parse `[contexts]`: named predicates over the query context. Each entry is a
+/// table of `key = "value"` conditions and applies to a query only when every
+/// condition matches. `world` and `gamemode` address the dedicated query
+/// fields, every other key an extra entry. An empty predicate is rejected
+/// because it would match every query while reading like a constraint.
+[[nodiscard]] auto parse_contexts(const config::document &document,
+                                  policy &policy_value) -> status {
+    const std::array<std::string_view, 1> path{"contexts"};
+    if (!document.contains_at(path)) {
+        return status_ok();
+    }
+    if (document.kind_at(path) != config::value_kind::table) {
+        return std::unexpected{type_error(document, "contexts", "a table")};
+    }
+    for (const auto &name : document.keys("contexts")) {
+        if (!valid_context_name(name)) {
+            return std::unexpected{policy_error(
+                document,
+                fmt::format("invalid context name '{}' (lowercase letters, "
+                            "digits, '_' and '-', at most 64 bytes)",
+                            name))};
+        }
+        const std::array<std::string_view, 2> value_path{"contexts", name};
+        if (document.kind_at(value_path) != config::value_kind::table) {
+            return std::unexpected{policy_error(
+                document, fmt::format("contexts.{} must be a table of context "
+                                      "conditions",
+                                      name))};
+        }
+        auto keys{document.keys_at(value_path)};
+        if (!keys) {
+            return std::unexpected{
+                policy_error(document, fmt::format("contexts.{}: {}", name,
+                                                   keys.error().message))};
+        }
+        if (keys->empty()) {
+            return std::unexpected{policy_error(
+                document,
+                fmt::format("contexts.{} defines no condition; a context must "
+                            "match at least one context key",
+                            name))};
+        }
+        if (keys->size() > max_context_entries) {
+            return std::unexpected{policy_error(
+                document,
+                fmt::format("contexts.{} has {} conditions; at most {} are "
+                            "accepted",
+                            name, keys->size(), max_context_entries))};
+        }
+        context_definition definition{};
+        definition.conditions.reserve(keys->size());
+        for (const auto &key : *keys) {
+            if (!valid_context_key(key)) {
+                return std::unexpected{policy_error(
+                    document,
+                    fmt::format("contexts.{}: invalid context key '{}' "
+                                "(expected 'world', 'gamemode' or a lowercase "
+                                "provider key)",
+                                name, key))};
+            }
+            const std::array<std::string_view, 3> condition_path{"contexts",
+                                                                 name, key};
+            auto value{document.get_string_at(condition_path)};
+            if (!value) {
+                return std::unexpected{policy_error(
+                    document,
+                    fmt::format("contexts.{}.{} must be a string", name, key))};
+            }
+            if (value->empty() || value->size() > max_context_length) {
+                return std::unexpected{policy_error(
+                    document,
+                    fmt::format("contexts.{}.{} must be a non-empty string of "
+                                "at most {} bytes",
+                                name, key, max_context_length))};
+            }
+            definition.conditions.push_back(
+                context_condition{.key = key, .value = std::move(*value)});
+        }
+        policy_value.contexts.emplace(name, std::move(definition));
+    }
+    return status_ok();
+}
+
 [[nodiscard]] auto parse_groups(const config::document &document,
                                 policy &policy_value) -> status {
     const std::array<std::string_view, 1> path{"groups"};
@@ -339,116 +459,131 @@ constexpr std::string_view group_prefix{"@"};
                 fmt::format("grants.{} must be an array of node strings",
                             key))};
         }
-        subject_rules rules{};
-        for (std::size_t index{0}; index < values->size(); ++index) {
-            const auto &text{(*values)[index]};
-            if (text.starts_with(group_prefix)) {
-                const auto group{text.substr(group_prefix.size())};
-                if (!valid_group_name(group)) {
-                    return std::unexpected{policy_error(
-                        document,
-                        fmt::format("grants.{}[{}]: invalid group name '{}'",
-                                    key, index, group))};
-                }
-                if (!policy_value.groups.contains(group)) {
-                    return std::unexpected{policy_error(
-                        document,
-                        fmt::format("grants.{}[{}] references unknown group "
-                                    "'{}'",
-                                    key, index, group))};
-                }
-                rules.groups.emplace_back(group);
-                continue;
-            }
-            auto rule{
-                parse_rule(text, fmt::format("grants.{}[{}]", key, index))};
-            if (!rule) {
-                return std::unexpected{
-                    policy_error(document, rule.error().message)};
-            }
-            rules.nodes.add(std::move(*rule));
+        auto rules{parse_subject_rules(document, policy_value, *values,
+                                       fmt::format("grants.{}", key))};
+        if (!rules) {
+            return std::unexpected{std::move(rules.error())};
         }
-        policy_value.subjects.emplace(key, std::move(rules));
+        policy_value.subjects.emplace(key, std::move(*rules));
     }
     return status_ok();
 }
 
-[[nodiscard]] auto find_subject_rules(const policy &policy_value,
-                                      std::string_view key) noexcept
-    -> const subject_rules * {
-    if (key.empty()) {
-        return nullptr;
+/// Parse `[context_grants]`: rule sets attached to a subject under one declared
+/// context. The table is keyed by context name and then by configured subject
+/// key; a set joins global groups with `@name` exactly like `[grants]`, because
+/// groups and their rules stay global and single-level. A context name the
+/// `[contexts]` table does not declare is a configuration error, as is a
+/// malformed subject key or rule.
+[[nodiscard]] auto parse_context_grants(const config::document &document,
+                                        policy &policy_value,
+                                        load_warnings &warnings) -> status {
+    const std::array<std::string_view, 1> path{"context_grants"};
+    if (!document.contains_at(path)) {
+        return status_ok();
     }
-    const auto found{policy_value.subjects.find(key)};
-    return found == policy_value.subjects.end() ? nullptr : &found->second;
+    if (document.kind_at(path) != config::value_kind::table) {
+        return std::unexpected{
+            type_error(document, "context_grants", "a table")};
+    }
+    for (const auto &context_name : document.keys("context_grants")) {
+        if (!valid_context_name(context_name)) {
+            return std::unexpected{policy_error(
+                document,
+                fmt::format("invalid context name '{}' in [context_grants]",
+                            context_name))};
+        }
+        if (!policy_value.contexts.contains(context_name)) {
+            return std::unexpected{policy_error(
+                document,
+                fmt::format("context_grants references unknown context '{}'; "
+                            "declare it in [contexts]",
+                            context_name))};
+        }
+        const std::array<std::string_view, 2> subjects_path{"context_grants",
+                                                            context_name};
+        if (document.kind_at(subjects_path) != config::value_kind::table) {
+            return std::unexpected{policy_error(
+                document,
+                fmt::format("context_grants.{} must be a table of subject "
+                            "keys",
+                            context_name))};
+        }
+        auto subject_keys{document.keys_at(subjects_path)};
+        if (!subject_keys) {
+            return std::unexpected{policy_error(
+                document, fmt::format("context_grants.{}: {}", context_name,
+                                      subject_keys.error().message))};
+        }
+        context_subject_rules rules{};
+        for (const auto &key : *subject_keys) {
+            if (!valid_subject_key(key)) {
+                return std::unexpected{policy_error(
+                    document,
+                    fmt::format("context_grants.{}: invalid subject key '{}'",
+                                context_name, key))};
+            }
+            if (!profile_name_key(key).empty()) {
+                warnings.push_back(fmt::format(
+                    "context grant '{}' in '{}' matches by profile name, which "
+                    "another account can claim after the holder renames; key "
+                    "it by the player uuid instead",
+                    key, document.origin()));
+            }
+            const std::array<std::string_view, 3> rules_path{"context_grants",
+                                                             context_name, key};
+            auto values{document.get_strings_at(rules_path)};
+            if (!values) {
+                return std::unexpected{policy_error(
+                    document,
+                    fmt::format("context_grants.{}.{} must be an array of node "
+                                "strings",
+                                context_name, key))};
+            }
+            auto parsed{parse_subject_rules(
+                document, policy_value, *values,
+                fmt::format("context_grants.{}.{}", context_name, key))};
+            if (!parsed) {
+                return std::unexpected{std::move(parsed.error())};
+            }
+            rules.emplace(key, std::move(*parsed));
+        }
+        policy_value.context_subjects.emplace(context_name, std::move(rules));
+    }
+    return status_ok();
 }
 
-/// True when the subject is an operator: a player listed in `[ops].players`
-/// (by canonical uuid or profile name) or a player at or above
-/// `[op].min_level` on the vanilla ladder supplied in the query.
-[[nodiscard]] auto is_operator_subject(const policy &policy_value,
-                                       const subject_view &subject,
-                                       std::uint32_t op_level) noexcept
-    -> bool {
-    if (subject.kind != subject_kind::player) {
-        return false;
-    }
-    if (op_level >= policy_value.op_min_level) {
-        return true;
-    }
-    const auto named = [&policy_value](std::string_view identity) {
-        return !identity.empty() &&
-               std::ranges::find(policy_value.operators, identity) !=
-                   policy_value.operators.end();
-    };
-    return named(subject.id) || named(subject.profile_name);
-}
+/// The rule sets of one configured subject table, in the order `evaluate()`
+/// applies them: the identity the query names first, then the profile-name
+/// fallback.
+struct subject_rule_set_pair {
+    const subject_rules *primary{nullptr};
+    const subject_rules *secondary{nullptr};
+};
 
-/// Match one node against every node set that applies to the subject. Returns
-/// deny when any set denies, otherwise grant when any set grants, otherwise
-/// none.
-[[nodiscard]] auto
-match_subject(const policy &policy_value, const subject_view &subject,
-              const subject_rules *rules, std::string_view node,
-              std::uint32_t op_level) noexcept -> rule_match {
-    auto result{rule_match::none};
-    const auto apply = [&node, &result](const node_set &set) {
-        switch (set.match(node)) {
-        case rule_match::deny:
-            result = rule_match::deny;
-            return true;
-        case rule_match::grant:
-            if (result == rule_match::none) {
-                result = rule_match::grant;
-            }
-            return false;
-        case rule_match::none:
-            return false;
-        }
-        return false;
-    };
-    if (rules != nullptr) {
-        for (const auto &group : rules->groups) {
-            const auto found{policy_value.groups.find(group)};
-            if (found != policy_value.groups.end() && apply(found->second)) {
-                return rule_match::deny;
+/// Look up the subject's rule sets in one table keyed by configured subject key
+/// (`policy.subjects` or one context's rules).
+[[nodiscard]] auto subject_rule_sets_in(
+    const std::map<std::string, subject_rules, std::less<>> &table,
+    const subject_view &subject) -> subject_rule_set_pair {
+    // A player can be configured by uuid and, as a fallback, by profile name.
+    // Both rule sets apply when both exist, so a name-based grant cannot
+    // override a uuid-based deny.
+    const auto primary_key{make_subject_key(subject.kind, subject.id)};
+    subject_rule_set_pair pair{};
+    if (const auto found{table.find(primary_key)}; found != table.end()) {
+        pair.primary = &found->second;
+    }
+    if (subject.kind == subject_kind::player && !subject.profile_name.empty()) {
+        const auto name_key{
+            make_subject_key(subject.kind, subject.profile_name)};
+        if (!name_key.empty() && name_key != primary_key) {
+            if (const auto found{table.find(name_key)}; found != table.end()) {
+                pair.secondary = &found->second;
             }
         }
-        if (apply(rules->nodes)) {
-            return rule_match::deny;
-        }
     }
-    const bool operator_subject{
-        is_operator_subject(policy_value, subject, op_level)};
-    if (operator_subject && apply(policy_value.op_nodes)) {
-        return rule_match::deny;
-    }
-    // A public grant applies to every subject and a deny in it still wins over
-    // any grant above it.
-    if (apply(policy_value.default_nodes)) {
-        return rule_match::deny;
-    }
-    return result;
+    return pair;
 }
 
 } // namespace
@@ -514,6 +649,82 @@ auto valid_group_name(std::string_view name) noexcept -> bool {
         return false;
     }
     return std::ranges::all_of(name.substr(1), is_body);
+}
+
+auto valid_context_name(std::string_view name) noexcept -> bool {
+    return valid_group_name(name);
+}
+
+auto valid_context_key(std::string_view key) noexcept -> bool {
+    if (key == "world" || key == "gamemode") {
+        return true;
+    }
+    if (key.empty() || key.size() > 64) {
+        return false;
+    }
+    const auto is_start = [](char character) {
+        return (character >= 'a' && character <= 'z') ||
+               (character >= '0' && character <= '9');
+    };
+    const auto is_body = [&is_start](char character) {
+        return is_start(character) || character == '_' || character == '-' ||
+               character == '.';
+    };
+    if (!is_start(key.front())) {
+        return false;
+    }
+    return std::ranges::all_of(key.substr(1), is_body);
+}
+
+auto valid_context(const context_view &context) noexcept -> bool {
+    if (context.world.size() > max_context_length ||
+        context.gamemode.size() > max_context_length) {
+        return false;
+    }
+    if (context.extra.size() > max_context_entries) {
+        return false;
+    }
+    for (std::size_t index{0}; index < context.extra.size(); ++index) {
+        const auto &entry{context.extra[index]};
+        if (entry.key.empty() || entry.key.size() > max_context_length ||
+            entry.value.size() > max_context_length) {
+            return false;
+        }
+        if (entry.key == "world" || entry.key == "gamemode") {
+            return false;
+        }
+        for (std::size_t earlier{0}; earlier < index; ++earlier) {
+            if (context.extra[earlier].key == entry.key) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+auto context_matches(const context_definition &definition,
+                     const context_view &context) noexcept -> bool {
+    for (const auto &condition : definition.conditions) {
+        std::string_view actual{};
+        if (condition.key == "world") {
+            actual = context.world;
+        } else if (condition.key == "gamemode") {
+            actual = context.gamemode;
+        } else {
+            const auto found{std::ranges::find_if(
+                context.extra, [&condition](const context_value_view &entry) {
+                    return entry.key == condition.key;
+                })};
+            if (found == context.extra.end()) {
+                return false;
+            }
+            actual = found->value;
+        }
+        if (actual != condition.value) {
+            return false;
+        }
+    }
+    return true;
 }
 
 namespace {
@@ -626,12 +837,20 @@ auto parse_policy(const core::config::document &document) -> result<policy> {
 
     policy policy_value{};
     load_warnings warnings{};
-    // Groups first: grants may reference them and a dangling reference is an
-    // error, not a silently ignored rule.
+    // Contexts and groups first: grants may join a group and contextual grants
+    // may reference a context, so a dangling reference is an error, not a
+    // silently ignored rule.
+    if (auto parsed{parse_contexts(document, policy_value)}; !parsed) {
+        return std::unexpected{std::move(parsed.error())};
+    }
     if (auto parsed{parse_groups(document, policy_value)}; !parsed) {
         return std::unexpected{std::move(parsed.error())};
     }
     if (auto parsed{parse_grants(document, policy_value, warnings)}; !parsed) {
+        return std::unexpected{std::move(parsed.error())};
+    }
+    if (auto parsed{parse_context_grants(document, policy_value, warnings)};
+        !parsed) {
         return std::unexpected{std::move(parsed.error())};
     }
     if (auto parsed{parse_defaults(document, policy_value)}; !parsed) {
@@ -653,32 +872,6 @@ auto parse_policy(const core::config::document &document) -> result<policy> {
 }
 
 namespace {
-
-/// The rule sets of one subject, in the order `evaluate()` applies them: the
-/// identity the query names first, then the profile-name fallback.
-struct subject_rule_set_pair {
-    const subject_rules *primary{nullptr};
-    const subject_rules *secondary{nullptr};
-};
-
-[[nodiscard]] auto subject_rule_sets(const policy &policy_value,
-                                     const subject_view &subject)
-    -> subject_rule_set_pair {
-    // A player can be configured by uuid and, as a fallback, by profile name.
-    // Both rule sets apply when both exist, so a name-based grant cannot
-    // override a uuid-based deny.
-    const auto primary_key{make_subject_key(subject.kind, subject.id)};
-    subject_rule_set_pair pair{};
-    pair.primary = find_subject_rules(policy_value, primary_key);
-    if (subject.kind == subject_kind::player && !subject.profile_name.empty()) {
-        const auto name_key{
-            make_subject_key(subject.kind, subject.profile_name)};
-        if (!name_key.empty() && name_key != primary_key) {
-            pair.secondary = find_subject_rules(policy_value, name_key);
-        }
-    }
-    return pair;
-}
 
 /// One rule of one set that matched the query node.
 struct set_match {
@@ -706,12 +899,120 @@ struct set_match {
     return outcome;
 }
 
+/// Fold one node set into a running match. A deny reports true because the walk
+/// must stop: deny wins over every grant. A grant is remembered only while no
+/// earlier set granted.
+[[nodiscard]] auto apply_set(const node_set &set, std::string_view node,
+                             rule_match &result) noexcept -> bool {
+    switch (set.match(node)) {
+    case rule_match::deny:
+        result = rule_match::deny;
+        return true;
+    case rule_match::grant:
+        if (result == rule_match::none) {
+            result = rule_match::grant;
+        }
+        return false;
+    case rule_match::none:
+        return false;
+    }
+    return false;
+}
+
+/// True when the subject is an operator: a player listed in `[ops].players`
+/// (by canonical uuid or profile name) or a player at or above
+/// `[op].min_level` on the vanilla ladder supplied in the query.
+[[nodiscard]] auto is_operator_subject(const policy &policy_value,
+                                       const subject_view &subject,
+                                       std::uint32_t op_level) noexcept
+    -> bool {
+    if (subject.kind != subject_kind::player) {
+        return false;
+    }
+    if (op_level >= policy_value.op_min_level) {
+        return true;
+    }
+    const auto named = [&policy_value](std::string_view identity) {
+        return !identity.empty() &&
+               std::ranges::find(policy_value.operators, identity) !=
+                   policy_value.operators.end();
+    };
+    return named(subject.id) || named(subject.profile_name);
+}
+
+/// Apply one subject's rule sets, groups first and then its own node set.
+/// Returns true on a matching deny, which ends the walk.
+[[nodiscard]] auto match_rules(const policy &policy_value,
+                               const subject_rules *rules,
+                               std::string_view node,
+                               rule_match &result) noexcept -> bool {
+    if (rules == nullptr) {
+        return false;
+    }
+    for (const auto &group : rules->groups) {
+        const auto found{policy_value.groups.find(group)};
+        if (found != policy_value.groups.end() &&
+            apply_set(found->second, node, result)) {
+            return true;
+        }
+    }
+    return apply_set(rules->nodes, node, result);
+}
+
+/// Match one node against the subject's global rule sets: its own nodes, the
+/// groups it joined, the operator node set and the public default set.
+[[nodiscard]] auto
+match_subject(const policy &policy_value, const subject_view &subject,
+              const subject_rules *rules, std::string_view node,
+              std::uint32_t op_level) noexcept -> rule_match {
+    rule_match result{rule_match::none};
+    if (match_rules(policy_value, rules, node, result)) {
+        return rule_match::deny;
+    }
+    const bool operator_subject{
+        is_operator_subject(policy_value, subject, op_level)};
+    if (operator_subject && apply_set(policy_value.op_nodes, node, result)) {
+        return rule_match::deny;
+    }
+    // A public grant applies to every subject and a deny in it still wins over
+    // any grant above it.
+    if (apply_set(policy_value.default_nodes, node, result)) {
+        return rule_match::deny;
+    }
+    return result;
+}
+
+/// Match one node against every context whose predicate matches the query. All
+/// matching contexts apply; a deny in any of them wins over the grants.
+[[nodiscard]] auto
+match_context(const policy &policy_value, const subject_view &subject,
+              std::string_view node, const context_view &context) noexcept
+    -> rule_match {
+    rule_match result{rule_match::none};
+    for (const auto &[name, definition] : policy_value.contexts) {
+        if (!context_matches(definition, context)) {
+            continue;
+        }
+        const auto found{policy_value.context_subjects.find(name)};
+        if (found == policy_value.context_subjects.end()) {
+            continue;
+        }
+        const auto rule_sets{subject_rule_sets_in(found->second, subject)};
+        if (match_rules(policy_value, rule_sets.primary, node, result) ||
+            match_rules(policy_value, rule_sets.secondary, node, result)) {
+            return rule_match::deny;
+        }
+    }
+    return result;
+}
+
 /// One rule set of a query in the order an explanation scans it.
 struct scan_entry {
     const node_set *set{nullptr};
     decision_source grant{decision_source::subject_grant};
     decision_source deny{decision_source::subject_deny};
     std::string group{};
+    std::string context{};
 };
 
 void append_subject_sets(const policy &policy_value, const subject_rules *rules,
@@ -734,11 +1035,55 @@ void append_subject_sets(const policy &policy_value, const subject_rules *rules,
                                  .deny = decision_source::subject_deny});
 }
 
+/// Append the rule sets of every matching context for this subject, in context
+/// name order. A group rule reached through a context keeps its group name and
+/// names the context that made it apply.
+void append_context_sets(const policy &policy_value,
+                         const subject_view &subject,
+                         const context_view &context,
+                         std::vector<scan_entry> &entries) {
+    const auto append_rules = [&policy_value,
+                               &entries](const subject_rules *rules,
+                                         std::string_view context_name) {
+        if (rules == nullptr) {
+            return;
+        }
+        for (const auto &group : rules->groups) {
+            const auto found{policy_value.groups.find(group)};
+            if (found == policy_value.groups.end()) {
+                continue;
+            }
+            entries.push_back(
+                scan_entry{.set = &found->second,
+                           .grant = decision_source::context_grant,
+                           .deny = decision_source::context_deny,
+                           .group = group,
+                           .context = std::string{context_name}});
+        }
+        entries.push_back(scan_entry{.set = &rules->nodes,
+                                     .grant = decision_source::context_grant,
+                                     .deny = decision_source::context_deny,
+                                     .context = std::string{context_name}});
+    };
+    for (const auto &[name, definition] : policy_value.contexts) {
+        if (!context_matches(definition, context)) {
+            continue;
+        }
+        const auto found{policy_value.context_subjects.find(name)};
+        if (found == policy_value.context_subjects.end()) {
+            continue;
+        }
+        const auto rule_sets{subject_rule_sets_in(found->second, subject)};
+        append_rules(rule_sets.primary, name);
+        append_rules(rule_sets.secondary, name);
+    }
+}
+
 } // namespace
 
 auto evaluate(const policy &policy_value, const subject_view &subject,
-              std::string_view node, std::uint32_t op_level)
-    -> permission_result {
+              std::string_view node, std::uint32_t op_level,
+              const context_view &context) -> permission_result {
     if (!valid_node(node)) {
         return permission_result::denied;
     }
@@ -746,10 +1091,14 @@ auto evaluate(const policy &policy_value, const subject_view &subject,
         return permission_result::allowed;
     }
 
-    const auto rule_sets{subject_rule_sets(policy_value, subject)};
-    auto matched{match_subject(policy_value, subject, rule_sets.primary, node,
-                               op_level)};
+    const auto rule_sets{subject_rule_sets_in(policy_value.subjects, subject)};
+    const auto matched{match_subject(policy_value, subject, rule_sets.primary,
+                                     node, op_level)};
     if (matched == rule_match::deny) {
+        return permission_result::denied;
+    }
+    const auto contextual{match_context(policy_value, subject, node, context)};
+    if (contextual == rule_match::deny) {
         return permission_result::denied;
     }
     const auto secondary_match{match_subject(
@@ -757,7 +1106,8 @@ auto evaluate(const policy &policy_value, const subject_view &subject,
     if (secondary_match == rule_match::deny) {
         return permission_result::denied;
     }
-    if (matched == rule_match::grant || secondary_match == rule_match::grant) {
+    if (matched == rule_match::grant || contextual == rule_match::grant ||
+        secondary_match == rule_match::grant) {
         return permission_result::allowed;
     }
     if (policy_value.fallback == default_answer::op &&
@@ -772,10 +1122,11 @@ auto rule_text(const node_rule &rule) -> std::string {
 }
 
 auto explain(const policy &policy_value, const subject_view &subject,
-             std::string_view node, std::uint32_t op_level)
-    -> decision_explanation {
+             std::string_view node, std::uint32_t op_level,
+             const context_view &context) -> decision_explanation {
     decision_explanation explanation{};
-    explanation.result = evaluate(policy_value, subject, node, op_level);
+    explanation.result =
+        evaluate(policy_value, subject, node, op_level, context);
     if (!valid_node(node)) {
         explanation.source = decision_source::invalid_node;
         return explanation;
@@ -787,9 +1138,10 @@ auto explain(const policy &policy_value, const subject_view &subject,
 
     // Scan the sets in the order the evaluator applies them. The scan only
     // names the deciding rule; `evaluate()` above is what answers the query.
-    const auto rule_sets{subject_rule_sets(policy_value, subject)};
+    const auto rule_sets{subject_rule_sets_in(policy_value.subjects, subject)};
     std::vector<scan_entry> entries{};
     append_subject_sets(policy_value, rule_sets.primary, entries);
+    append_context_sets(policy_value, subject, context, entries);
     const auto apply_global_sets = [&entries, &policy_value, op_level,
                                     &subject] {
         if (is_operator_subject(policy_value, subject, op_level)) {
@@ -813,6 +1165,7 @@ auto explain(const policy &policy_value, const subject_view &subject,
             explanation.source = entry.deny;
             explanation.rule = rule_text(*matched.rule);
             explanation.group = entry.group;
+            explanation.context = entry.context;
             return explanation;
         }
         explanation.source = decision_source::fallback_deny;
@@ -828,6 +1181,7 @@ auto explain(const policy &policy_value, const subject_view &subject,
             matched.match == rule_match::deny ? entry.deny : entry.grant;
         explanation.rule = rule_text(*matched.rule);
         explanation.group = entry.group;
+        explanation.context = entry.context;
         return explanation;
     }
     explanation.source = decision_source::fallback_grant;
@@ -846,15 +1200,31 @@ auto list_groups(const policy &policy_value) -> std::vector<group_listing> {
         }
         groups.push_back(std::move(listing));
     }
-    for (const auto &[subject_key, rules] : policy_value.subjects) {
+    const auto append_members = [&groups](std::string_view subject_key,
+                                          const subject_rules &rules,
+                                          std::string_view context) {
         for (const auto &group : rules.groups) {
             const auto found{std::ranges::find_if(
                 groups, [&group](const group_listing &listing) {
                     return listing.name == group;
                 })};
-            if (found != groups.end()) {
-                found->members.push_back(subject_key);
+            if (found == groups.end()) {
+                continue;
             }
+            if (context.empty()) {
+                found->members.push_back(std::string{subject_key});
+            } else {
+                found->members.push_back(
+                    fmt::format("{} (context '{}')", subject_key, context));
+            }
+        }
+    };
+    for (const auto &[subject_key, rules] : policy_value.subjects) {
+        append_members(subject_key, rules, {});
+    }
+    for (const auto &[context_name, subjects] : policy_value.context_subjects) {
+        for (const auto &[subject_key, rules] : subjects) {
+            append_members(subject_key, rules, context_name);
         }
     }
     return groups;

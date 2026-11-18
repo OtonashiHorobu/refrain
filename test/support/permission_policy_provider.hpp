@@ -132,6 +132,8 @@ class permission_policy_provider {
     /// staged through `stage_reload()`.
     class admin_impl final : public refrain::permissions::admin {
       public:
+        using refrain::permissions::admin::explain;
+
         explicit admin_impl(state &impl) : impl_{impl} {}
 
         [[nodiscard]] auto
