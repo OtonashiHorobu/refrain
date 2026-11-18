@@ -57,8 +57,9 @@ struct proto_cache_entry {
     /// neighbour still reads them.
     bool sealed{false};
     /// A structure piece or feature wrote into the chunk while it was still at
-    /// terrain stage. Its content is then no longer the pure fill of seed, data
-    /// and position, so it is not an eviction candidate until it is decorated.
+    /// terrain stage. Its content is then no longer reproducible by filling
+    /// the chunk alone, so it is not an eviction candidate until it is
+    /// decorated.
     bool written{false};
 };
 
@@ -70,8 +71,8 @@ struct proto_cache_stats {
     std::size_t entries{0};
     /// Unsealed entries still at `terrain` stage, written or not.
     std::size_t terrain_entries{0};
-    /// Unsealed, unwritten terrain entries: the pure fills, and the only
-    /// eviction candidates.
+    /// Unsealed, unwritten terrain entries: the reproducible fills, and the
+    /// only eviction candidates.
     std::size_t pristine_entries{0};
     std::size_t capacity{0};
     /// High-water mark of `entries` since construction. The scheduler reports
@@ -80,9 +81,11 @@ struct proto_cache_stats {
     std::size_t peak_entries{0};
     /// High-water mark of `terrain_entries`.
     std::size_t peak_terrain_entries{0};
-    /// High-water mark of `pristine_entries`. The shared cache keeps this at or
-    /// below `capacity` at every instant; it is the number the capacity bound
-    /// is stated over.
+    /// High-water mark of `pristine_entries`, recorded after insertion
+    /// evicted back down to `capacity`. A reader never observes more than
+    /// `capacity` entries: the insertion transients and the pin caveat are
+    /// stated on the class, and `stats` reads under the same mutex as the
+    /// insertion.
     std::size_t peak_pristine_entries{0};
     std::uint64_t hits{0};
     std::uint64_t misses{0};
@@ -99,29 +102,38 @@ struct proto_cache_stats {
 /// evicts in insertion order and the caller keeps its bound above the working
 /// set. A shared cache is owned by a scheduler and its workers reach it through
 /// one instance with a mutex: the mutex is the lock the scheduler names in its
-/// ownership contract. Only terrain entries are eviction candidates: their
-/// content is a pure function of seed, data and position, while a decorated
-/// chunk carries the feature writes its neighbours already made into it.
+/// ownership contract. Only terrain entries are eviction candidates, while a
+/// decorated chunk carries the feature writes its neighbours already made into
+/// it.
 ///
 /// Eviction never changes served content. Only two kinds of terrain entry are
-/// candidates, and both are reproducible: an unwritten terrain entry is the
-/// pure fill of seed, data and position, and an entry the owner unloads with
-/// `unload_if` lies outside the demand window the owner declared. A terrain
-/// entry that already received a structure piece or a neighbour feature write
-/// is marked written and is kept until the pipeline decorates it, so a write
-/// can never be dropped by an eviction. The scheduler pins the dependency
-/// window of its ordered decoration lane while it reads it; a pinned entry is
-/// not a candidate, so a pointer handed out by `find` stays valid for the job.
+/// candidates: an entry the owner unloads with `unload_if` because it lies
+/// outside the demand window, and an unwritten terrain entry that the owner can
+/// reproduce. Reproduction is not the chunk's own seed noise alone: a terrain
+/// fill may carry structure beard pieces, and the scheduler refills an evicted
+/// position from the starts window of the demand that first published it, so
+/// the refill recomputes the same beard. A terrain entry that already received
+/// a structure piece or a neighbour feature write is marked written and is kept
+/// until the pipeline decorates it, so a write can never be dropped by an
+/// eviction. The scheduler pins the dependency window of its ordered decoration
+/// lane while it reads it; a pinned entry is not a candidate, so a pointer
+/// handed out by `find` stays valid for the job.
 ///
-/// The shared cache keeps `pristine_entries` at or below `capacity` at every
-/// instant: an insertion evicts pristine entries in ascending position order
-/// until the count is back at the bound. A pinned dependency window is never
-/// evicted, and at most one five-by-five window is pinned, so a pinned entry
-/// can not push the count past the bound either. The written dependency ring
-/// and the decorated entries sit outside that number; the owner states them
-/// separately and drops them with `unload_if` when the demand window moves. The
-/// per-generator private cache keeps its stricter but lossy insertion-order
-/// eviction: its caller must hold the bound above the working set it needs.
+/// The bound is a scheduler-level guarantee, not a property of the cache in
+/// isolation. The scheduler holds at most one five-by-five dependency window
+/// (25 entries) pinned and clamps `capacity` to at least 25, so its inserts
+/// alone can not hide enough pristine entries from eviction to overshoot the
+/// bound: an insertion evicts pristine entries in ascending position order
+/// until the count is back at `capacity`. Inside one insertion the count is
+/// transiently `capacity + 1` before that eviction runs; `stats` never observes
+/// that state because it reads under the same mutex. A caller that pins more
+/// entries than `capacity` can exceed the bound, and a caller that uses the
+/// cache directly without that pinning discipline must size `capacity` above
+/// its pinned set. The written dependency ring and the decorated entries sit
+/// outside the number altogether; the owner states them separately and drops
+/// them with `unload_if` when the demand window moves. The per-generator
+/// private cache keeps its stricter but lossy insertion-order eviction: its
+/// caller must hold the bound above the working set it needs.
 class proto_chunk_cache {
   public:
     /// One cached chunk costs about one terrain chunk (roughly 200 KiB
@@ -129,9 +141,9 @@ class proto_chunk_cache {
     /// of megabytes of terrain working set per scheduler.
     static constexpr std::size_t default_capacity = 256;
 
-    /// `lock` non-null makes the cache shared: every operation takes the mutex
-    /// and insertion never evicts on its own. The mutex must outlive the
-    /// cache.
+    /// `lock` non-null makes the cache shared: every operation takes the mutex,
+    /// and insertion evicts unpinned pristine entries to keep the bound. The
+    /// mutex must outlive the cache.
     explicit proto_chunk_cache(std::size_t capacity = default_capacity,
                                std::mutex *lock = nullptr) noexcept;
     proto_chunk_cache(const proto_chunk_cache &) = delete;
@@ -175,10 +187,11 @@ class proto_chunk_cache {
     /// are dropped, and the entry leaves the terrain statistics.
     auto seal(const chunk_pos &pos) -> bool;
 
-    /// Marks cached entries as written, so their content is no longer the pure
-    /// fill and an eviction must keep it. The ordered lane calls it for the
-    /// chunks a structure or feature write reached; a written entry stops being
-    /// an eviction candidate until it is decorated.
+    /// Marks cached entries as written, so their content is no longer
+    /// reproducible from the fill alone and an eviction must keep it. The
+    /// ordered lane calls it for the chunks a structure or feature write
+    /// reached; a written entry stops being an eviction candidate until it is
+    /// decorated.
     void mark_written(std::span<const chunk_pos> positions);
 
     /// Looks an entry up and counts the query. Returns null on a miss.

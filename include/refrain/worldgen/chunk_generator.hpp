@@ -263,6 +263,13 @@ class chunk_generator {
     /// chosen from the demand sequence, so which window fills a chunk does not
     /// depend on which worker finished first, and an already cached chunk is
     /// left alone.
+    ///
+    /// `window_pos` must be the demand that first published `positions`, not
+    /// the demand being decorated now. The window's starts decide the chunk's
+    /// structure beard, so the appearance of the chunk is a function of the
+    /// publishing window: refilling it from a different window would produce
+    /// different blocks, and an eviction of an unwritten terrain entry is only
+    /// safe because the scheduler refills it from this same window.
     [[nodiscard]] auto advance_terrain_for(const chunk_pos &window_pos,
                                            std::span<const chunk_pos> positions)
         -> result<void>;
@@ -715,7 +722,7 @@ struct chunk_scheduler_stats {
     std::size_t cache_entries{0};
     /// Cached chunks still at terrain stage, written or not.
     std::size_t cache_terrain_entries{0};
-    /// Cached chunks that are still pure terrain fills: the eviction
+    /// Cached chunks that are still reproducible terrain fills: the eviction
     /// candidates.
     std::size_t cache_pristine_entries{0};
     /// Configured bound on pristine terrain entries.
@@ -745,24 +752,29 @@ struct chunk_scheduler_stats {
 ///
 /// Determinism comes from three rules. State ids are assigned before the first
 /// job: the shared table holds the content's complete, key-ordered state list
-/// and is frozen, so no worker can append a first-use id. Terrain is a pure
-/// function of seed, data and position, and the scheduler fixes which demand
-/// publishes a chunk the first time it is needed, so a terrain fill does not
-/// depend on worker order. Decoration is the only stage that mutates a
-/// neighbour's blocks; it runs on one ordered lane in demand order, exactly as
-/// the per-generator pipeline runs it serially, and a column is served only
-/// once its own three-by-three is decorated. A served chunk is sealed, so a
-/// later feature write into it is dropped just as on the serial path.
+/// and is frozen, so no worker can append a first-use id. A terrain fill is
+/// reproducible from the seed, the data, the position and the starts window of
+/// the demand that first publishes the chunk; the scheduler fixes that demand
+/// the first time a chunk is needed, so a fill does not depend on worker order
+/// and a refill from the recorded window reproduces the same blocks. Decoration
+/// is the only stage that mutates a neighbour's blocks; it runs on one ordered
+/// lane in demand order, exactly as the per-generator pipeline runs it
+/// serially, and a column is served only once its own three-by-three is
+/// decorated. A served chunk is sealed, so a later feature write into it is
+/// dropped just as on the serial path.
 ///
 /// The shared cache keeps `capacity` a hard bound on pristine terrain entries:
 /// an insertion erases unpinned pristine entries in ascending position order
 /// until the count is back at the bound, and the ordered lane pins its
 /// five-by-five dependency window so a pointer it reads is never erased under
-/// it. An evicted pristine entry is refilled from the dependency window of the
-/// demand that first published it, so the served content does not depend on
-/// when an eviction happened. A terrain entry that already received a structure
-/// or feature write, and every decorated entry, carries state that the seed
-/// cannot reproduce; those are kept until the caller unloads them with
+/// it. The scheduler pins exactly one dependency window and its capacity is
+/// clamped to at least that window, so the published pristine count never
+/// leaves the bound; the cache's contract states the transient and generic
+/// pinning caveats. An evicted pristine entry is refilled from the dependency
+/// window of the demand that first published it, so the served content does not
+/// depend on when an eviction happened. A terrain entry that already received a
+/// structure or feature write, and every decorated entry, carries state that
+/// the seed cannot reproduce; those are kept until the caller unloads them with
 /// `trim_outside`, which drops the entries a caller-declared demand window can
 /// no longer read or write. A call without a demand window keeps them until
 /// `clear`, so the caller states the window it covers.

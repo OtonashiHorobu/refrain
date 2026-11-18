@@ -288,7 +288,13 @@ auto run_scheduler_waiting(worldgen::chunk_scheduler &scheduler,
                             digest;
                     }
                 }
-                wait_cv.notify_all();
+                // The predicate reads the scheduler state under `wait_mutex`;
+                // notify while holding it so the final completion cannot be
+                // missed between the predicate check and the wait.
+                {
+                    const std::lock_guard lock{wait_mutex};
+                    wait_cv.notify_all();
+                }
             }
         });
     }
@@ -298,8 +304,8 @@ auto run_scheduler_waiting(worldgen::chunk_scheduler &scheduler,
             return scheduler.pending() == 0U;
         });
         stop.store(true, std::memory_order_release);
+        wait_cv.notify_all();
     }
-    wait_cv.notify_all();
     threads.clear();
     run.wakes = wakes.load(std::memory_order_relaxed);
     return run;

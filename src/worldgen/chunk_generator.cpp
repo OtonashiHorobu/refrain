@@ -2308,9 +2308,9 @@ auto chunk_generator::ensure_structure_pieces(
         }
         entry->structures = true;
     }
-    // A piece wrote into its own chunk, which no longer holds the pure fill.
-    // Mark it written so an eviction cannot drop the piece before the chunk is
-    // decorated.
+    // A piece wrote into its own chunk, which no longer holds the reproducible
+    // fill alone. Mark it written so an eviction cannot drop the piece before
+    // the chunk is decorated.
     pipeline_cache_->mark_written(positions);
     return {};
 }
@@ -2951,6 +2951,12 @@ auto chunk_scheduler::refill_terrain(chunk_generator &generator,
             if (cache_->contains(position)) {
                 continue;
             }
+            // An evicted pristine entry must be rebuilt from the same window
+            // that first published it: the starts window decides the chunk's
+            // structure beard, so a refill from the demand being decorated now
+            // would materialise different blocks than the eviction dropped.
+            // `terrain_owner_` keeps the publishing demand for exactly this
+            // reason; it is not cleared when the chunk is evicted.
             chunk_pos window = pos;
             {
                 const std::lock_guard lock{mutex_};
