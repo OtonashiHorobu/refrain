@@ -157,10 +157,12 @@ struct chunk_generator_config {
     ///
     /// A non-null generation replaces both roots with the generation's merged
     /// tree, applies the generation's merged block tags and seeds the
-    /// per-generator state table from its registry mapping in content-key
-    /// order. The generator captures this snapshot when it is created and never
-    /// reads a newer published generation, so every chunk it produces belongs
-    /// to one generation; a server rebinds by constructing a new generator.
+    /// per-generator state table with the view-defined block names in
+    /// content-key order (chunk generation resolves entries by name; the
+    /// mapping's numeric ids stay a data-layer identity). The generator
+    /// captures this snapshot when it is created and never reads a newer
+    /// published generation, so every chunk it produces belongs to one
+    /// generation; a server rebinds by constructing a new generator.
     std::shared_ptr<const generation_data> generation{};
 };
 

@@ -554,4 +554,97 @@ const suite content_view_tests = [] {
             expect(change.container_paths().size() == 1U);
         }
     };
+
+    "content view/separates entry-name changes from digest-only changes"_test =
+        [] {
+            scratch_directory scratch{};
+            const auto live{scratch.path() / "live"};
+            expect(write_file(live, "data/test/block/alpha.json",
+                              R"({"type":"minecraft:block"})"));
+            expect(write_file(live, "data/test/item/beta.json",
+                              R"({"type":"minecraft:item"})"));
+            auto current{
+                data::content_view::build(layers({directory_source(live)}))};
+            expect(static_cast<bool>(current));
+            if (!current) {
+                return;
+            }
+            // Same entry names, changed document digest: the mapping changes
+            // but chunk generation resolves the same names.
+            const auto edited{scratch.path() / "edited"};
+            expect(write_file(edited, "data/test/block/alpha.json",
+                              R"({"type":"minecraft:block","note":"v2"})"));
+            expect(write_file(edited, "data/test/item/beta.json",
+                              R"({"type":"minecraft:item"})"));
+            auto edited_view{
+                data::content_view::build(layers({directory_source(edited)}))};
+            expect(static_cast<bool>(edited_view));
+            if (edited_view) {
+                const auto change{
+                    data::classify_registry_change(*current, *edited_view)};
+                expect(change.kind == data::registry_change_kind::documents);
+                expect(change.changed.size() == 1U);
+                expect(change.added.empty());
+                expect(change.removed.empty());
+                expect(!change.entry_names_changed());
+                expect(current->registries().fingerprint() !=
+                       edited_view->registries().fingerprint());
+            }
+            // Added and removed documents are entry-name changes.
+            const auto renamed{scratch.path() / "renamed"};
+            expect(write_file(renamed, "data/test/block/gamma.json",
+                              R"({"type":"minecraft:block"})"));
+            expect(write_file(renamed, "data/test/item/beta.json",
+                              R"({"type":"minecraft:item"})"));
+            auto renamed_view{
+                data::content_view::build(layers({directory_source(renamed)}))};
+            expect(static_cast<bool>(renamed_view));
+            if (renamed_view) {
+                const auto change{
+                    data::classify_registry_change(*current, *renamed_view)};
+                expect(change.kind == data::registry_change_kind::documents);
+                expect(change.entry_names_changed());
+                expect(change.added.size() == 1U);
+                expect(change.removed.size() == 1U);
+            }
+        };
+
+    "content view/refuses a changed registry document that names no entry"_test =
+        [] {
+            scratch_directory scratch{};
+            const auto live{scratch.path() / "live"};
+            expect(write_file(live, "data/test/block/alpha.json",
+                              R"({"type":"minecraft:block"})"));
+            auto current{
+                data::content_view::build(layers({directory_source(live)}))};
+            expect(static_cast<bool>(current));
+            if (!current) {
+                return;
+            }
+            const auto stray{scratch.path() / "stray"};
+            expect(write_file(stray, "data/test/block/alpha.json",
+                              R"({"type":"minecraft:block"})"));
+            // A non-JSON file under a registry directory is a registry input
+            // but cannot define an entry; publishing it would change the input
+            // fingerprint without changing the mapping, so the reload is
+            // classified as restart-required instead.
+            expect(write_file(stray, "data/test/block/notes", "notes"));
+            auto stray_view{
+                data::content_view::build(layers({directory_source(stray)}))};
+            expect(static_cast<bool>(stray_view));
+            if (stray_view) {
+                const auto change{
+                    data::classify_registry_change(*current, *stray_view)};
+                expect(change.restart_required());
+                expect(!change.hot_appliable());
+                expect(change.description().find("data/test/block/notes") !=
+                       std::string::npos);
+                auto notes{data::resource_location::parse("test:notes")};
+                expect(notes.has_value());
+                if (notes) {
+                    expect(stray_view->registries().find(
+                               data::registry_kind::block, *notes) == nullptr);
+                }
+            }
+        };
 };

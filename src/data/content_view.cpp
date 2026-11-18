@@ -417,7 +417,16 @@ auto classify_registry_change(const content_view &current,
             switch (classify_registry_input_path(path).value_or(
                 registry_input_class::container)) {
             case registry_input_class::document:
-                has_document = true;
+                // A document that cannot name a registry entry (a stray file
+                // under a registry directory, or a malformed path) would change
+                // the input fingerprint without changing the generation
+                // mapping. Refuse it as restart-required instead of publishing
+                // an unchanged mapping.
+                if (registry_entry_path(path).has_value()) {
+                    has_document = true;
+                } else {
+                    has_container = true;
+                }
                 break;
             case registry_input_class::container:
                 has_container = true;

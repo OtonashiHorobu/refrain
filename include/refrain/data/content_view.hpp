@@ -154,7 +154,11 @@ enum class registry_input_class : std::uint8_t {
 /// `id` is the generation-scoped numeric id, assigned by the canonical
 /// `namespace:path` key of the entries in ascending order. The assignment is a
 /// pure function of the view content, so two builds of the same content assign
-/// the same ids and two different views never share an id space.
+/// the same ids and two different views never share an id space. The id is an
+/// identity for consumers of the data layer; chunk generation resolves entries
+/// by name, and a stored chunk palette keeps canonical block-state keys rather
+/// than numeric ids, so a document digest change that keeps the name set does
+/// not change generated chunk content.
 struct registry_entry {
     registry_kind kind{registry_kind::block};
     registry_id id{};
@@ -176,8 +180,17 @@ struct registry_entry {
 /// registry kind) and records the content digest of every defining document,
 /// so it is deterministic and detects an edit even when the path is unchanged.
 /// A reader holds the generation it started with; a published view never
-/// mutates a generation, so chunks generated before a reload keep the ids they
-/// were produced with and new chunks can be bound to the newest one.
+/// mutates a generation, so a consumer that captured a generation keeps it and
+/// new chunks can be bound to the newest one.
+///
+/// The mapping covers the three registry kinds uniformly. Chunk generation
+/// consumes the entry *names* (it resolves block names through the generation's
+/// state table; item and entity kinds are carried for consumers that read the
+/// data layer), so a document edit that keeps the entry names changes this
+/// generation's fingerprint but not generated chunk content. A document that
+/// cannot define an entry (a non-JSON file under a registry directory, for
+/// example) is not part of a mapping; a reload that changes such a path is
+/// refused as restart-required instead of publishing an unchanged mapping.
 class registry_generation {
   public:
     registry_generation() = default;
@@ -269,6 +282,14 @@ struct registry_change {
 
     /// Changed paths that are registry containers, sorted.
     [[nodiscard]] auto container_paths() const -> std::vector<std::string>;
+
+    /// True when the change adds or removes a registry entry name. Only such a
+    /// change can alter what chunk generation resolves; a change that only
+    /// edits document digests keeps every name and therefore leaves generated
+    /// chunk content unchanged.
+    [[nodiscard]] auto entry_names_changed() const noexcept -> bool {
+        return !added.empty() || !removed.empty();
+    }
 
     /// One operator-facing sentence naming the added, removed and changed
     /// paths; empty when the change is empty.

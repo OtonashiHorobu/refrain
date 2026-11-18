@@ -24,12 +24,15 @@ namespace refrain::server {
 // takes the handoff when it assembles the content reload service, so the frozen
 // `refrain:runtime` contract does not have to grow datapack fields.
 //
-// While the server runs, the runtime publishes the live per-tick snapshot
-// through `publish_content_view()`. A consumer (a future worldgen content
-// reader, a command, a test) takes the snapshot once per tick and must not keep
-// the raw view pointer across a tick boundary; the snapshot's shared pointer
-// keeps the view alive for as long as the consumer holds it, so a tick-boundary
-// swap never frees memory another thread is reading.
+// While the server runs, the runtime publishes the live snapshot through
+// `publish_content_view()`. A tick consumer takes the snapshot once per tick
+// and must not keep the raw view pointer across a tick boundary; the snapshot's
+// shared pointer keeps the view and its registry generation alive for as long
+// as the consumer holds it, so a tick-boundary swap never frees memory another
+// thread is reading. The chunk-generation workers are the other reader: they
+// take the snapshot once at the start of a tile task and capture that one
+// generation for the whole tile, and the spawn prefill takes the boot handoff
+// through `take_content_reload_inputs()` before the runtime consumes it.
 
 /// Composition-root inputs for the runtime content view epoch.
 struct content_reload_inputs {

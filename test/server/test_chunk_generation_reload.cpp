@@ -8,12 +8,17 @@
 // generation unchanged. The content-backed case needs the locally generated
 // datapack snapshot and is skipped when the checkout has none.
 
+#include <refrain/contracts/abi.hpp>
 #include <refrain/core/io.hpp>
 #include <refrain/data/checksum.hpp>
 #include <refrain/data/content_view.hpp>
 #include <refrain/server/chunk_generation.hpp>
 #include <refrain/server/content_reload_inputs.hpp>
+#include <refrain/server/world_bootstrap.hpp>
+#include <refrain/server/world_port.hpp>
+#include <refrain/world/create.hpp>
 #include <refrain/world/proto_bridge.hpp>
+#include <refrain/world/store.hpp>
 #include <refrain/worldgen/chunk_generator.hpp>
 
 #include <boost/ut.hpp>
@@ -97,6 +102,53 @@ build_view(std::initializer_list<data::content_source> sources)
         .registry_generation = registry_generation,
         .registries = std::move(registries),
     };
+}
+
+/// Handles that select the direct world port (dummy non-null vtables).
+struct direct_handles {
+    int dummy{0};
+    server::server_service_handles handles{
+        .world =
+            reinterpret_cast<const refrain_services_world_vtable *>(&dummy),
+        .world_self = &dummy,
+        .sim = reinterpret_cast<const refrain_services_sim_vtable *>(&dummy),
+        .sim_self = &dummy,
+        .storage =
+            reinterpret_cast<const refrain_services_storage_vtable *>(&dummy),
+        .storage_self = &dummy,
+        .world_provider = "refrain.world.vanilla",
+        .sim_provider = "refrain.sim.vanilla",
+        .storage_provider = "refrain.storage.rwf",
+    };
+};
+
+/// Read one stored column back from a world directory.
+[[nodiscard]] auto read_stored_chunk(const std::filesystem::path &root,
+                                     world::chunk_pos pos)
+    -> std::optional<world::chunk> {
+    auto store{world::world_store::open(root.string())};
+    if (!store) {
+        return std::nullopt;
+    }
+    auto chunk{store->read_chunk(pos)};
+    if (!chunk) {
+        return std::nullopt;
+    }
+    return std::move(*chunk);
+}
+
+/// Persist one generated column into a fresh world directory.
+[[nodiscard]] auto store_chunk(const std::filesystem::path &root,
+                               world::chunk_pos pos, const world::chunk &chunk)
+    -> bool {
+    if (!world::create_world(root.string(), 1, "world")) {
+        return false;
+    }
+    auto store{world::world_store::open(root.string())};
+    if (!store) {
+        return false;
+    }
+    return store->write_chunk(pos, chunk).has_value() && store->commit();
 }
 
 [[nodiscard]] auto chunk_fingerprint(const world::chunk &chunk)
@@ -246,6 +298,10 @@ const suite chunk_generation_reload_tests = [] {
             return;
         }
         const auto before_fingerprint{chunk_fingerprint(*before)};
+        // Persist the column before the publish: the reload must not rewrite
+        // the chunk a fresh world already stored.
+        const auto stored_world{scratch.path() / "stored-world"};
+        expect(store_chunk(stored_world, target, *before)) << "store failed";
         expect((*service)->bound_generation() == 1U);
         expect((*service)->generation_rebuilds() == 0U);
         // A server without a reload keeps the boot generator: the column is
@@ -295,9 +351,13 @@ const suite chunk_generation_reload_tests = [] {
         expect(chunk_fingerprint(*after) != before_fingerprint);
         expect((*service)->bound_generation() == 2U);
         expect((*service)->generation_rebuilds() >= 1U);
-        // The column produced before the publish keeps its content; the reload
-        // rewrote nothing.
-        expect(chunk_fingerprint(*before) == before_fingerprint);
+        // The stored column produced before the publish is still exactly the
+        // same record; the reload rewrote nothing.
+        const auto reread{read_stored_chunk(stored_world, target)};
+        expect(reread.has_value());
+        if (reread) {
+            expect(chunk_fingerprint(*reread) == before_fingerprint);
+        }
         // Generation 3: a data-only view again, so the merged content returns
         // to the installed root and the new column is the boot content again.
         server::publish_content_view(snapshot_of(3, 2, std::move(boot_view)));
@@ -308,5 +368,154 @@ const suite chunk_generation_reload_tests = [] {
         }
         expect((*service)->bound_generation() == 3U);
         expect((*service)->generation_rebuilds() >= 2U);
+        // One worker composed the boot generation and each published one.
+        expect((*service)->generation_compose_attempts() == 3U);
+    };
+
+    "chunk generation reload/workers share one composition per published "
+    "generation"_test = [] {
+        const auto base{content_root()};
+        if (base.empty()) {
+            return;
+        }
+        published_view_guard view_guard{};
+        scratch_directory scratch{};
+        const auto recipe_pack{scratch.path() / "recipe-pack"};
+        expect(write_file(recipe_pack, "data/test/recipe/alpha.json",
+                          R"({"type":"minecraft:crafting_shapeless"})"));
+        auto boot_view{build_view({directory_source(recipe_pack)})};
+        expect(boot_view != nullptr);
+        if (!boot_view) {
+            return;
+        }
+        server::publish_content_view(snapshot_of(1, 1, boot_view));
+        server::chunk_generation::config settings{};
+        settings.data_root = base;
+        settings.seed = 1;
+        settings.worker_count = 4;
+        settings.tile_size = 1;
+        settings.admission.initial_credits = 4;
+        settings.admission.min_credits = 1;
+        settings.admission.max_credits = 4;
+        auto service{server::chunk_generation::start(settings)};
+        expect(static_cast<bool>(service)) << "chunk generation did not start";
+        if (!service) {
+            return;
+        }
+        auto wait_for_columns = [](server::chunk_generation &generator,
+                                   std::size_t expected) {
+            const auto deadline{std::chrono::steady_clock::now() +
+                                std::chrono::seconds{180}};
+            std::size_t taken{0};
+            while (std::chrono::steady_clock::now() < deadline) {
+                static_cast<void>(generator.dispatch(0));
+                taken += generator.take_results().size();
+                const auto failures{generator.take_failures()};
+                if (!failures.empty()) {
+                    return false;
+                }
+                if (taken >= expected) {
+                    return true;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds{5});
+            }
+            return false;
+        };
+        for (std::int32_t index{0}; index < 4; ++index) {
+            expect((*service)->request(world::chunk_pos{.x = index, .z = 0}));
+        }
+        expect(wait_for_columns(**service, 4U));
+        // Four workers created their first generator for generation 1 but
+        // only one composed it.
+        expect((*service)->generation_compose_attempts() == 1U);
+        expect((*service)->generation_rebuilds() == 0U);
+        // A publish advances all four workers; the shared single-flight slot
+        // composes it once.
+        const auto changed_pack{scratch.path() / "changed-pack"};
+        expect(write_changed_settings(changed_pack, base));
+        auto changed_view{build_view({directory_source(changed_pack)})};
+        expect(changed_view != nullptr);
+        if (!changed_view) {
+            return;
+        }
+        server::publish_content_view(snapshot_of(2, 1, changed_view));
+        for (std::int32_t index{0}; index < 4; ++index) {
+            expect(
+                (*service)->request(world::chunk_pos{.x = 4 + index, .z = 0}));
+        }
+        expect(wait_for_columns(**service, 4U));
+        expect((*service)->generation_compose_attempts() == 2U);
+        expect((*service)->bound_generation() == 2U);
+        expect((*service)->generation_rebuilds() >= 4U);
+    };
+
+    "chunk generation reload/a failed bind keeps the boot content and does not "
+    "claim the published generation"_test = [] {
+        published_view_guard view_guard{};
+        scratch_directory scratch{};
+        // A view that changes a document chunk generation reads. The empty
+        // installed root cannot load a generator, so the bind fails and the
+        // worker falls back to the boot content.
+        const auto pack{scratch.path() / "pack"};
+        expect(write_file(pack, "data/minecraft/worldgen/biome/plains.json",
+                          R"({"temperature":0.8})"));
+        auto view{build_view({directory_source(pack)})};
+        expect(view != nullptr);
+        if (!view) {
+            return;
+        }
+        server::publish_content_view(snapshot_of(1, 1, view));
+        // An installed block tag that cannot be parsed makes the merged tag
+        // tree unreadable, so binding the published generation fails.
+        const auto broken_root{scratch.path() / "broken-root"};
+        expect(write_file(broken_root, "minecraft/tags/block/broken.json",
+                          R"({"values":[)"));
+        server::chunk_generation::config settings{};
+        settings.data_root = broken_root.string();
+        settings.seed = 1;
+        settings.worker_count = 2;
+        settings.tile_size = 1;
+        settings.admission.initial_credits = 2;
+        settings.admission.min_credits = 1;
+        settings.admission.max_credits = 2;
+        auto service{server::chunk_generation::start(settings)};
+        expect(static_cast<bool>(service)) << "chunk generation did not start";
+        if (!service) {
+            return;
+        }
+        expect((*service)->request(world::chunk_pos{.x = 0, .z = 0}));
+        expect((*service)->request(world::chunk_pos{.x = 1, .z = 0}));
+        static_cast<void>((*service)->dispatch(0));
+        const auto deadline{std::chrono::steady_clock::now() +
+                            std::chrono::seconds{30}};
+        std::size_t reported_failures{0};
+        while (std::chrono::steady_clock::now() < deadline) {
+            static_cast<void>((*service)->dispatch(0));
+            static_cast<void>((*service)->take_results());
+            reported_failures += (*service)->take_failures().size();
+            if (reported_failures >= 2U &&
+                (*service)->generation_rebuild_failures() >= 2U) {
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds{5});
+        }
+        // Two workers failed to bind and to create their boot generator, but
+        // the generation was composed once for both, nothing was applied, and
+        // no rebuild was reported.
+        std::fprintf(
+            stderr,
+            "bind failure diagnostics: attempts=%llu failures=%llu "
+            "bound=%llu rebuilds=%llu reported=%llu\n",
+            static_cast<unsigned long long>(
+                (*service)->generation_compose_attempts()),
+            static_cast<unsigned long long>(
+                (*service)->generation_rebuild_failures()),
+            static_cast<unsigned long long>((*service)->bound_generation()),
+            static_cast<unsigned long long>((*service)->generation_rebuilds()),
+            static_cast<unsigned long long>(reported_failures));
+        expect((*service)->generation_compose_attempts() == 1U);
+        expect((*service)->generation_rebuild_failures() >= 2U);
+        expect((*service)->bound_generation() == 0U);
+        expect((*service)->generation_rebuilds() == 0U);
     };
 };

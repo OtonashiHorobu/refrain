@@ -665,23 +665,34 @@ the server down.
 Chunk generation reads the published generation. When a publish advances it, a
 tile worker composes the view over the installed game-data directory and builds
 a new generator for the newest generation; the generator it replaces finishes
-the chunk it was producing, so no chunk ever mixes two generations. A view that
-changes no document chunk generation reads produces byte-identical chunks. The
-experimental per-chunk scheduler keeps its boot content because its frozen
-shared block-state table cannot be rebuilt safely, so a registry change stays
-restart-required for that path.
+the tile it was producing, so no tile ever mixes two generations. Tag documents
+merge with the datapack rules for every tag kind: `"replace": true` clears the
+installed values and the lower view layers, otherwise the values append, so a
+biome tag keeps the installed values a feature predicate or structure match
+needs unless the view replaces it. A view that changes no document chunk
+generation reads produces byte-identical chunks. The merged tree is a temporary
+directory removed when the last generator that captured the generation is
+destroyed. The experimental per-chunk scheduler keeps its boot content because
+its frozen shared block-state table cannot be rebuilt safely; a composition
+that selects it declares that it cannot bind registry generations, so a
+registry-document reload is refused with the scheduler named and the tile path
+is the path that reloads.
 
 Block, item and entity registry documents become immutable registry generations:
-the ids of a generation are assigned per registry kind in content-key order, a
-snapshot keeps the generation it started with, and a published change advances
-the generation for the chunks generated afterwards. Existing chunks need no
-remap because a stored palette carries the canonical block-state keys, not
-numeric registry ids. A pack that ships `tables.rvtb` or
-`protocol_registry.json` changes the numeric identities the runtime froze at
-startup, so that class is refused with `restart required` and the changed files
-are named; a pack that changes both classes is refused as one unit. Mod code and
-the provider composition are the other half of a reload and go through
-`mods reload <id>` and `hot_reload`, not `hot_reload_data`.
+the entry ids of a generation are assigned per registry kind in content-key
+order and each entry records its document digest, a snapshot keeps the
+generation it started with, and a published change advances the generation for
+chunks generated afterwards. Chunk generation resolves block entries by name and
+a stored palette keeps canonical block-state keys, not numeric ids, so existing
+chunks need no remap; adding or removing an entry name changes what generation
+can resolve, while an edit that keeps the names changes only the generation
+fingerprint and not generated chunk content. A registry document path that
+cannot define an entry is refused as restart-required. A pack that ships
+`tables.rvtb` or `protocol_registry.json` changes the numeric identities the
+runtime froze at startup, so that class is refused with `restart required` and
+the changed files are named; a pack that changes both classes is refused as one
+unit. Mod code and the provider composition are the other half of a reload and
+go through `mods reload <id>` and `hot_reload`, not `hot_reload_data`.
 
 ### Native retire and quarantine
 

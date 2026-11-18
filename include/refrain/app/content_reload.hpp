@@ -44,9 +44,12 @@ namespace refrain::app {
 // - A change to per-entry block/item/entity registry documents is published
 //   as a new immutable `data::registry_generation` together with the view. The
 //   previous snapshot keeps the generation it started with, so a reader that
-//   took the snapshot earlier keeps its mapping, and chunk generation binds new
-//   chunks to the newest mapping while chunks written before the publish keep
-//   their canonical block-state keys unchanged.
+//   took the snapshot earlier keeps its mapping. Only an entry-name change
+//   (an added or removed document) can alter what chunk generation resolves; a
+//   change that only edits document digests changes the generation fingerprint
+//   but not generated chunk content, and the commit reports that distinction.
+//   A document that cannot name a registry entry is refused as
+//   restart-required instead of publishing an unchanged mapping.
 // - A change to a registry container (`tables.rvtb`, `protocol_registry.json`)
 //   is refused as restart-required with the changed files named: the runtime
 //   froze the numeric identities of those tables and the wire registry catalog
@@ -104,6 +107,14 @@ struct content_reload_options {
     /// File the gate was read from (diagnostics). Empty means the built-in
     /// default.
     std::string gate_source{};
+    /// Whether the running chunk-generation path can bind a published registry
+    /// generation. The production tile path can; the experimental per-chunk
+    /// scheduler keeps its boot content, so a composition that selects that
+    /// path sets this false. A registry-document reload is then refused as
+    /// restart-required with `registry_generation_unsupported_reason` named,
+    /// instead of reporting a publish that no consumer rebinds.
+    bool registry_generations{true};
+    std::string registry_generation_unsupported_reason{};
 };
 
 class content_reload {

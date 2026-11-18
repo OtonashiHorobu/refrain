@@ -17,6 +17,7 @@
 #include <boost/ut.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
@@ -262,6 +263,93 @@ const suite generation_data_tests = [] {
         expect(!std::filesystem::is_directory(root));
     };
 
+    "generation data/merges every tag kind with the datapack rules"_test = [] {
+        scratch_directory scratch{};
+        const auto base{scratch.path() / "base"};
+        expect(write_file(base,
+                          "minecraft/worldgen/noise_settings/overworld.json",
+                          R"({"note":"base"})"));
+        expect(write_file(base, "minecraft/tags/block/logs.json",
+                          R"({"values":["minecraft:oak_log"]})"));
+        expect(write_file(base, "minecraft/tags/block/leaves.json",
+                          R"({"values":["minecraft:oak_leaves"]})"));
+        expect(write_file(base, "minecraft/tags/worldgen/biome/temperate.json",
+                          R"({"values":["minecraft:plains"]})"));
+        expect(write_file(base, "minecraft/tags/worldgen/biome/frozen.json",
+                          R"({"values":["minecraft:snowy_plains"]})"));
+        const auto low{scratch.path() / "low"};
+        expect(write_file(low, "data/minecraft/tags/block/logs.json",
+                          R"({"values":["minecraft:birch_log"]})"));
+        expect(write_file(low,
+                          "data/minecraft/tags/worldgen/biome/temperate.json",
+                          R"({"values":["minecraft:forest"]})"));
+        const auto high{scratch.path() / "high"};
+        expect(write_file(
+            high, "data/minecraft/tags/block/leaves.json",
+            R"({"replace":true,"values":["minecraft:birch_leaves"]})"));
+        expect(write_file(high,
+                          "data/minecraft/tags/worldgen/biome/temperate.json",
+                          R"({"values":["minecraft:taiga"]})"));
+        expect(write_file(
+            high, "data/minecraft/tags/worldgen/biome/frozen.json",
+            R"({"replace":true,"values":["minecraft:ice_spikes"]})"));
+        auto view{build_view({directory_source(low), directory_source(high)})};
+        expect(view != nullptr);
+        if (!view) {
+            return;
+        }
+        auto generation{worldgen::generation_data::build(view, nullptr, 2, 1,
+                                                         base.string(), "")};
+        expect(static_cast<bool>(generation));
+        if (!generation) {
+            return;
+        }
+        expect((*generation)->overlays_generation_content());
+        const auto root{(*generation)->data_root()};
+        const auto logs{read_file(std::filesystem::path{root} /
+                                  "minecraft/tags/block/logs.json")};
+        expect(logs.find("minecraft:oak_log") != std::string::npos);
+        expect(logs.find("minecraft:birch_log") != std::string::npos);
+        // An installed value precedes the view's appended value.
+        expect(logs.find("minecraft:oak_log") <
+               logs.find("minecraft:birch_log"));
+        // replace=true clears the installed values of that tag.
+        const auto leaves{read_file(std::filesystem::path{root} /
+                                    "minecraft/tags/block/leaves.json")};
+        expect(leaves.find("minecraft:birch_leaves") != std::string::npos);
+        expect(leaves.find("minecraft:oak_leaves") == std::string::npos);
+        // A non-block tag keeps the installed values unless a view layer
+        // replaces it.
+        const auto temperate{
+            read_file(std::filesystem::path{root} /
+                      "minecraft/tags/worldgen/biome/temperate.json")};
+        expect(temperate.find("minecraft:plains") != std::string::npos);
+        expect(temperate.find("minecraft:forest") != std::string::npos);
+        expect(temperate.find("minecraft:taiga") != std::string::npos);
+        expect(temperate.find("minecraft:plains") <
+               temperate.find("minecraft:forest"));
+        expect(temperate.find("minecraft:forest") <
+               temperate.find("minecraft:taiga"));
+        const auto frozen{
+            read_file(std::filesystem::path{root} /
+                      "minecraft/tags/worldgen/biome/frozen.json")};
+        expect(frozen.find("minecraft:ice_spikes") != std::string::npos);
+        expect(frozen.find("minecraft:snowy_plains") == std::string::npos);
+        // The block tag table the generation applies follows the merged tree.
+        const auto resolved{
+            (*generation)->block_tags().resolve("minecraft:leaves")};
+        expect(static_cast<bool>(resolved));
+        if (resolved) {
+            expect(std::ranges::find(*resolved,
+                                     std::string{"minecraft:birch_leaves"}) !=
+                   resolved->end());
+            expect(std::ranges::find(*resolved,
+                                     std::string{"minecraft:oak_leaves"}) ==
+                   resolved->end());
+        }
+        expect(worldgen::materialization_cleanup_failures() == 0U);
+    };
+
     "generation data/is immutable and deterministic for one view"_test = [] {
         scratch_directory scratch{};
         const auto base{scratch.path() / "base"};
@@ -423,6 +511,65 @@ const suite generation_data_tests = [] {
             expect(data_fingerprint.has_value());
             if (data_fingerprint) {
                 expect(*data_fingerprint == *boot_fingerprint);
+            }
+            // A registry document that keeps its entry name and only changes
+            // its content digest is not generation-observable: the mapping
+            // fingerprint changes, the generated chunk does not.
+            const auto digest_one{scratch.path() / "digest-one"};
+            expect(write_file(
+                digest_one,
+                "data/minecraft/worldgen/noise_settings/overworld.json",
+                changed));
+            expect(write_file(digest_one, "data/test/block/ruby.json",
+                              R"({"type":"minecraft:block","note":"v1"})"));
+            auto digest_one_view{build_view({directory_source(digest_one)})};
+            expect(digest_one_view != nullptr);
+            if (!digest_one_view) {
+                return;
+            }
+            const auto digest_two{scratch.path() / "digest-two"};
+            expect(write_file(
+                digest_two,
+                "data/minecraft/worldgen/noise_settings/overworld.json",
+                changed));
+            expect(write_file(digest_two, "data/test/block/ruby.json",
+                              R"({"type":"minecraft:block","note":"v2"})"));
+            auto digest_two_view{build_view({directory_source(digest_two)})};
+            expect(digest_two_view != nullptr);
+            if (!digest_two_view) {
+                return;
+            }
+            expect(digest_one_view->registries().fingerprint() !=
+                   digest_two_view->registries().fingerprint());
+            const auto digest_change{data::classify_registry_change(
+                *digest_one_view, *digest_two_view)};
+            expect(digest_change.kind == data::registry_change_kind::documents);
+            expect(!digest_change.entry_names_changed());
+            std::array<std::optional<data::digest32>, 2> fingerprints{};
+            const std::array<std::shared_ptr<const data::content_view>, 2>
+                views{digest_one_view, digest_two_view};
+            for (std::size_t index{0}; index < views.size(); ++index) {
+                auto digest_generation{worldgen::generation_data::build(
+                    views[index], nullptr, 3U + index, 2U, base, "")};
+                expect(static_cast<bool>(digest_generation));
+                if (!digest_generation) {
+                    return;
+                }
+                auto digest_config{boot_config};
+                digest_config.generation = *digest_generation;
+                auto digest_bound{
+                    worldgen::chunk_generator::create(digest_config)};
+                expect(static_cast<bool>(digest_bound));
+                if (!digest_bound) {
+                    return;
+                }
+                fingerprints[index] = generate_one(
+                    **digest_bound, worldgen::chunk_pos{.x = 0, .z = 0});
+            }
+            expect(fingerprints[0].has_value());
+            expect(fingerprints[1].has_value());
+            if (fingerprints[0] && fingerprints[1]) {
+                expect(*fingerprints[0] == *fingerprints[1]);
             }
         };
 

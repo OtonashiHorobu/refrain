@@ -172,25 +172,43 @@ auto content_reload::commit() -> content_reload_commit_result {
         if (live_.view) {
             change = data::classify_registry_change(*live_.view, **built);
         }
-        if (change.restart_required()) {
+        const bool rebind_missing{change.hot_appliable() &&
+                                  !options_.registry_generations};
+        if (change.restart_required() || rebind_missing) {
             // A registry container changed while the document class may have
             // changed too. The reload is refused as one unit: applying only the
             // documents would leave the frozen containers describing a
             // different content set than the published generation.
             result.failed = true;
             result.restart_required = true;
-            result.error = fmt::format("registry container data changed: {}",
-                                       change.description());
-            result.lines = {
-                fmt::format("refused the content reload because {}",
-                            result.error),
-                "the running server froze the numeric identities of the block, "
-                "item and entity tables and of the wire registry catalog at "
-                "startup, so replacing 'tables.rvtb' or "
-                "'protocol_registry.json' needs a restart",
-                fmt::format("the running view stays at generation {}",
-                            live_.generation),
-            };
+            if (rebind_missing) {
+                result.error = fmt::format("registry document data changed: {}",
+                                           change.description());
+                result.lines = {
+                    fmt::format("refused the content reload because {}",
+                                result.error),
+                    options_.registry_generation_unsupported_reason.empty()
+                        ? "the running chunk-generation path cannot bind a new "
+                          "registry generation, so this change needs a restart"
+                        : options_.registry_generation_unsupported_reason,
+                    fmt::format("the running view stays at generation {}",
+                                live_.generation),
+                };
+            } else {
+                result.error =
+                    fmt::format("registry container data changed: {}",
+                                change.description());
+                result.lines = {
+                    fmt::format("refused the content reload because {}",
+                                result.error),
+                    "the running server froze the numeric identities of the "
+                    "block, item and entity tables and of the wire registry "
+                    "catalog at startup, so replacing 'tables.rvtb' or "
+                    "'protocol_registry.json' needs a restart",
+                    fmt::format("the running view stays at generation {}",
+                                live_.generation),
+                };
+            }
         } else {
             auto registries{
                 change.hot_appliable()
@@ -234,6 +252,12 @@ auto content_reload::commit() -> content_reload_commit_result {
                     mapping.size(data::registry_kind::item),
                     mapping.size(data::registry_kind::entity_type),
                     live_.registry_generation - 1U));
+                if (!change.entry_names_changed()) {
+                    result.lines.push_back(
+                        "the registry entry names are unchanged, so chunk "
+                        "generation output is unchanged; the new generation "
+                        "records only the changed entry document digests");
+                }
             }
             warnings.assign(live_.view->warnings().begin(),
                             live_.view->warnings().end());

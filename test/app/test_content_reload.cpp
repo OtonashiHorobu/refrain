@@ -467,4 +467,78 @@ const suite content_reload_tests = [] {
         expect(published.published);
         expect(service.generation() == 2U);
     };
+
+    "content reload/a digest-only registry change reports unchanged chunk "
+    "output"_test = [] {
+        fixture f{};
+        expect(write_file(f.pack_dir, "data/test/block/ruby.json",
+                          R"({"type":"minecraft:block","note":"v1"})"));
+        auto initial{f.initial_view()};
+        expect(initial != nullptr);
+        if (!initial) {
+            return;
+        }
+        app::content_reload service{
+            app::content_view_snapshot{.generation = 1, .view = initial},
+            f.enabled_options(),
+            [dir = f.pack_dir] { return build_view(dir); }};
+        // Changing the document digest without changing the entry name keeps
+        // every name chunk generation resolves; the published line says the
+        // chunk output is unchanged.
+        expect(write_file(f.pack_dir, "data/test/block/ruby.json",
+                          R"({"type":"minecraft:block","note":"v2"})"));
+        expect(static_cast<bool>(service.request()));
+        const auto committed{wait_for_commit(service)};
+        expect(committed.published);
+        expect(committed.registry_generation_published);
+        expect(service.registry_generation() == 2U);
+        bool names_unchanged{false};
+        for (const auto &line : committed.lines) {
+            names_unchanged =
+                names_unchanged ||
+                line.find("entry names are unchanged") != std::string::npos;
+        }
+        expect(names_unchanged);
+        const auto live{service.snapshot()};
+        expect(live.registries != nullptr);
+        if (live.registries != nullptr) {
+            expect(live.registries->size(data::registry_kind::block) == 1U);
+        }
+    };
+
+    "content reload/refuses a registry generation the active path cannot "
+    "bind"_test = [] {
+        fixture f{};
+        auto initial{f.initial_view()};
+        expect(initial != nullptr);
+        if (!initial) {
+            return;
+        }
+        auto options{f.enabled_options()};
+        options.registry_generations = false;
+        options.registry_generation_unsupported_reason =
+            "the experimental chunk scheduler keeps its boot content";
+        app::content_reload service{
+            app::content_view_snapshot{.generation = 1, .view = initial},
+            options, [dir = f.pack_dir] { return build_view(dir); }};
+        expect(write_file(f.pack_dir, "data/test/block/ruby.json",
+                          R"({"type":"minecraft:block"})"));
+        expect(static_cast<bool>(service.request()));
+        const auto committed{wait_for_commit(service)};
+        expect(committed.failed);
+        expect(committed.restart_required);
+        expect(!committed.published);
+        expect(!committed.registry_generation_published);
+        expect(committed.error.find("data/test/block/ruby.json") !=
+               std::string::npos);
+        bool named_reason{false};
+        for (const auto &line : committed.lines) {
+            named_reason =
+                named_reason ||
+                line.find("experimental chunk scheduler") != std::string::npos;
+        }
+        expect(named_reason);
+        expect(service.generation() == 1U);
+        expect(service.registry_generation() == 1U);
+    };
 };

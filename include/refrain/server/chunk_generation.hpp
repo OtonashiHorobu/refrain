@@ -236,7 +236,11 @@ class chunk_generation {
         /// the scheduler benchmark hashes at one, four and eight workers. The
         /// flag stays off because the production tile path is still the only
         /// path with the full reference-oracle, spawn and viewport coverage; a
-        /// separate change switches the default once those are in place.
+        /// separate change switches the default once those are in place. A
+        /// composition that selects this path must also set
+        /// `content_reload_options::registry_generations` to false, because the
+        /// scheduler keeps its boot content and cannot bind a published
+        /// registry generation.
         bool experimental_chunk_pipeline{false};
         /// Proto chunks each worker's generator keeps when
         /// `experimental_chunk_pipeline` is on. Ignored by the tile path.
@@ -355,20 +359,28 @@ class chunk_generation {
     [[nodiscard]] auto in_flight() const -> std::size_t;
     [[nodiscard]] auto worker_count() const noexcept -> std::size_t;
 
-    /// Published content-view epoch the tile workers are bound to. It is
-    /// recorded when a worker creates its first generator and advances when a
-    /// worker rebuilds that generator for a newer published generation.
+    /// Newest published content-view epoch a tile worker has applied. A worker
+    /// that failed to bind a generation keeps serving the previous content and
+    /// does not record the unapplied epoch, so this value only advances.
+    /// Zero means no worker has applied a published generation yet.
     [[nodiscard]] auto bound_generation() const -> std::uint64_t;
 
-    /// Registry epoch of the content the tile workers are bound to.
+    /// Registry epoch of the content the tile workers applied. Advances with
+    /// `bound_generation()` and never regresses.
     [[nodiscard]] auto bound_registry_generation() const -> std::uint64_t;
 
     /// Generators rebuilt for a newer published content generation since
     /// start. Zero while the server runs without a reload.
     [[nodiscard]] auto generation_rebuilds() const -> std::uint64_t;
 
-    /// Rebuild attempts that failed and kept the previous generator serving.
+    /// Bind or rebuild attempts that failed and kept the previous generator
+    /// serving (or fell back to the boot generator on first creation).
     [[nodiscard]] auto generation_rebuild_failures() const -> std::uint64_t;
+
+    /// Generation compositions started by the workers. A published epoch is
+    /// composed once even when several workers need it at the same time; a
+    /// failed epoch is not composed again for the same published generation.
+    [[nodiscard]] auto generation_compose_attempts() const -> std::uint64_t;
 
     /// Stop every worker and join them.
     void stop();
@@ -424,10 +436,11 @@ class chunk_generation {
     /// the rest fail the same way and would only repeat the line.
     std::atomic<bool> generator_failure_reported_{false};
 
-    /// Bind a published snapshot to the installed roots, reusing the compose
-    /// result when another worker already built the same published generation.
-    /// The compose copies the installed datapack once per generation instead of
-    /// once per worker.
+    /// Bind a published snapshot to the installed roots with single-flight
+    /// composition: one worker composes a published epoch, concurrent workers
+    /// wait for that result (or its failure), and a later request for the same
+    /// epoch reuses the cached result. The installed datapack is composed once
+    /// per published generation, not once per worker.
     [[nodiscard]] auto
     bind_generation(const app::content_view_snapshot &snapshot)
         -> result<std::shared_ptr<const worldgen::generation_data>>;
@@ -456,12 +469,18 @@ class chunk_generation {
     /// worker.
     std::atomic<std::uint64_t> rebind_failure_reported_{0};
 
-    /// The compose result of the newest published generation. Worker
-    /// generators capture the shared pointer; an older generation stays alive
-    /// through the generator that still uses it.
+    /// Single-flight generation composition. One worker composes a published
+    /// epoch; the others wait for its result or its failure, so a publish never
+    /// composes the datapack tree once per worker. A late composition of an
+    /// older epoch never overwrites the cached newer one.
     mutable std::mutex generation_mutex_{};
+    std::condition_variable generation_cv_{};
+    std::uint64_t generation_in_flight_epoch_{0};
     std::uint64_t generation_cache_epoch_{0};
+    std::uint64_t generation_failed_epoch_{0};
+    std::string generation_failure_reason_{};
     std::shared_ptr<const worldgen::generation_data> generation_cache_{};
+    std::atomic<std::uint64_t> generation_compose_attempts_{0};
 };
 
 } // namespace refrain::server

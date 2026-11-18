@@ -81,8 +81,10 @@ struct dimension_generator_config {
     const block_tag_set *block_tags{nullptr};
     /// Block/item/entity registry mapping of the content generation the
     /// generator is bound to. Null for a boot generator. The mapping is
-    /// immutable and supplies the generation-scoped ids a per-generator state
-    /// table is seeded with, in content-key order.
+    /// immutable; the view-defined block names it carries seed a
+    /// per-generator state table in content-key order, while the numeric entry
+    /// ids are an identity for data-layer consumers and are not consumed by
+    /// chunk generation.
     std::shared_ptr<const data::registry_generation> registries{};
 };
 
@@ -96,6 +98,12 @@ struct dimension_generator_config {
 /// the view defines. A view that changes nothing chunk generation reads keeps
 /// the installed root untouched, so an ordinary recipe/loot reload costs no
 /// copy and produces the same chunks as the boot generator.
+///
+/// Tag documents merge with the datapack rules instead of replacing the
+/// installed file: `replace: true` clears the installed values and the lower
+/// view layers, otherwise the values append. Every tag kind follows the rule,
+/// so the biome tags feature predicates and structure matching read keep the
+/// installed values when a view adds to them.
 ///
 /// The object is immutable and shared by every worker generator bound to the
 /// same published view generation. The materialized tree is removed when the
@@ -186,6 +194,12 @@ class generation_data {
     std::shared_ptr<const generation_materialization> materialized_{};
     bool overlays_generation_content_{false};
 };
+
+/// Materialized content trees of this process that could not be removed when
+/// their last generator released them. A non-zero count means the temporary
+/// directory still holds a tree; the path was logged by the caller and an
+/// operator can remove it. Diagnostics for operators and tests.
+[[nodiscard]] auto materialization_cleanup_failures() noexcept -> std::uint64_t;
 
 /// Loaded dimension data that does not change during generation: the noise
 /// settings and their density documents, material documents and rule,
