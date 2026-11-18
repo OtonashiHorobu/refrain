@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <map>
 #include <optional>
+#include <ranges>
 #include <set>
 #include <span>
 #include <string>
@@ -42,7 +43,7 @@ using detail::lower_id;
 [[nodiscard]] auto describe_mod(std::string_view id, mod_origin origin,
                                 std::string_view version, std::string_view path)
     -> std::string {
-    return fmt::format("{}@{}(origin={}, path='{}')", id, version,
+    return fmt::format("{}@{} (origin={}, path='{}')", id, version,
                        to_string(origin), path);
 }
 
@@ -336,6 +337,173 @@ struct loader_ordering {
         std::unique(resolution.edges.begin(), resolution.edges.end()),
         resolution.edges.end());
     return resolution;
+}
+
+/// Does the gamepack name `id` explicitly? A pin in `[mods].list`, a provider
+/// candidate/instance/wrapper or a loader provider is the composition root's
+/// decision; a mod that only auto-discovery selected is not.
+[[nodiscard]] auto explicitly_declared(const mod::gamepack_spec &spec,
+                                       std::string_view id) -> bool {
+    if (spec.find_mod(id) != nullptr) {
+        return true;
+    }
+    for (const auto &binding : spec.providers) {
+        if (std::ranges::any_of(binding.candidates,
+                                [id](const mod::mod_requirement &candidate) {
+                                    return candidate.id == id;
+                                })) {
+            return true;
+        }
+        if (std::ranges::any_of(binding.instances,
+                                [id](const mod::provider_instance &instance) {
+                                    return instance.requirement.id == id;
+                                })) {
+            return true;
+        }
+        if (binding.base && binding.base->id == id) {
+            return true;
+        }
+        if (std::ranges::any_of(binding.wrappers,
+                                [id](const mod::mod_requirement &wrapper) {
+                                    return wrapper.id == id;
+                                })) {
+            return true;
+        }
+    }
+    return std::ranges::any_of(spec.loaders,
+                               [id](const mod::loader_provider &loader) {
+                                   return loader.provider.id == id;
+                               });
+}
+
+/// Canonical identity of a `[provides]` entry relative to one gamepack service
+/// slot: the slot itself for the contract that owns the slot (its short,
+/// namespaced and dotted spellings), the full contract id for a member of the
+/// slot's namespace. Two mods compete for the same contract only when these
+/// identities intersect, so a mod that provides `refrain:world.migration`
+/// does not collide with the `world` binding.
+[[nodiscard]] auto canonical_slot_service(std::string_view provided,
+                                          std::string_view slot)
+    -> std::optional<std::string> {
+    if (provided == slot || detail::equals_slot(provided, "refrain:", slot) ||
+        detail::equals_slot(provided, "refrain:net.", slot) ||
+        detail::equals_dotted_slot(provided, slot)) {
+        return std::string{slot};
+    }
+    if (detail::in_slot_namespace(provided, "refrain:", slot)) {
+        return std::string{provided};
+    }
+    return std::nullopt;
+}
+
+/// Contract identities a manifest claims within one gamepack slot.
+[[nodiscard]] auto provided_slot_services(const discovered_mod &mod,
+                                          std::string_view slot)
+    -> std::set<std::string> {
+    std::set<std::string> services{};
+    for (const auto &entry : mod.provides) {
+        if (auto canonical{canonical_slot_service(entry, slot)};
+            canonical.has_value()) {
+            services.insert(std::move(*canonical));
+        }
+    }
+    return services;
+}
+
+/// Provider ids of one resolved binding (base/active plus chain wrappers).
+[[nodiscard]] auto binding_provider_ids(const resolved_provider &binding)
+    -> std::set<std::string> {
+    std::set<std::string> ids{};
+    const auto add{[&ids](std::string_view reference) {
+        const auto at{reference.rfind('@')};
+        const auto id{reference.substr(0, at)};
+        if (!id.empty()) {
+            ids.emplace(id);
+        }
+    }};
+    add(binding.provider);
+    for (const auto &wrapper : binding.wrappers) {
+        add(wrapper);
+    }
+    return ids;
+}
+
+/// Fail closed when a discovery-only mod claims a provider slot the gamepack
+/// already binds.
+///
+/// Auto-discovery must not silently change which provider answers a service: a
+/// mod that was only selected by scanning is not allowed to compete with the
+/// gamepack's binding. The composition root can still choose it by naming it
+/// (a pin or a provider candidate), which turns the claim into a recorded
+/// warning instead of a failure.
+[[nodiscard]] auto check_provider_conflicts(
+    const mod::gamepack_spec &spec,
+    std::span<const discovered_mod *const> selected,
+    const std::map<std::string, const discovered_mod *> &selected_by_id,
+    std::span<const resolved_provider> providers,
+    std::vector<std::string> &warnings) -> status {
+    for (const auto &binding : providers) {
+        // Instanced services activate several providers by design; there is
+        // no single bound slot to compete for.
+        if (binding.mode == provider_mode::instanced) {
+            continue;
+        }
+        const auto active{binding_provider_ids(binding)};
+        std::set<std::string> bound_services{};
+        for (const auto &id : active) {
+            const auto found{selected_by_id.find(id)};
+            if (found == selected_by_id.end()) {
+                continue;
+            }
+            for (const auto &service :
+                 provided_slot_services(*found->second, binding.service)) {
+                bound_services.insert(service);
+            }
+        }
+        if (bound_services.empty()) {
+            continue; // data-only binding: no contract provider is active
+        }
+        for (const auto *mod : selected) {
+            if (active.contains(mod->id)) {
+                continue;
+            }
+            const auto claimed{provided_slot_services(*mod, binding.service)};
+            const auto competes{std::ranges::any_of(
+                claimed, [&bound_services](const std::string &service) {
+                    return bound_services.contains(service);
+                })};
+            if (!competes) {
+                continue;
+            }
+            if (explicitly_declared(spec, mod->id)) {
+                warnings.push_back(fmt::format(
+                    "mod '{}' also provides service '{}', which the gamepack "
+                    "binds to '{}'; the explicit gamepack declaration wins",
+                    mod->id, binding.service, binding.provider));
+                continue;
+            }
+            const auto base{
+                binding.provider.substr(0, binding.provider.rfind('@'))};
+            const auto bound{selected_by_id.find(base)};
+            const auto candidate{bound == selected_by_id.end()
+                                     ? describe_mod(mod->id, mod->origin,
+                                                    mod->version, mod->path)
+                                     : describe_mod(bound->second->id,
+                                                    bound->second->origin,
+                                                    bound->second->version,
+                                                    bound->second->path)};
+            return std::unexpected{fail(
+                error_code::already_exists,
+                fmt::format(
+                    "resolve: discovered mod {} provides service '{}', "
+                    "which the gamepack already binds to {}; pin it in "
+                    "[mods].list and bind it under [providers].{} to "
+                    "choose it, or uninstall it",
+                    describe_mod(mod->id, mod->origin, mod->version, mod->path),
+                    binding.service, candidate, binding.service))};
+        }
+    }
+    return status_ok();
 }
 
 [[nodiscard]] auto
@@ -653,10 +821,6 @@ resolve_impl(const mod::gamepack_spec &spec,
               [](const locked_mod &lhs, const locked_mod &rhs) {
                   return lhs.id < rhs.id;
               });
-    std::sort(lock.warnings.begin(), lock.warnings.end());
-    const auto unique_end{
-        std::unique(lock.warnings.begin(), lock.warnings.end())};
-    lock.warnings.erase(unique_end, lock.warnings.end());
 
     // Topological load order for the host (the lock stays id-sorted).
     lock.load_order.reserve(ordered_by_dependency->size());
@@ -680,6 +844,22 @@ resolve_impl(const mod::gamepack_spec &spec,
     }
     lock.providers = std::move(*providers);
     lock.loaders = std::move(loaders->loaders);
+
+    // A discovered mod may declare a contract the gamepack already binds to a
+    // provider. That is a composition decision, not a load detail: fail closed
+    // naming both candidates unless the gamepack names the mod explicitly.
+    if (auto conflicts{check_provider_conflicts(spec, selected, selected_by_id,
+                                                lock.providers, lock.warnings)};
+        !conflicts) {
+        return std::unexpected{std::move(conflicts.error())};
+    }
+
+    // Warnings are audit text emitted as lock comments; sort them last so a
+    // warning appended by the provider check lands in canonical order.
+    std::sort(lock.warnings.begin(), lock.warnings.end());
+    const auto unique_end{
+        std::unique(lock.warnings.begin(), lock.warnings.end())};
+    lock.warnings.erase(unique_end, lock.warnings.end());
     return lock;
 }
 

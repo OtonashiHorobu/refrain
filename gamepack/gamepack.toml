@@ -4,15 +4,19 @@
 
 # Default gamepack: vanilla 26.3 first-party providers (server side).
 # Versions are SemVer 2.0.0; provider requirements are ranges.
-# auto_scan is off: mods are listed explicitly here instead of being
-# discovered from disk.
+# Discovery is on: a trusted mod installed into a content store joins the
+# composition without editing this file. The entries below stay authoritative:
+# they pin the built-in mods, bind every provider and declare the loaders, and
+# `mods.lock` records the resolved set. After an install or update, refresh the
+# lock explicitly (`refrain-server --update-lock --check`, or
+# `refrain-tools mods lock --write` from a development tree) before starting.
 
 [gamepack]
 id = "refrain.vanilla"
 version = "26.3.0"
 side = "server"
 abi = "1"
-auto_scan = false
+auto_scan = true
 
 [meta]
 display_name = "Refrain vanilla (server)"

@@ -222,15 +222,6 @@ missing_composition_mods(std::span<const std::string> ids,
     return missing;
 }
 
-/// Default `mods.lock` location: next to the gamepack it belongs to. Reuse
-/// the shared virtual-path helpers instead of hand-splitting separators in the
-/// composition root.
-[[nodiscard]] auto default_mods_lock_path(std::string_view gamepack_path)
-    -> std::string {
-    return refrain::data::join_path(refrain::data::parent_path(gamepack_path),
-                                    "mods.lock");
-}
-
 /// One configuration file written on a first start.
 struct default_config_file {
     std::string_view name;
@@ -649,7 +640,7 @@ int main(int argc, char **argv) {
     auto *update_lock_option =
         app.add_flag("--update-lock", update_lock,
                      "Rewrite an existing mods.lock when the composition "
-                     "drifted");
+                     "drifted (never rewritten silently)");
 
     // Startup content bootstrap. Every
     // option is inert unless --content-store is given, so the default startup
@@ -1088,9 +1079,10 @@ int main(int argc, char **argv) {
         // deliberately never read: gamepack.toml is the sole source.
         std::optional<refrain::mod::mod_lock> baseline{};
         if (effective_auto_scan) {
-            const auto lock_path{mods_lock.empty()
-                                     ? default_mods_lock_path(gamepack)
-                                     : mods_lock};
+            const auto lock_path{
+                mods_lock.empty()
+                    ? refrain::app::default_mods_lock_path(gamepack)
+                    : mods_lock};
             if (refrain::core::io::exists(lock_path)) {
                 auto stored{refrain::mod::read_mod_lock(lock_path)};
                 if (!stored) {
@@ -1605,7 +1597,8 @@ int main(int argc, char **argv) {
         }
 
         const auto lock_path{
-            mods_lock.empty() ? default_mods_lock_path(gamepack) : mods_lock};
+            mods_lock.empty() ? refrain::app::default_mods_lock_path(gamepack)
+                              : mods_lock};
         if (!refrain::core::io::exists(lock_path)) {
             auto written{refrain::mod::write_mod_lock(lock_path, lock)};
             if (!written) {
@@ -1661,17 +1654,33 @@ int main(int argc, char **argv) {
                 }
                 log_mods.info("updated lockfile {}", lock_path);
             } else {
-                const auto detail{
-                    verified
-                        ? fmt::format("fingerprint drift: lock says {}, "
-                                      "resolved {}",
-                                      stored->fingerprint(), lock.fingerprint())
-                        : verified.error().message};
+                // Never rewrite the lock silently: show the operator the diff
+                // and the exact resolve-only command that refreshes it. The
+                // same resolution runs without opening a world or a port.
+                std::string refresh{
+                    fmt::format("refrain-server --gamepack '{}'", gamepack)};
+                if (force_auto_scan) {
+                    refresh += " --auto-scan";
+                }
+                if (no_auto_scan) {
+                    refresh += " --no-auto-scan";
+                }
+                for (const auto &root : installed_stores) {
+                    if (!content_store.empty() && root == content_store) {
+                        refresh += fmt::format(" --content-store '{}'", root);
+                    } else {
+                        refresh += fmt::format(" --mods '{}'", root);
+                    }
+                }
+                refresh += fmt::format(
+                    " --mods-lock '{}' --update-lock --check", lock_path);
                 return report_fatal(refrain::make_error(
                     refrain::error_code::version_mismatch,
-                    fmt::format("mods.lock: {} is out of date: {} (re-run with "
-                                "--update-lock to rewrite it)",
-                                lock_path, detail)));
+                    fmt::format("mods.lock: '{}' is out of date:\n{}\nrefresh "
+                                "it with: {}",
+                                lock_path,
+                                refrain::mod::format_lock_drift(*stored, lock),
+                                refresh)));
             }
         }
 

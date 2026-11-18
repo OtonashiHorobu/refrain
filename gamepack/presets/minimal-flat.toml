@@ -6,7 +6,8 @@
 # the default vanilla pack (vanilla-lite worldgen + RWF storage). It shows
 # that the composition root can swap providers purely through [providers];
 # the referenced providers are not part of this tree, so the preset exercises
-# resolution and the loading graph only.
+# resolution and the loading graph only. The composition is pinned explicitly;
+# discovery stays off.
 #
 #   refrain-tools gamepack check -f gamepack/presets/minimal-flat.toml
 #   refrain-server --gamepack gamepack/presets/minimal-flat.toml --dump-gamepack

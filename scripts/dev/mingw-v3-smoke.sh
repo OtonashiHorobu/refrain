@@ -77,6 +77,7 @@ set +e
         --eula-file "$WORK/eula.toml" --accept-eula \
         --data-dir "$DATA" --no-data-download \
         --world "$WORK/rwf" --config-dir "$WORK/config" \
+        --mods-lock "$WORK/mods.lock" \
         --hash-every 5 --ticks "$TICKS"
 ) >"$LOG" 2>&1
 status=$?

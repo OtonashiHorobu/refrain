@@ -266,8 +266,9 @@ grep -q '\[mods\]: wrote lockfile' "$EXTRACT_DIR/auto-scan-1.txt" \
     || die "auto_scan: lock was not written"
 grep -q 'refrain.test.extra@1.0.0' "$EXTRACT_DIR/auto-scan-1.txt" \
     || die "auto_scan: installed mod missing from the lock"
+# Discovery is on by default: this run passes no scan flag and still verifies.
 "$BIN_DIR/refrain-server" --gamepack "$ROOT/gamepack/gamepack.toml" \
-    --mods "$MODS_STORE" --auto-scan \
+    --mods "$MODS_STORE" \
     --mods-lock "$SERVER_LOCK" --check >"$EXTRACT_DIR/auto-scan-2.txt" 2>&1
 grep -q '\[mods\]: verified' "$EXTRACT_DIR/auto-scan-2.txt" \
     || die "auto_scan: existing lock was not verified"
@@ -329,6 +330,19 @@ PY
     --store "$MODS_STORE" \
     --policy-file "$ROOT/test/fixtures/install-policy/dev-unsigned.toml" \
     >"$MODS_SRC/install-2.txt"
+# The explicit refresh path reports the same drift without starting the server;
+# it is a check by default, so it must not touch the lock.
+cp "$SERVER_LOCK" "$EXTRACT_DIR/lock-before-tools.lock"
+if "$BIN_DIR/refrain-tools" mods lock \
+    -g "$ROOT/gamepack/gamepack.toml" --mods "$MODS_STORE" \
+    --image "$BIN_DIR/../generated/builtin.image" \
+    --lock "$SERVER_LOCK" >"$EXTRACT_DIR/tools-lock-drift.txt" 2>&1; then
+    die "mods lock accepted a drifted install without --write"
+fi
+grep -q 'version drift' "$EXTRACT_DIR/tools-lock-drift.txt" \
+    || die "mods lock: drift report does not mention version drift"
+cmp "$SERVER_LOCK" "$EXTRACT_DIR/lock-before-tools.lock" \
+    || die "mods lock rewrote the lock without --write"
 if "$BIN_DIR/refrain-server" --gamepack "$ROOT/gamepack/gamepack.toml" \
     --mods "$MODS_STORE" --auto-scan \
     --mods-lock "$SERVER_LOCK" --check >"$EXTRACT_DIR/auto-scan-drift.txt" 2>&1; then
@@ -342,6 +356,23 @@ grep -q 'version drift' "$EXTRACT_DIR/auto-scan-drift.txt" \
     >"$EXTRACT_DIR/auto-scan-update.txt" 2>&1
 grep -q '\[mods\]: updated' "$EXTRACT_DIR/auto-scan-update.txt" \
     || die "auto_scan: --update-lock did not rewrite the drifted lock"
+# The refresh command resolves through the server's own path: the lock it
+# writes is byte-identical to the server's --update-lock output, and a second
+# run verifies it instead of rewriting it.
+"$BIN_DIR/refrain-tools" mods lock \
+    -g "$ROOT/gamepack/gamepack.toml" --mods "$MODS_STORE" \
+    --image "$BIN_DIR/../generated/builtin.image" \
+    --lock "$EXTRACT_DIR/tools.lock" --write >"$EXTRACT_DIR/tools-lock-write.txt"
+grep -q 'lock: .* written' "$EXTRACT_DIR/tools-lock-write.txt" \
+    || die "mods lock: --write did not report a written lock"
+cmp "$SERVER_LOCK" "$EXTRACT_DIR/tools.lock" \
+    || die "mods lock resolution differs from the server's lock"
+"$BIN_DIR/refrain-tools" mods lock \
+    -g "$ROOT/gamepack/gamepack.toml" --mods "$MODS_STORE" \
+    --image "$BIN_DIR/../generated/builtin.image" \
+    --lock "$EXTRACT_DIR/tools.lock" >"$EXTRACT_DIR/tools-lock-check.txt" 2>&1
+grep -q 'lock: .* up to date' "$EXTRACT_DIR/tools-lock-check.txt" \
+    || die "mods lock: a second run did not verify the written lock"
 "$BIN_DIR/refrain-tools" mods list --mods "$MODS_STORE" \
     --gamepack "$ROOT/gamepack/gamepack.toml" \
     --image "$BIN_DIR/../generated/builtin.image" \
@@ -378,11 +409,11 @@ if grep -REn 'scan_mod_manifests|collect_mod_tree|resolve_gamepack' \
     die "duplicate mod pipeline implementation found (see duplicate-pipeline.txt)"
 fi
 
-# Explicit mod inputs with auto_scan disabled are a usage error (exit 2),
-# never a silent no-op.
+# Explicit mod inputs with discovery disabled by the documented opt-out are a
+# usage error (exit 2), never a silent no-op.
 set +e
 "$BIN_DIR/refrain-server" --gamepack "$ROOT/gamepack/gamepack.toml" \
-    "${CI_SERVER_ARGS[@]}" --mods "$MODS_STORE" \
+    "${CI_SERVER_ARGS[@]}" --no-auto-scan --mods "$MODS_STORE" \
     >"$EXTRACT_DIR/auto-scan-off.txt" 2>&1
 AUTO_SCAN_OFF_STATUS=$?
 set -e
@@ -662,6 +693,7 @@ JSON
 "$BIN_DIR/refrain-server" --gamepack "$ROOT/gamepack/gamepack.toml" \
     --content-store "$STARTUP_STORE" --content-inbox "$RUNTIME_INBOX" \
     --content-composition test-gp --datapack "$RUNTIME_PACK" --check \
+    --mods-lock "$RUNTIME_DIR/mods.lock" \
     >"$RUNTIME_DIR/server.txt" 2>&1 \
     || die "runtime content: server failed to mount the content layers"
 grep -q '\[content\]: loaded 2 content layers and 5 files' \
@@ -676,7 +708,9 @@ mkdir -p "$RUNTIME_BAD_PACK/data/refrain_test/recipe"
 printf '{"type":"minecraft:crafting_shaped"' \
     >"$RUNTIME_BAD_PACK/data/refrain_test/recipe/bad.json"
 if "$BIN_DIR/refrain-server" --gamepack "$ROOT/gamepack/gamepack.toml" \
-    --datapack "$RUNTIME_BAD_PACK" --check >"$RUNTIME_DIR/server-bad.txt" 2>&1; then
+    --datapack "$RUNTIME_BAD_PACK" --check \
+    --mods-lock "$RUNTIME_DIR/mods-bad.lock" \
+    >"$RUNTIME_DIR/server-bad.txt" 2>&1; then
     die "runtime content: malformed datapack JSON was accepted"
 fi
 grep -q 'data/refrain_test/recipe/bad.json' "$RUNTIME_DIR/server-bad.txt" \
@@ -1005,6 +1039,7 @@ echo "  content: 4 file(s) -> 3 blob(s) (2 in segments), deterministic RFRX, whe
     --dump-gamepack 2>&1 | grep -q '\[content\]: loaded 14 content files totaling' \
     || die "server did not load the embedded built-in image"
 "$BIN_DIR/refrain-server" --gamepack "$ROOT/gamepack/gamepack.toml" --check \
+    --mods-lock "$EXTRACT_DIR/server-startup.mods.lock" \
     >"$EXTRACT_DIR/server-startup.txt" 2>&1 \
     || die "server did not start the vanilla composition"
 grep -q '\[host\]: loaded 13 mods' "$EXTRACT_DIR/server-startup.txt" \
@@ -1129,6 +1164,7 @@ EOF
 for run in 1 2; do
     "$BIN_DIR/refrain-server" --gamepack "$ROOT/gamepack/gamepack.toml" \
         "${CI_SERVER_ARGS[@]}" --config-dir "$WORLD_ROOT/config-run$run" \
+        --mods-lock "$WORLD_ROOT/runtime.mods.lock" \
         --world "$WORLD_ROOT/rwf" --script "$RUNTIME_SCRIPT" \
         --hash-every 5 --ticks 20 >"$WORLD_ROOT/runtime-$run.log" 2>&1 \
         || die "runtime smoke run $run failed"
@@ -1151,6 +1187,7 @@ cat >"$SCHEDULE_SCRIPT" <<'EOF'
 EOF
 "$BIN_DIR/refrain-server" --gamepack "$ROOT/gamepack/gamepack.toml" \
     "${CI_SERVER_ARGS[@]}" --config-dir "$WORLD_ROOT/config-schedule" \
+    --mods-lock "$WORLD_ROOT/runtime.mods.lock" \
     --world "$WORLD_ROOT/rwf" --script "$SCHEDULE_SCRIPT" \
     --autosave-interval-ticks 2 --ticks 10 \
     >"$WORLD_ROOT/schedule.log" 2>&1 \
@@ -1195,7 +1232,8 @@ mkdir -p "$FIRST_RUN_DIR/config"
 cp -R "$WORLD_ROOT/rwf" "$FIRST_RUN_DIR/world"
 cp -R "$CI_DATA_DIR" "$FIRST_RUN_DIR/data"
 printf 'port = 0\n' >"$FIRST_RUN_DIR/config/network.toml"
-( cd "$FIRST_RUN_DIR" && "$BIN_DIR/refrain-server" --accept-eula --ticks 10 ) \
+( cd "$FIRST_RUN_DIR" && "$BIN_DIR/refrain-server" --accept-eula --ticks 10 \
+    --mods-lock "$FIRST_RUN_DIR/mods.lock" ) \
     >"$FIRST_RUN_DIR/start1.log" 2>&1 \
     || die "first run: a start with defaults failed"
 grep -q '\[startup\]: .*serving Minecraft 26.3 with data version 5023' \
@@ -1217,6 +1255,7 @@ grep -q 'ready for Minecraft 26.3 clients' "$FIRST_RUN_DIR/start1.log" \
 # that succeeded proves the data directory was reused without the network.
 ( cd "$FIRST_RUN_DIR" && "$BIN_DIR/refrain-server" \
     --data-manifest-url "https://127.0.0.1:1/version_manifest_v2.json" \
+    --mods-lock "$FIRST_RUN_DIR/mods.lock" \
     --ticks 5 ) >"$FIRST_RUN_DIR/start2.log" 2>&1 \
     || die "first run: cache reuse tried to reach the network"
 grep -q 'game data for Minecraft 26.3 was reused from the local cache' \
@@ -1230,7 +1269,8 @@ mkdir -p "$FIRST_EMPTY_DIR"
 if "$BIN_DIR/refrain-server" --accept-eula \
     --eula-file "$FIRST_RUN_DIR/eula.toml" --no-data-download \
     --data-dir "$FIRST_EMPTY_DIR/data" --world "$WORLD_ROOT/rwf" \
-    --config-dir "$FIRST_EMPTY_DIR/config" --ticks 1 \
+    --config-dir "$FIRST_EMPTY_DIR/config" --mods-lock "$FIRST_EMPTY_DIR/mods.lock" \
+    --ticks 1 \
     >"$FIRST_EMPTY_DIR/no-data.log" 2>&1; then
     die "first run: --no-data-download started without any game data"
 fi
@@ -1246,7 +1286,8 @@ printf '{\n  "schema": "refrain.game-data/1",\n  "game_version": "25.0",\n  "dat
 if "$BIN_DIR/refrain-server" --accept-eula \
     --eula-file "$FIRST_RUN_DIR/eula.toml" --no-data-download \
     --data-dir "$FIRST_STALE_DIR" --world "$WORLD_ROOT/rwf" \
-    --config-dir "$FIRST_EMPTY_DIR/config-stale" --ticks 1 \
+    --config-dir "$FIRST_EMPTY_DIR/config-stale" \
+    --mods-lock "$FIRST_EMPTY_DIR/mods.lock" --ticks 1 \
     >"$FIRST_EMPTY_DIR/stale.log" 2>&1; then
     die "first run: a stale game data marker was accepted offline"
 fi
@@ -1335,7 +1376,8 @@ DIAG_CONSOLE_LOG="$DIAG_DIR/console.log"
     cd "$DIAG_DIR" || exit 1
     exec "$BIN_DIR/refrain-server" "${CI_SERVER_ARGS[@]}" \
         --gamepack "$ROOT/gamepack/gamepack.toml" --world world \
-        --config-dir config --ticks 0 </dev/null
+        --config-dir config --mods-lock "$DIAG_DIR/mods.lock" --ticks 0 \
+        </dev/null
 ) >"$DIAG_CONSOLE_LOG" 2>&1 &
 DIAG_PID=$!
 DIAG_READY=""
@@ -1384,7 +1426,8 @@ printf 'not a directory\n' >"$FALLBACK_DIR/logs"
     cd "$FALLBACK_DIR" || exit 1
     "$BIN_DIR/refrain-server" "${CI_SERVER_ARGS[@]}" \
         --gamepack "$ROOT/gamepack/gamepack.toml" --world "$WORLD_ROOT/rwf" \
-        --config-dir "$FALLBACK_DIR/config" --check
+        --config-dir "$FALLBACK_DIR/config" \
+        --mods-lock "$FALLBACK_DIR/mods.lock" --check
 ) >"$FALLBACK_DIR/check.log" 2>&1 \
     || die "server diagnostics smoke: a run with an unwritable log directory failed"
 grep -q 'file logging is disabled' "$FALLBACK_DIR/check.log" \

@@ -415,6 +415,121 @@ auto run_mods_list(const mods_list_options &options) -> int {
     return 0;
 }
 
+auto default_mods_lock_path(std::string_view gamepack_path) -> std::string {
+    const auto parent{data::parent_path(gamepack_path)};
+    return parent.empty() ? std::string{"mods.lock"}
+                          : data::join_path(parent, "mods.lock");
+}
+
+/// `mods lock`: resolve the same composition the server resolves and report or
+/// write the deterministic `mods.lock`. The command deliberately shares
+/// `resolve_server_mods` with startup: a second resolution path would let the
+/// written lock and the verified lock disagree.
+auto run_mods_lock(const mods_lock_options &options) -> int {
+    if (options.gamepack.empty()) {
+        return report_error(
+            refrain::make_error(refrain::error_code::invalid_argument,
+                                "mods lock: --gamepack <path> is required"));
+    }
+    auto spec{mod::load_gamepack_spec(options.gamepack, options.side)};
+    if (!spec) {
+        return report_error(spec.error());
+    }
+
+    // The builtin image is optional: a gamepack whose pinned mods are all
+    // installed receipts resolves without it. A missing builtin seed then
+    // surfaces as the resolver's "pinned mod was not discovered" error.
+    std::vector<std::byte> image_bytes{};
+    std::span<const std::byte> image_span{};
+    if (!options.image.empty()) {
+        auto image{io::read_file(options.image)};
+        if (!image) {
+            return report_error(image.error());
+        }
+        image_bytes = std::move(*image);
+        image_span = std::span<const std::byte>{image_bytes};
+    }
+
+    // Explicit roots must be content stores, so a typo cannot resolve to an
+    // empty catalog and silently drop installed mods.
+    for (const auto &root : options.roots) {
+        if (!io::is_directory(root)) {
+            return report_error(refrain::make_error(
+                refrain::error_code::invalid_argument,
+                fmt::format("mods lock: mod store root '{}' is not a "
+                            "directory",
+                            root)));
+        }
+    }
+
+    auto plan{resolve_server_mods(
+        *spec, server_mods_options{.installed_stores = options.roots,
+                                   .builtin_image = image_span,
+                                   .discovery = mod::discover_options{
+                                       .require_mods_dir = true}})};
+    if (!plan) {
+        return report_error(plan.error());
+    }
+    plan->profile = version::mod_profile;
+    plan->build_id = version::mod_build_id;
+
+    const auto lock_path{options.lock.empty()
+                             ? default_mods_lock_path(options.gamepack)
+                             : options.lock};
+    const auto summary = [&plan, &lock_path](std::string_view state) {
+        return fmt::format("lock: {} {} (fingerprint {}, {} mod(s))\n",
+                           lock_path, state, plan->fingerprint(),
+                           plan->mods.size());
+    };
+
+    if (io::exists(lock_path)) {
+        auto stored{mod::read_mod_lock(lock_path)};
+        if (!stored) {
+            return report_error(stored.error());
+        }
+        if (auto build{check_lock_profile(*stored)}; !build) {
+            return report_error(build.error());
+        }
+        const auto verified{mod::verify_mod_lock(*stored, plan->load_order)};
+        const bool drifted{!verified ||
+                           stored->fingerprint() != plan->fingerprint()};
+        if (!drifted) {
+            std::cout << summary("up to date");
+            return 0;
+        }
+        std::cout << fmt::format("lock: {} is out of date:\n{}\n", lock_path,
+                                 mod::format_lock_drift(*stored, *plan));
+        if (!options.write) {
+            return report_error(refrain::make_error(
+                refrain::error_code::version_mismatch,
+                fmt::format("mods lock: '{}' is out of date; re-run with "
+                            "--write to update it",
+                            lock_path)));
+        }
+        auto written{mod::write_mod_lock(lock_path, *plan)};
+        if (!written) {
+            return report_error(written.error());
+        }
+        std::cout << summary("updated");
+        return 0;
+    }
+
+    if (!options.write) {
+        std::cout << summary("is missing; re-run with --write to create it");
+        return report_error(refrain::make_error(
+            refrain::error_code::not_found,
+            fmt::format("mods lock: '{}' is missing; re-run with --write to "
+                        "create it",
+                        lock_path)));
+    }
+    auto written{mod::write_mod_lock(lock_path, *plan)};
+    if (!written) {
+        return report_error(written.error());
+    }
+    std::cout << summary("written");
+    return 0;
+}
+
 // --- mod host (load built-in mods) -----------------------------------------
 
 auto run_mods_load(const mods_load_options &options) -> int {

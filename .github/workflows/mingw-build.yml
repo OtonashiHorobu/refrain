@@ -159,7 +159,8 @@ jobs:
               (
                 cd "$work"
                 xvfb-run -a wine /src/build/Release/bin/refrain-server.exe \
-                  --gamepack /src/gamepack/gamepack.toml --check
+                  --gamepack /src/gamepack/gamepack.toml \
+                  --mods-lock "$work/mods.lock" --check
               ) >"$work/check.log" 2>&1
               test -s "$work/logs/refrain.log"
               test -d "$work/crash"

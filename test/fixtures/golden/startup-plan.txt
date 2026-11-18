@@ -1,4 +1,4 @@
-gamepack refrain.vanilla@26.3.0 (side=server, abi=1, auto_scan=false)
+gamepack refrain.vanilla@26.3.0 (side=server, abi=1, auto_scan=true)
 display name: Refrain vanilla (server)
 mods: 13 (load order)
    1. refrain.content.vanilla@1.0.0

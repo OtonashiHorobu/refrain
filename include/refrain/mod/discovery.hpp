@@ -462,4 +462,13 @@ struct composition_load_options {
 /// list`): gamepack id@version, fingerprint and every mod with origin/hash.
 [[nodiscard]] auto format_mod_lock(const mod_lock &lock) -> std::string;
 
+/// Id-sorted difference between a stored lock and a freshly resolved one: one
+/// line per added, removed or changed mod (`version drift`, `abi drift`,
+/// `origin drift`, `manifest hash drift`) plus the gamepack and fingerprint
+/// change. Host-local `path` values are not compared, so moving an instance
+/// never shows up as drift. A lock that matches `resolved` formats as a single
+/// `no drift` line; the comparison itself is never silent.
+[[nodiscard]] auto format_lock_drift(const mod_lock &stored,
+                                     const mod_lock &resolved) -> std::string;
+
 } // namespace refrain::mod

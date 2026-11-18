@@ -997,4 +997,45 @@ mod_loader = "refrain.content.vanilla@^1.0.0"
     };
 };
 
+// ---------------------------------------------------------------------------
+// shipped manifests
+// ---------------------------------------------------------------------------
+
+const suite shipped_gamepack_tests = [] {
+    "gamepack/shipped default enables discovery and keeps its pins"_test = [] {
+        const auto path{(std::filesystem::path{REFRAIN_SOURCE_DIR} /
+                         "gamepack/gamepack.toml")
+                            .string()};
+        auto spec{mod::load_gamepack_spec(path, "server")};
+        expect(static_cast<bool>(spec)) << path;
+        if (!spec) {
+            return;
+        }
+        expect(spec->auto_scan)
+            << "the shipped gamepack must discover installed mods";
+        expect(!spec->mods.empty());
+        const auto plan{mod::preview_composition(*spec)};
+        expect(static_cast<bool>(plan));
+        if (plan) {
+            expect(plan->providers.size() >= 10U);
+        }
+    };
+
+    "gamepack/shipped presets pin their composition explicitly"_test = [] {
+        for (const auto *name : {"data-only", "minimal-flat"}) {
+            const auto path{(std::filesystem::path{REFRAIN_SOURCE_DIR} /
+                             "gamepack/presets" / (std::string{name} + ".toml"))
+                                .string()};
+            auto spec{mod::load_gamepack_spec(path, "server")};
+            expect(static_cast<bool>(spec)) << path;
+            if (!spec) {
+                continue;
+            }
+            expect(!spec->auto_scan) << name;
+            const auto plan{mod::preview_composition(*spec)};
+            expect(static_cast<bool>(plan)) << name;
+        }
+    };
+};
+
 } // namespace

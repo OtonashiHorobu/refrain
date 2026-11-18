@@ -4,7 +4,8 @@
 
 # Data-only composition: vanilla content + data layer, no world/sim/net
 # providers. Used by tests and the CI smoke to load the built-in mods through
-# the mod host without requiring the game providers.
+# the mod host without requiring the game providers. This preset pins its
+# composition explicitly and keeps discovery off.
 #
 #   refrain-tools mods load -g gamepack/presets/data-only.toml \
 #       --image build/Release/generated/builtin.image

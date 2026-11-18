@@ -40,6 +40,10 @@ mods-check-slots-summary | stdout | 0      | 1 undeclared provider warning(s) | 
 # side-loading is not a load path).
 mods-list-candidate     | stdout | 0       | mods: 0 candidate(s) | refrain-tools mods list --mods {root}/test/fixtures/instance
 mods-load-host          | stdout | 0       | mod host: 13 mod(s) loaded | refrain-tools mods load -g {root}/gamepack/gamepack.toml --image {build}/generated/builtin.image
+# Discovery is on by default; explicit mod inputs with the opt-out are still a
+# usage error, and the lock refresh command reports without writing by default.
+server-auto-scan-opt-out | stderr | nonzero | require auto_scan | refrain-server --gamepack {root}/gamepack/gamepack.toml --no-auto-scan --mods {root}/test/fixtures/instance --check
+mods-lock-dry-run       | stdout | nonzero | is missing; re-run with --write | refrain-tools mods lock -g {root}/gamepack/gamepack.toml --image {build}/generated/builtin.image --lock {build}/generated/cli-contract-mods.lock
 data-check-validate     | stdout | 0       | validate: OK | refrain-tools data check --pack {root}/test/fixtures/datapack
 data-registry-recipe    | stdout | 0       | registry recipe: 1 entry(s) fingerprint= | refrain-tools data registry --pack {root}/test/fixtures/datapack
 server-plan-stdout      | stdout | 0       | refrain.worldgen.vanilla@1.0.0 | refrain-server --gamepack {root}/gamepack/gamepack.toml --dump-gamepack
