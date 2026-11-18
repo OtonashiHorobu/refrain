@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: MIT
+#
+# SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
+#
+# Synthetic provider mod used by the CLI contract: declares the dotted network
+# session contract, so the `net_session` gamepack slot is covered.
+
+[mod]
+id = "refrain.test.session"
+version = "1.0.0"
+abi = "1"
+side = "server"
+
+[meta]
+display_name = "Test session provider"
+description = "Declares refrain:net.session for the net_session slot."
+
+[provides]
+services = ["refrain:net.session"]
