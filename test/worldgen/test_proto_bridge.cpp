@@ -316,110 +316,6 @@ void fill_structure_fixture(worldgen::proto_chunk &chunk) {
     chunk.add_structure_reference("minecraft:mineshaft", 0, 1, 1);
 }
 
-auto step_of(std::string_view structure_id) -> std::string {
-    return structure_id == "minecraft:mineshaft" ? "underground_structures"
-                                                 : "surface_structures";
-}
-
-auto same_bounds(const worldgen::structure::structure_bbox &left,
-                 const worldgen::structure::structure_bbox &right) -> bool {
-    return left.min_x == right.min_x && left.min_y == right.min_y &&
-           left.min_z == right.min_z && left.max_x == right.max_x &&
-           left.max_y == right.max_y && left.max_z == right.max_z;
-}
-
-auto same_bounds_list(
-    const std::vector<worldgen::structure::structure_bbox> &left,
-    const std::vector<worldgen::structure::structure_bbox> &right) -> bool {
-    if (left.size() != right.size()) {
-        return false;
-    }
-    for (std::size_t index = 0; index < left.size(); ++index) {
-        if (!same_bounds(left[index], right[index])) {
-            return false;
-        }
-    }
-    return true;
-}
-
-auto same_piece(const structure_piece_record &left,
-                const structure_piece_record &right) -> bool {
-    if (left.type != right.type || left.min_x != right.min_x ||
-        left.min_y != right.min_y || left.min_z != right.min_z ||
-        left.max_x != right.max_x || left.max_y != right.max_y ||
-        left.max_z != right.max_z || left.orientation != right.orientation ||
-        left.template_id != right.template_id ||
-        left.template_x != right.template_x ||
-        left.template_y != right.template_y ||
-        left.template_z != right.template_z ||
-        left.template_rotation != right.template_rotation ||
-        left.template_mirror != right.template_mirror ||
-        left.template_pivot_x != right.template_pivot_x ||
-        left.template_pivot_y != right.template_pivot_y ||
-        left.template_pivot_z != right.template_pivot_z ||
-        left.height_position != right.height_position ||
-        left.height_offset != right.height_offset ||
-        left.integrity != right.integrity || left.large != right.large ||
-        left.beached != right.beached || left.overwrite != right.overwrite ||
-        left.sections != right.sections || left.rails != right.rails ||
-        left.spider != right.spider || left.two_floored != right.two_floored ||
-        left.mesa != right.mesa ||
-        !same_bounds_list(left.entrances, right.entrances) ||
-        left.children.size() != right.children.size()) {
-        return false;
-    }
-    for (std::size_t index = 0; index < left.children.size(); ++index) {
-        if (!same_piece(left.children[index], right.children[index])) {
-            return false;
-        }
-    }
-    if (left.jigsaw.has_value() != right.jigsaw.has_value()) {
-        return false;
-    }
-    if (left.jigsaw) {
-        const auto &a = *left.jigsaw;
-        const auto &b = *right.jigsaw;
-        if (a.element.kind != b.element.kind ||
-            a.element.projection != b.element.projection ||
-            a.element.template_id != b.element.template_id ||
-            a.element.processor_list != b.element.processor_list ||
-            a.element.feature != b.element.feature ||
-            a.ground_level_delta != b.ground_level_delta ||
-            a.liquid != b.liquid || a.junctions != b.junctions) {
-            return false;
-        }
-    }
-    return true;
-}
-
-auto same_start(const structure_start &left, const structure_start &right)
-    -> bool {
-    if (left.structure != right.structure || left.step != right.step ||
-        left.chunk_x != right.chunk_x || left.chunk_z != right.chunk_z ||
-        left.min_x != right.min_x || left.min_y != right.min_y ||
-        left.min_z != right.min_z || left.max_x != right.max_x ||
-        left.max_y != right.max_y || left.max_z != right.max_z ||
-        left.pieces.size() != right.pieces.size()) {
-        return false;
-    }
-    for (std::size_t index = 0; index < left.pieces.size(); ++index) {
-        if (!same_piece(left.pieces[index], right.pieces[index])) {
-            return false;
-        }
-    }
-    return true;
-}
-
-auto restored_starts(const chunk &stored) -> std::vector<structure_start> {
-    worldgen::block_state_registry states{};
-    (void)states.intern("minecraft:air", {.air = true});
-    worldgen::proto_chunk restored{states, 0, 0, -64, 384};
-    const auto status = restore_structures(stored, restored, step_of);
-    expect(status.has_value());
-    return std::vector<structure_start>{restored.structure_starts().begin(),
-                                        restored.structure_starts().end()};
-}
-
 } // namespace
 
 suite<"worldgen/proto-bridge"> proto_bridge_tests = [] {
@@ -900,18 +796,6 @@ suite<"worldgen/proto-bridge"> proto_bridge_tests = [] {
         if (plain_column) {
             expect(plain_column->structures.empty());
         }
-
-        // The stored records decode back into the generated ones.
-        auto restored = restored_starts(*converted);
-        expect(restored.size() == 3U);
-        std::map<std::string, structure_start> by_id{};
-        for (auto &start : restored) {
-            by_id.emplace(start.structure, std::move(start));
-        }
-        expect(by_id.size() == 3U);
-        expect(same_start(by_id["minecraft:shipwreck"], shipwreck_start()));
-        expect(same_start(by_id["minecraft:mineshaft"], mineshaft_start()));
-        expect(same_start(by_id["minecraft:village_plains"], jigsaw_start()));
     };
 
     "structure records survive the store and an Anvil round trip"_test = [&] {
@@ -985,133 +869,29 @@ suite<"worldgen/proto-bridge"> proto_bridge_tests = [] {
         // The Anvil import/export path carries the compound byte for byte, so
         // the exported chunk declares the same starts a vanilla reader accepts.
         expect(back->structures == converted->structures);
-        const auto restored = restored_starts(*back);
-        expect(restored.size() == 3U);
-        std::map<std::string, structure_start> by_id{};
-        for (const auto &start : restored) {
-            by_id.emplace(start.structure, start);
-        }
-        expect(by_id.size() == 3U);
-        expect(same_start(by_id["minecraft:shipwreck"], shipwreck_start()));
-        expect(same_start(by_id["minecraft:mineshaft"], mineshaft_start()));
-        expect(same_start(by_id["minecraft:village_plains"], jigsaw_start()));
-        std::map<std::pair<std::string, std::pair<std::int32_t, std::int32_t>>,
-                 std::int32_t>
-            expected_references{};
-        expected_references[{"minecraft:shipwreck", {1, 0}}] = 1;
-        expected_references[{"minecraft:village_plains", {-1, 0}}] = 2;
-        expected_references[{"minecraft:mineshaft", {0, 1}}] = 1;
-        std::map<std::pair<std::string, std::pair<std::int32_t, std::int32_t>>,
-                 std::int32_t>
-            actual_references{};
-        {
-            worldgen::block_state_registry restored_states{};
-            (void)restored_states.intern("minecraft:air", {.air = true});
-            worldgen::proto_chunk restored_chunk{restored_states, 0, 0, -64,
-                                                 384};
-            expect(
-                restore_structures(*back, restored_chunk, step_of).has_value());
-            for (const auto &reference :
-                 restored_chunk.structure_references()) {
-                actual_references[{reference.structure,
-                                   {reference.chunk_x, reference.chunk_z}}] =
-                    reference.count;
-            }
-        }
-        const bool references_match = actual_references == expected_references;
-        expect(references_match);
-    };
-
-    "a corrupt stored structure payload fails the reverse bridge"_test = [&] {
-        auto states = make_registry();
-        worldgen::proto_chunk source{states, 0, 0, -64, 384};
-        source.set_status(worldgen::chunk_status::terrain);
-        fill_structure_fixture(source);
-        const auto converted = from_proto_chunk(source, {"minecraft:plains"});
-        expect(converted.has_value());
-        if (!converted) {
+        // The imported chunk declares the same starts and references.
+        const auto imported_document = data::nbt::read(back->structures);
+        expect(imported_document.has_value());
+        if (!imported_document || imported_document->as_compound() == nullptr) {
             return;
         }
-        const auto restore = [&](const chunk &stored) {
-            worldgen::block_state_registry restored_states{};
-            (void)restored_states.intern("minecraft:air", {.air = true});
-            worldgen::proto_chunk restored{restored_states, 0, 0, -64, 384};
-            return restore_structures(stored, restored, step_of);
-        };
-        // Truncated NBT is not a compound.
-        {
-            auto corrupt = *converted;
-            corrupt.structures = {std::byte{0x0A}};
-            const auto restored = restore(corrupt);
-            expect(!restored);
-            if (!restored) {
-                expect(restored.error().code ==
-                       refrain::error_code::parse_error);
-            }
-        }
-        // A compound whose starts entry has the wrong shape is rejected
-        // instead of being treated as an empty structure list.
-        {
-            data::nbt::compound bad_root{};
-            bad_root["starts"] = data::nbt::make_int(1);
-            const auto bytes =
-                data::nbt::write(data::nbt::value{std::move(bad_root)}, "",
-                                 data::nbt::compression::none);
-            expect(bytes.has_value());
-            if (!bytes) {
-                return;
-            }
-            auto corrupt = *converted;
-            corrupt.structures = *bytes;
-            const auto restored = restore(corrupt);
-            expect(!restored);
-            if (!restored) {
-                expect(restored.error().code ==
-                       refrain::error_code::parse_error);
-            }
-        }
-        // An unknown piece id is malformed for the generated record model.
-        {
-            auto document = data::nbt::read(converted->structures);
-            expect(document.has_value());
-            if (!document || document->as_compound() == nullptr) {
-                return;
-            }
-            auto *starts = (*document->as_compound())["starts"].as_compound();
-            expect(starts != nullptr);
-            if (starts == nullptr) {
-                return;
-            }
-            auto &wreck = (*starts)["minecraft:shipwreck"];
-            auto *tag = wreck.as_compound();
-            expect(tag != nullptr);
-            if (tag == nullptr) {
-                return;
-            }
-            auto *children = (*tag)["Children"].as_list();
-            expect(children != nullptr && !children->items.empty());
-            if (children == nullptr || children->items.empty()) {
-                return;
-            }
-            auto *piece = children->items.front().as_compound();
-            expect(piece != nullptr);
-            if (piece == nullptr) {
-                return;
-            }
-            (*piece)["id"] = data::nbt::make_string("minecraft:unknown_piece");
-            const auto bytes =
-                data::nbt::write(*document, "", data::nbt::compression::none);
-            expect(bytes.has_value());
-            if (!bytes) {
-                return;
-            }
-            auto corrupt = *converted;
-            corrupt.structures = *bytes;
-            const auto restored = restore(corrupt);
-            expect(!restored);
-            if (!restored) {
-                expect(restored.error().code ==
-                       refrain::error_code::parse_error);
+        const auto *imported_root = imported_document->as_compound();
+        const auto *imported_references =
+            nbt_child(*imported_root, "References");
+        expect(imported_references != nullptr &&
+               imported_references->as_compound() != nullptr);
+        if (imported_references != nullptr &&
+            imported_references->as_compound() != nullptr) {
+            const auto &entries = *imported_references->as_compound();
+            const auto village = entries.find("minecraft:village_plains");
+            expect(village != entries.end());
+            if (village != entries.end()) {
+                const auto values = village->second.as_long_array();
+                expect(values.has_value() && values->size() == 2U);
+                if (values && values->size() == 2U) {
+                    expect((*values)[0] == packed_chunk_pos(-1, 0));
+                    expect((*values)[1] == packed_chunk_pos(-1, 0));
+                }
             }
         }
     };

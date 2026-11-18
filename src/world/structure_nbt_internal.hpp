@@ -4,17 +4,14 @@
 //
 // Codec between the generation structure records and the `structures` NBT
 // compound the vanilla chunk schema carries. `world::proto_bridge` uses it to
-// persist a generated column and to restore a stored one for generation.
+// persist a generated column.
 
 #pragma once
 
 #include <refrain/core/error.hpp>
 #include <refrain/worldgen/chunk/proto_chunk.hpp>
 
-#include <cstddef>
-#include <functional>
-#include <span>
-#include <string>
+#include <cstdint>
 #include <vector>
 
 namespace refrain::world::detail {
@@ -38,17 +35,5 @@ encode_structures(const std::vector<worldgen::structure_start> &starts,
                   const std::vector<worldgen::structure_reference> &references,
                   std::int32_t chunk_x, std::int32_t chunk_z)
     -> result<std::vector<std::byte>>;
-
-/// Restores the records `payload` carries into `target`. An empty payload
-/// restores nothing. A payload that is not the compound `encode_structures`
-/// writes fails with `parse_error`; so does a record outside the format's
-/// limits.
-///
-/// The reference derives a start's generation step from its structure registry
-/// entry instead of storing it, so the reverse bridge takes the same lookup
-/// from the caller; an empty lookup restores the starts with an empty step.
-[[nodiscard]] auto decode_structures(
-    std::span<const std::byte> payload, worldgen::proto_chunk &target,
-    const std::function<std::string(std::string_view)> &step_for) -> status;
 
 } // namespace refrain::world::detail

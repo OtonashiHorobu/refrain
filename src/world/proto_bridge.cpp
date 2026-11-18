@@ -223,9 +223,4 @@ auto from_proto_chunk(const worldgen::proto_chunk &source,
     return out;
 }
 
-auto restore_structures(const chunk &source, worldgen::proto_chunk &target,
-                        const structure_step_lookup &step_for) -> status {
-    return detail::decode_structures(source.structures, target, step_for);
-}
-
 } // namespace refrain::world
