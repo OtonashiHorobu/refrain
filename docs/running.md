@@ -490,14 +490,28 @@ revision is the base revision plus every wrapper revision, so a change in a
 wrapper invalidates the command tree exactly like a policy change, and
 `permissions reload` reloads the base and every wrapper. A wrapper the
 gamepack names but the host did not register fails composition, so the running
-server always has a complete chain. A running composition cannot change a chain
-link yet: a staged wrapper reload or uninstall is refused because the wrapper's
-provider slot is the default instance the base resolver occupies, so changing
-the wrapper set is a restart-level change. The provider does refresh its link
-set when the committed composition epoch changes and drops a wrapper the
-registry no longer holds; that path keeps the served chain consistent once a
-host can publish such a change, and the declared wrapper list is read on the
-first answer after startup.
+server always has a complete chain.
+
+A wrapper is hot-changeable, the base resolver is not. Every wrapper occupies
+its own provider slot next to the base's, so with the hot lifecycle gate
+enabled `mods reload <wrapper id>` and `mods uninstall <wrapper id>` stage a new
+chain generation without touching the base: the composed chain applies at the
+next tick boundary and the previous chain keeps answering until then. A wrapper
+loaded by a loader with clean or retire semantics can be swapped this way; the
+built-in `refrain.permissions` resolver is statically linked into the host, so
+reloading or uninstalling it still needs a restart. A staged change that moves a
+declared wrapper to another position (removing a wrapper declared before it,
+for example) is refused until that wrapper is rebuilt, because the position is
+the slot the wrapper occupies.
+
+Queries pin the chain they walk. Before the first wrapper is called, a query
+takes an in-flight lease on every wrapper slot it will consult and releases the
+leases when the answer is complete. A commit that retires or replaces a wrapper
+waits for those leases to drain before the loader's unload hook runs, so a query
+racing the commit finishes on the previous table instead of calling a retired
+one. A query that starts while the commit is switching the slots answers from
+the base resolver alone for that one call; the next epoch publishes the composed
+chain again. A failed stage changes neither the running chain nor the registry.
 
 The service publishes a monotonic revision for caches. The administration
 commands below re-read the file or change one rule at runtime, and every policy
@@ -786,6 +800,10 @@ composition keeps calling the current generation.
 - With a gate off nothing is staged. `mods install`/`mods uninstall` still
   change the content store and report `restart required`; `mods reload` is
   refused with the gate named. The change lands on the next start.
+- A chain wrapper is an ordinary hot-swappable provider: its own provider slot
+  is staged and published independently of the chain base, so a wrapper reload
+  or uninstall never touches the base's slot. This does not make the base
+  swappable; see [Permission administration](#permission-administration).
 
 A successful reload or uninstall does not disconnect players and does not
 unload chunks: the world keeps ticking with the same entities, chunks and

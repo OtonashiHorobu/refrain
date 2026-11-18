@@ -56,6 +56,21 @@ struct provider_handle {
     std::uint64_t epoch{0};
 };
 
+/// One committed view of every active slot of a service, read atomically with
+/// the epoch that numbered it.
+///
+/// `commit_epoch()` publishes every staged slot and advances the epoch in one
+/// critical section, so a snapshot observes either the whole previous
+/// generation or the whole committed one, never a mix of a retired slot and its
+/// replacement. That is the commitment point a resolver that reads several
+/// slots of one service has to agree on; each slot's `provider_handle` then
+/// pins that table for one call through `acquire()`.
+struct service_snapshot {
+    std::uint64_t epoch{0};
+    /// Active slots in ascending instance-name order.
+    std::vector<provider_handle> slots{};
+};
+
 /// Guard for one in-flight call into an active provider.
 ///
 /// A lease is acquired from the registry and releases its reference count when
@@ -325,6 +340,18 @@ class service_registry {
     [[nodiscard]] auto generation(std::string_view service,
                                   std::string_view instance = {}) const
         -> std::optional<std::uint64_t>;
+
+    /// Consistent snapshot of every active slot of `service` at the committed
+    /// epoch (see `service_snapshot`). A non-empty `instance_prefix` restricts
+    /// the result to slots whose instance name starts with it, which is how a
+    /// resolver addresses one composition role (for example a chain wrapper
+    /// slot) without knowing every instance of the service. A service with no
+    /// active slot returns an empty snapshot at the current epoch; slots that
+    /// are quiescing are still reported, and `acquire()` decides whether a
+    /// handle may still be called.
+    [[nodiscard]] auto snapshot(std::string_view service,
+                                std::string_view instance_prefix = {}) const
+        -> service_snapshot;
 
     /// Sorted names of the instances with an active provider for `service`
     /// (empty when the service has none). This is the runtime view of the

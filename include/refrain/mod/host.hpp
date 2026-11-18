@@ -22,6 +22,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <span>
 #include <string>
@@ -45,6 +46,35 @@ namespace refrain::mod {
 [[nodiscard]] auto host_allocator() noexcept -> refrain_allocator;
 
 namespace kernel = refrain::kernel;
+
+// ---------------------------------------------------------------------------
+// chain wrapper slots
+// ---------------------------------------------------------------------------
+//
+// A `chain` composition binding is one base provider plus ordered wrappers. The
+// base occupies the reserved default instance of the service; every wrapper
+// occupies its own instance named `chain:<position>`, where the position is the
+// wrapper's index in the declared wrapper list (innermost first, the same order
+// the gamepack names them). Query order is outermost first, so a consumer walks
+// the wrapper positions in descending order and calls the base last. The slot
+// name is a function of the composition binding, not of the provider
+// generation: a reloaded wrapper takes over the same slot at the composition
+// epoch, and the base slot is never touched by a wrapper change. A wrapper
+// whose declared position moves (because another wrapper was inserted or
+// removed before it) is refused by the host staging step until it is rebuilt.
+
+/// Instance name prefix of a chain wrapper slot; the rest of the name is the
+/// wrapper position.
+inline constexpr std::string_view chain_wrapper_instance_prefix{"chain:"};
+
+/// Instance name of the chain wrapper at `position` in the declared wrapper
+/// list.
+[[nodiscard]] auto chain_wrapper_instance(std::size_t position) -> std::string;
+
+/// Position encoded in `instance`, or nullopt when the name is not a chain
+/// wrapper slot (in particular for the reserved default instance).
+[[nodiscard]] auto chain_wrapper_position(std::string_view instance) noexcept
+    -> std::optional<std::size_t>;
 
 // Mod host: loads a resolved `mod::composition` against the
 // embedded built-in content image (RFSI v1) and the static mod registry.
@@ -114,9 +144,13 @@ struct provider_api {
 
 /// One service slot a loaded mod's provider occupies in the registry.
 ///
-/// `serial` identifies the exact registry candidate: a reloaded generation of
-/// the same provider has the same service/id/version text but a different
-/// serial, so the host removes only the retired candidate after a commit.
+/// `instance` names the composition slot: the reserved default instance for an
+/// exclusive provider or a chain base, the plan's instance name for an
+/// `instanced` binding, and the wrapper's `chain:<position>` instance for a
+/// chain wrapper. `serial` identifies the exact registry candidate: a reloaded
+/// generation of the same provider has the same service/id/version text but a
+/// different serial, so the host removes only the retired candidate after a
+/// commit.
 struct provided_slot {
     std::string service{};
     /// Registry instance the provider was activated on; empty is the reserved
@@ -352,6 +386,9 @@ class host {
     ///    `options.reload`, are rebuilt through their loader's `reload` slot;
     ///  * ids only in the running composition are quiesced and drained, and
     ///    their loader instance is retired after the commit;
+    ///  * a declared chain wrapper the next composition stops declaring has its
+    ///    `chain:<position>` provider slot retired at the commit even when its
+    ///    package stays loaded;
     ///  * every other mod is left untouched.
     ///
     /// Only changes requested at the tick boundary are published: the registry
@@ -396,11 +433,16 @@ class host {
     [[nodiscard]] auto commit_epoch() -> result<composition_commit>;
 
     /// Register a service provider during a static mod factory. The provider is
-    /// recorded as a candidate and activated on the default instance (all
-    /// service contracts are `exclusive`, so no other instance exists); the
-    /// service registry is frozen when `load()` completes. `api` is host-owned
-    /// (copied into stable storage); the vtable and `self` must outlive the
-    /// host (static provider instances).
+    /// recorded as a candidate and activated on the instance the plan binds
+    /// this mod to: the reserved default instance for an exclusive provider or
+    /// a chain base, and the mod's own `chain:<position>` instance when the
+    /// plan declares it as a chain wrapper. A chain wrapper therefore never
+    /// occupies the base slot, and a wrapper generation can be reloaded or
+    /// retired without touching the running base. A mod the plan binds as both
+    /// the chain base and a wrapper of one service fails closed.
+    ///
+    /// `api` is host-owned (copied into stable storage); the vtable and `self`
+    /// must outlive the host (static provider instances).
     ///
     /// The provider id is the currently loading mod id; `version` defaults to
     /// the mod version. Fails with `not_initialized` when called outside a
@@ -422,12 +464,14 @@ class host {
                            std::string_view version = {},
                            kernel::capability_bits capabilities = 0) -> status;
 
-    /// Instance-aware registration (an `instanced` composition binding):
-    /// activate the provider on the plan's instance slot. The plan must have
-    /// selected this mod for `service` on exactly that instance name; for an
-    /// exclusive or chain binding the only legal value is an empty string (the
-    /// reserved `default` slot). Anything else is `permission_denied`
-    /// (fail-closed).
+    /// Instance-aware registration (an `instanced` or `chain` composition
+    /// binding): activate the provider on the plan's instance slot. The plan
+    /// must have selected this mod for `service` on exactly that instance name.
+    /// For a chain wrapper the only legal name is the wrapper's own
+    /// `chain:<position>` slot (an empty `instance` selects it automatically);
+    /// the reserved default instance belongs to the chain base, so passing it
+    /// for a wrapper is `permission_denied` (fail-closed). Anything else is
+    /// `permission_denied` as well.
     auto register_provider(std::string_view service, std::string_view instance,
                            const provider_api &api,
                            std::string_view version = {},
@@ -548,10 +592,18 @@ class host {
         std::set<std::string> mods{};
         std::map<std::string, std::set<std::string>> slots{};
         /// mod id -> `[providers]` slot -> planned instance names. Only
-        /// `instanced` bindings populate this; exclusive/chain bindings keep it
-        /// empty (only the reserved default instance is legal).
+        /// `instanced` bindings populate this.
         std::map<std::string, std::map<std::string, std::set<std::string>>>
             instances{};
+        /// mod id -> `[providers]` slot -> chain wrapper instances the plan
+        /// binds this mod to. A chain wrapper position belongs to the plan, not
+        /// to the base slot, so a wrapper generation can be staged, replaced or
+        /// retired while the base keeps answering.
+        std::map<std::string, std::map<std::string, std::set<std::string>>>
+            chain_slots{};
+        /// mod id -> `[providers]` slots the plan binds as the reserved default
+        /// (exclusive provider or chain base).
+        std::map<std::string, std::set<std::string>> default_slots{};
     };
 
     /// One custom contract definition recorded from a loaded mod's manifest.
@@ -830,6 +882,12 @@ class host {
     /// Planned instance names per slot for the mod whose factory is running.
     std::map<std::string, std::set<std::string>>
         current_mod_planned_instances_{};
+    /// Chain wrapper instances per slot the plan binds the mod being dispatched
+    /// to (see `chain_wrapper_instance()`).
+    std::map<std::string, std::set<std::string>> current_mod_chain_slots_{};
+    /// Planned slots the mod being dispatched is the exclusive provider or
+    /// chain base of.
+    std::set<std::string> current_mod_default_slots_{};
     /// True when the plan selected the currently loading mod as a provider.
     bool current_mod_selected_provider_{false};
     /// Manifest and candidate of the mod being dispatched, borrowed for the
@@ -901,6 +959,11 @@ class host {
     /// with the reason to report to the loader after the commit.
     std::vector<loaded_mod> staged_retire_mods_{};
     std::vector<std::pair<std::string, unload_reason>> staged_retire_reasons_{};
+    /// Chain wrapper slots the staged composition stops declaring while their
+    /// package stays loaded. They are retired at the commit like the slots of a
+    /// retiring generation, so the composed chain never keeps calling a
+    /// provider the plan no longer declares.
+    std::vector<provided_slot> staged_retired_chain_slots_{};
     /// Bounded drain wait the staged change requested.
     std::chrono::milliseconds staged_drain_timeout_{default_drain_timeout};
     /// Registry slots the current mod factory activated.

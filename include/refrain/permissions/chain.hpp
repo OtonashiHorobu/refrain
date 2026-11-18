@@ -27,10 +27,13 @@
 //
 // Lifetime: a chain borrows its links. The owner keeps every linked provider
 // table and instance valid for as long as the chain is published, and changes
-// the link set by building a new chain instead of mutating the old one. A
-// composition that retires a link while queries may still run against it must
-// drain those queries first, the same rule the host applies to any cached
-// provider generation.
+// the link set by building a new chain instead of mutating the old one. A walk
+// is pinned by its owner: the composition root acquires one host provider lease
+// per wrapper before the walk and releases the leases when the answer is
+// complete, so a commit that retires a wrapper drains the walk before unloading
+// the table. A link whose slot is already quiescing cannot be leased, and the
+// owner then answers from the base resolver alone for that one walk instead of
+// calling a table the commit is retiring.
 //
 // Revision and reload: the chain revision is the base revision plus the sum of
 // the wrapper revisions. Every link's revision is monotonic by contract, so the
