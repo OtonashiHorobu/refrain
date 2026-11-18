@@ -11,6 +11,7 @@
 #include <refrain/core/error.hpp>
 #include <refrain/worldgen/chunk/proto_chunk.hpp>
 
+#include <cstddef>
 #include <cstdint>
 #include <vector>
 

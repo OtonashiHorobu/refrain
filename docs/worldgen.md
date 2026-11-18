@@ -766,11 +766,11 @@ position and one vanilla piece tag per piece, and a `References` compound of
 packed chunk positions, with the reference multiplicity kept. A column with no structure data keeps the
 field empty, and a record the compound cannot represent fails the conversion
 instead of losing a start silently. An Anvil export of a generated world
-therefore declares the structures the reference reader expects. Restoring the
-stored records into a generation chunk so a loaded column takes part in
-structure continuation is not wired into the runtime yet: the stored compound
-does not carry the generation step of a structure or the template-derived
-placement state, both of which the restore direction needs from the caller.
+therefore declares the structures the reference reader expects. Restoring
+persisted starts into generation is a separate capability: a loaded column
+does not take part in structure continuation because the stored compound does
+not carry the generation step of a structure or the template-derived placement
+state the restore direction needs from the caller.
 What the client receives from these records is covered in
 [architecture](architecture.md#generated-entities). Capped processor lists decode and run their
 delegate over the whole piece; every positive integer provider type of 26.3
