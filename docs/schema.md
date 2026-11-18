@@ -312,6 +312,7 @@ versions named. The schema hash identifies the build; it is not a version.
 |---|---|---|
 | `refrain:data.packs` | 1.0.0 | exclusive |
 | `refrain:mod.loader` | 1.2.0 | instanced |
+| `refrain:script.host` | 1.0.0 | sealed |
 | `refrain:net.protocol` | 2.1.0 | instanced |
 | `refrain:net.session` | 1.0.0 | exclusive |
 | `refrain:net.translator` | 1.0.0 | exclusive |
@@ -350,6 +351,21 @@ starts with `struct_size`, and its error enum starts at one so a failed
 `validate`/`load`/`unload`/`reload` never collides with `REFRAIN_STATUS_OK`.
 The unload semantics enum is `u8` because it is a small closed set carried in
 the fixed capabilities struct.
+
+`refrain:script.host` is the execution counterpart of the loader contract: the
+host bootstrap registers one sealed instance that invokes an exported guest
+callback by its instance handle, under per-call instruction and wall-clock
+budgets, and quarantines an instance whose call traps. It is a separate service
+because loading and calling evolve independently: the loader contract describes
+composition-time lifecycle (`validate`, `load`, `unload`, `reload`) that every
+loader implements, while guest execution exists only for sandboxed script
+runtimes and adds its own budgets, error codes and quarantine state. Its
+`script_error` enum starts at one like the loader's, and it owns no provider
+table or handle beyond the loader's own instance handle. A callback name is a
+bounded identifier and the argument payload is a bounded byte view, so the
+contract cannot carry a host handle or a vtable across the boundary. Appending
+imports or callbacks to the guest surface bumps the script host's minor version;
+changing the call method or its request layout bumps the major version.
 
 ## See also
 

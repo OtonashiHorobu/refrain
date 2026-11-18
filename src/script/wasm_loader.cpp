@@ -5,12 +5,16 @@
 #include <refrain/script/loaders.hpp>
 
 #include <refrain/contracts/services/mod_loader.hpp>
+#include <refrain/contracts/services/script_host.hpp>
 #include <refrain/core/log.hpp>
 #include <refrain/mod/entry.h>
+#include <refrain/mod/host.hpp>
 #include <refrain/mod/loader.hpp>
 #include <refrain/mod/package.hpp>
 #include <refrain/script/wasm.hpp>
 
+#include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -30,6 +34,7 @@ namespace refrain::script::wasm {
 namespace {
 
 namespace loader_abi = refrain::services::mod_loader;
+namespace script_abi = refrain::services::script_host;
 namespace contracts = refrain::contracts;
 
 using contract_handle = refrain_services_mod_loader_handle_mod_instance;
@@ -38,6 +43,9 @@ using contract_capabilities =
     refrain_services_mod_loader_mod_loader_capabilities;
 using contract_entry = refrain_services_mod_loader_mod_entry_manifest;
 using contract_request = refrain_services_mod_loader_mod_load_request;
+using contract_script_request = script_abi::script_call_request;
+using contract_script_result = script_abi::script_call_result;
+using contract_script_error = script_abi::script_error;
 
 constexpr refrain::log::logger log_loader{"mod-loader-wasm"};
 
@@ -53,6 +61,39 @@ struct failure {
 };
 
 template <typename T> using loader_result = std::expected<T, failure>;
+
+/// One failed guest call: the script contract error plus the detail the host
+/// appends through the loader diagnostic channel.
+struct script_failure {
+    contract_script_error code{contract_script_error::internal};
+    std::string message{};
+};
+
+template <typename T> using script_result = std::expected<T, script_failure>;
+
+/// Longest accepted callback export name; the same bound the script host
+/// contract documents.
+inline constexpr std::size_t max_callback_name_bytes{64};
+
+/// A guest callback name is a bounded identifier: letters, digits, '_', '.'
+/// and '-', starting with a letter, digit or '_'. The bound keeps arbitrary
+/// export names (and control characters in diagnostics) out of the call path.
+[[nodiscard]] auto is_valid_callback_name(std::string_view name) noexcept
+    -> bool {
+    if (name.empty() || name.size() > max_callback_name_bytes) {
+        return false;
+    }
+    const auto allowed = [](char value) {
+        return (value >= 'a' && value <= 'z') ||
+               (value >= 'A' && value <= 'Z') ||
+               (value >= '0' && value <= '9') || value == '_' || value == '.' ||
+               value == '-';
+    };
+    if (!allowed(name.front()) || name.front() == '.' || name.front() == '-') {
+        return false;
+    }
+    return std::ranges::all_of(name, allowed);
+}
 
 template <typename... Args>
 [[nodiscard]] auto fail(loader_abi::mod_loader_error code,
@@ -71,6 +112,21 @@ template <typename... Args>
 
 [[nodiscard]] auto view(const refrain_str &text) noexcept -> std::string_view {
     return contracts::as_string_view(text);
+}
+
+/// Print the log lines a guest collected through its `log` host import. The
+/// guest never writes the host log directly: the loader tags the line with the
+/// mod id and the host logger applies its own level filter.
+void drain_guest_logs(runtime &guest, std::string_view mod_id) {
+    static constexpr std::array<refrain::log::level, 5> levels{
+        refrain::log::level::trace, refrain::log::level::debug,
+        refrain::log::level::info, refrain::log::level::warn,
+        refrain::log::level::error};
+    for (auto &line : guest.take_guest_logs()) {
+        const auto index{std::min<std::size_t>(line.level, levels.size() - 1)};
+        log_loader.log(levels[index], "guest {} logged: {}", mod_id,
+                       line.message);
+    }
 }
 
 /// A package member path is '/'-separated and may not escape the package root
@@ -308,13 +364,19 @@ struct instance_record {
     // own on_unload hook consumes.
     std::uint64_t fuel_remaining{0};
     bool has_on_unload{false};
+    /// A trapped or over-budget call quarantines the instance: it keeps its
+    /// store and registration but runs no further callbacks until unloaded.
+    bool quarantined{false};
 };
 
-/// Provider state: budgets plus every guest the provider owns. The host keeps a
-/// pointer to this object for the process lifetime when the provider is the
-/// default one, so it is never moved.
+/// Provider state: budgets, the read-only host state guests see, plus every
+/// guest the provider owns. The host keeps a pointer to this object for the
+/// process lifetime when the provider is the default one, so it is never
+/// moved.
 struct loader_state {
     loader_budgets budgets{};
+    host::grant_set grants{};
+    host::environment environment{};
     std::map<std::uint64_t, instance_record> instances{};
     std::uint64_t next_handle{1};
     loader_stats stats{};
@@ -354,6 +416,14 @@ using detail::loader_state;
                             ? std::string{"?"}
                             : std::string{view(entry.mod_id)}};
     const auto member{std::string{view(entry.wasm_path)}};
+    // A refused host import is a sandbox-policy refusal: the runtime names the
+    // import and the active grant set in the message before instantiation.
+    if (problem.code == error_code::permission_denied) {
+        return failure{loader_abi::mod_loader_error::sandbox_violation,
+                       fmt::format("mod '{}': wasm entry '{}' failed during "
+                                   "{}: {}",
+                                   mod_name, member, phase, problem.message)};
+    }
     if (guest.fuel_remaining() == 0) {
         return failure{loader_abi::mod_loader_error::sandbox_violation,
                        fmt::format("mod '{}': wasm entry '{}' exhausted its "
@@ -361,17 +431,6 @@ using detail::loader_state;
                                    mod_name, member, budgets.load_fuel, phase)};
     }
     const auto text{problem.message};
-    // No host imports exist in the guest ABI of this slice, so a module that
-    // declares one asked the sandbox for an interface it does not expose.
-    if (text.find("unknown import") != std::string::npos ||
-        text.find("incompatible import") != std::string::npos) {
-        return failure{
-            loader_abi::mod_loader_error::sandbox_violation,
-            fmt::format("mod '{}': wasm entry '{}' requested a host import "
-                        "during {}; the guest sandbox exposes no host imports: "
-                        "{}",
-                        mod_name, member, phase, text)};
-    }
     if (text.find("memory") != std::string::npos &&
         (text.find("limit") != std::string::npos ||
          text.find("maximum") != std::string::npos ||
@@ -428,11 +487,17 @@ using detail::loader_state;
         return std::unexpected{*expired};
     }
 
-    auto guest{runtime::create(engine_config{
-        .consume_fuel = true,
-        .fuel = state.budgets.load_fuel,
-        .max_memory_bytes = state.budgets.max_memory_bytes,
-    })};
+    auto guest{runtime::create(
+        engine_config{
+            .consume_fuel = true,
+            .fuel = state.budgets.load_fuel,
+            .max_memory_bytes = state.budgets.max_memory_bytes,
+            .epoch_interruption = true,
+        },
+        host_imports{
+            .grants = state.grants,
+            .environment = &state.environment,
+        })};
     if (!guest) {
         return fail(loader_abi::mod_loader_error::internal,
                     "mod '{}': cannot create the wasm guest runtime: {}",
@@ -459,6 +524,7 @@ using detail::loader_state;
                     mod_name, module->member);
     }
     auto loaded{guest->call_instance_i32("on_load", {})};
+    drain_guest_logs(*guest, mod_name);
     if (!loaded) {
         return std::unexpected{guest_failure(*guest, entry, "on_load",
                                              loaded.error(), state.budgets)};
@@ -472,10 +538,6 @@ using detail::loader_state;
         return std::unexpected{*expired};
     }
 
-    // TODO: guest execution after load has no dispatch path yet. When the
-    // script host API lands, reset the store fuel per call and enforce a
-    // wall-clock deadline through wasmtime epoch interruption instead of the
-    // phase-boundary check above.
     const auto remaining_fuel{guest->fuel_remaining()};
     const auto handle{state.next_handle++};
     instance_record record{
@@ -521,6 +583,7 @@ using detail::loader_state;
     // problem in the log and release the budget either way.
     if (record.has_on_unload) {
         auto called{record.guest->call_instance_i32("on_unload", {})};
+        drain_guest_logs(*record.guest, record.mod_id);
         if (!called) {
             log_loader.warn("guest {} on_unload failed during {}: {}; "
                             "releasing the instance anyway",
@@ -537,10 +600,191 @@ using detail::loader_state;
     state.stats.live_memory_bytes -= record.memory_budget;
     state.stats.live_fuel -= record.fuel_remaining;
     state.stats.total_unloaded += 1;
+    if (record.quarantined) {
+        state.stats.quarantined_instances -= 1;
+    }
     log_loader.info("unloaded wasm mod {} guest instance {} ({})",
                     record.mod_id, handle, unload_reason_name(reason));
     state.instances.erase(found);
     return loader_result<void>{};
+}
+
+// ---------------------------------------------------------------------------
+// Call dispatch
+// ---------------------------------------------------------------------------
+
+/// Quarantine `record` after a failed call. The store stays allocated so the
+/// declared clean unload can release it in order, but no further guest code
+/// runs on the instance.
+void quarantine_instance(loader_state &state, instance_record &record,
+                         std::string_view reason) {
+    if (record.quarantined) {
+        return;
+    }
+    record.quarantined = true;
+    state.stats.quarantined_instances += 1;
+    log_loader.warn("quarantined wasm mod {} after {}; it runs no further "
+                    "callbacks until unloaded",
+                    record.mod_id, reason);
+}
+
+/// Invoke one exported guest callback under the per-call budgets. A caller
+/// mistake (unknown callback, wrong ABI, oversized arguments) fails without
+/// quarantining; a guest fault (budget, deadline, trap) quarantines.
+[[nodiscard]] auto call_guest(loader_state &state, std::uint64_t handle,
+                              std::string_view callback,
+                              std::span<const std::uint8_t> arguments)
+    -> script_result<std::int32_t> {
+#if REFRAIN_WITH_WASM
+    const auto found{state.instances.find(handle)};
+    if (found == state.instances.end()) {
+        return std::unexpected{script_failure{
+            contract_script_error::not_found,
+            fmt::format("wasm loader owns no instance {}", handle)}};
+    }
+    auto &record{found->second};
+    if (record.quarantined) {
+        return std::unexpected{script_failure{
+            contract_script_error::quarantined,
+            fmt::format("wasm mod {} instance {} is quarantined after an "
+                        "earlier failed call; unload it to release the guest",
+                        record.mod_id, handle)}};
+    }
+    if (!is_valid_callback_name(callback)) {
+        return std::unexpected{script_failure{
+            contract_script_error::invalid_argument,
+            fmt::format("callback name '{}' is not a valid export name: 1 to "
+                        "{} characters of [A-Za-z0-9_.-] starting with a "
+                        "letter, digit or underscore",
+                        callback, max_callback_name_bytes)}};
+    }
+    if (arguments.size() > host::max_call_argument_bytes) {
+        return std::unexpected{script_failure{
+            contract_script_error::invalid_argument,
+            fmt::format("callback '{}' arguments are {} bytes, over the "
+                        "{}-byte call argument budget",
+                        callback, arguments.size(),
+                        host::max_call_argument_bytes)}};
+    }
+
+    state.stats.total_calls += 1;
+    if (!arguments.empty()) {
+        const auto bytes{std::span<const std::byte>{
+            reinterpret_cast<const std::byte *>(arguments.data()),
+            arguments.size()}};
+        auto written{record.guest->write_guest_memory(
+            host::call_argument_address, bytes)};
+        if (!written) {
+            state.stats.failed_calls += 1;
+            return std::unexpected{script_failure{
+                contract_script_error::invalid_argument,
+                fmt::format("wasm mod {} cannot receive callback '{}' "
+                            "arguments: {}",
+                            record.mod_id, callback, written.error().message)}};
+        }
+    }
+
+    constexpr std::array<std::int32_t, host::callback_parameter_count>
+        parameters{static_cast<std::int32_t>(host::call_argument_address), 0};
+    auto call_parameters{parameters};
+    call_parameters[1] = static_cast<std::int32_t>(arguments.size());
+    auto called{record.guest->call_instance_i32(
+        callback, call_parameters,
+        call_options{.fuel = state.budgets.call_fuel,
+                     .timeout_ms = state.budgets.call_timeout_ms})};
+    drain_guest_logs(*record.guest, record.mod_id);
+    if (called) {
+        return *called;
+    }
+
+    state.stats.failed_calls += 1;
+    const auto failed_at{called.error().code};
+    if (failed_at == error_code::not_found) {
+        return std::unexpected{script_failure{
+            contract_script_error::not_found,
+            fmt::format("wasm mod {} does not export callback '{}'",
+                        record.mod_id, callback)}};
+    }
+    if (failed_at == error_code::invalid_argument) {
+        return std::unexpected{script_failure{
+            contract_script_error::invalid_argument,
+            fmt::format("wasm mod {} callback '{}' does not implement the "
+                        "call ABI: {}",
+                        record.mod_id, callback, called.error().message)}};
+    }
+    quarantine_instance(state, record, "a call trapped");
+    if (failed_at == error_code::timeout) {
+        return std::unexpected{script_failure{
+            contract_script_error::deadline_exceeded,
+            fmt::format(
+                "wasm mod {} callback '{}' exceeded its {}ms wall-clock "
+                "deadline",
+                record.mod_id, callback, state.budgets.call_timeout_ms)}};
+    }
+    if (record.guest->fuel_remaining() == 0) {
+        return std::unexpected{script_failure{
+            contract_script_error::budget_exceeded,
+            fmt::format("wasm mod {} callback '{}' exhausted its per-call "
+                        "instruction budget of {} instructions",
+                        record.mod_id, callback, state.budgets.call_fuel)}};
+    }
+    return std::unexpected{script_failure{
+        contract_script_error::guest_trapped,
+        fmt::format("wasm mod {} callback '{}' trapped: {}", record.mod_id,
+                    callback, called.error().message)}};
+#else
+    static_cast<void>(state);
+    static_cast<void>(handle);
+    static_cast<void>(callback);
+    static_cast<void>(arguments);
+    return std::unexpected{script_failure{
+        contract_script_error::unsupported,
+        "the wasm loader is not available in this build "
+        "(REFRAIN_WITH_WASM=0), rebuild with a WebAssembly runtime to "
+        "dispatch script callbacks"}};
+#endif
+}
+
+// ---------------------------------------------------------------------------
+// Script host ABI
+// ---------------------------------------------------------------------------
+
+auto bridge_script_call(void *self, contract_handle instance,
+                        const contract_script_request *request,
+                        contract_script_result *out) -> refrain_status {
+    if (self == nullptr || request == nullptr || out == nullptr) {
+        refrain::mod::set_loader_diagnostic(
+            "wasm script host call received no provider, request or result "
+            "slot");
+        return static_cast<refrain_status>(
+            contract_script_error::invalid_argument);
+    }
+    if (instance == REFRAIN_SERVICES_MOD_LOADER_HANDLE_MOD_INSTANCE_INVALID) {
+        refrain::mod::set_loader_diagnostic(
+            "wasm script host call received an invalid instance handle");
+        return static_cast<refrain_status>(
+            contract_script_error::invalid_argument);
+    }
+    if (request->struct_size <
+        REFRAIN_SERVICES_SCRIPT_HOST_SCRIPT_CALL_REQUEST_SIZE) {
+        refrain::mod::set_loader_diagnostic(fmt::format(
+            "wasm script host call request struct_size {} is smaller than the "
+            "contract's {}",
+            request->struct_size,
+            REFRAIN_SERVICES_SCRIPT_HOST_SCRIPT_CALL_REQUEST_SIZE));
+        return static_cast<refrain_status>(
+            contract_script_error::invalid_argument);
+    }
+    auto &state{*static_cast<loader_state *>(self)};
+    auto called{call_guest(state, static_cast<std::uint64_t>(instance),
+                           view(request->callback),
+                           contracts::as_bytes(request->arguments))};
+    if (!called) {
+        refrain::mod::set_loader_diagnostic(called.error().message);
+        return static_cast<refrain_status>(called.error().code);
+    }
+    out->value = *called;
+    return REFRAIN_STATUS_OK;
 }
 
 // ---------------------------------------------------------------------------
@@ -682,11 +926,36 @@ auto bridge_reload(void *self, contract_handle instance,
     return table;
 }
 
+/// The one vtable of the sealed `refrain:script.host` instance this loader
+/// provides. The script host is the same provider state as the mod loader: its
+/// instance handles are the loader's handles.
+[[nodiscard]] auto script_host_vtable() noexcept
+    -> const refrain_services_script_host_vtable & {
+    static const refrain_services_script_host_vtable table{
+        .struct_size = REFRAIN_SERVICES_SCRIPT_HOST_VTABLE_SIZE,
+        .abi_major = REFRAIN_SERVICES_SCRIPT_HOST_ABI_MAJOR,
+        .abi_minor = REFRAIN_SERVICES_SCRIPT_HOST_ABI_MINOR,
+        .abi_patch = REFRAIN_SERVICES_SCRIPT_HOST_ABI_PATCH,
+        .call = &bridge_script_call,
+    };
+    return table;
+}
+
+/// The provider shared by the mod loader and the script host of the default
+/// server composition. Both provider triples must resolve to the same state, or
+/// an instance handle returned by the loader would not be dispatchable.
+[[nodiscard]] auto default_loader() -> loader & {
+    static loader instance{};
+    return instance;
+}
+
 } // namespace
 
-loader::loader(loader_budgets budgets)
+loader::loader(loader_budgets budgets, loader_host_api host_api)
     : state_{std::make_unique<detail::loader_state>()} {
     state_->budgets = budgets;
+    state_->grants = host_api.grants;
+    state_->environment = std::move(host_api.environment);
 }
 
 loader::loader(loader &&other) noexcept = default;
@@ -703,6 +972,19 @@ auto loader::provider() const noexcept -> mod_loader_provider {
     };
 }
 
+auto loader::script_host_provider() const noexcept
+    -> refrain::script::script_host_provider {
+    return ::refrain::script::script_host_provider{
+        .vtable = &script_host_vtable(),
+        .self = state_.get(),
+        .abi_major = REFRAIN_SERVICES_SCRIPT_HOST_ABI_MAJOR,
+    };
+}
+
+void loader::set_tick_index(std::int64_t tick_index) noexcept {
+    state_->environment.tick_index = tick_index;
+}
+
 auto loader::stats() const noexcept -> const loader_stats & {
     return state_->stats;
 }
@@ -710,8 +992,135 @@ auto loader::stats() const noexcept -> const loader_stats & {
 auto default_mod_loader_provider() noexcept -> mod_loader_provider {
     // The server registers this provider once; its budget accounting lives for
     // the process lifetime and is released by process teardown.
-    static loader instance{};
-    return instance.provider();
+    return default_loader().provider();
+}
+
+auto default_script_host_provider() noexcept -> script_host_provider {
+    return default_loader().script_host_provider();
 }
 
 } // namespace refrain::script::wasm
+
+namespace refrain::script {
+
+namespace {
+
+namespace script_host_abi = refrain::services::script_host;
+namespace contracts = refrain::contracts;
+
+/// Map a script host failure onto the host's error vocabulary. The loader
+/// diagnostic carries the detail the provider published.
+[[nodiscard]] auto map_script_failure(script_host_abi::script_error code,
+                                      std::string detail) -> error {
+    auto mapped{error_code::mod_error};
+    switch (code) {
+    case script_host_abi::script_error::invalid_argument:
+        mapped = error_code::invalid_argument;
+        break;
+    case script_host_abi::script_error::not_found:
+        mapped = error_code::not_found;
+        break;
+    case script_host_abi::script_error::permission_denied:
+    case script_host_abi::script_error::quarantined:
+        mapped = error_code::permission_denied;
+        break;
+    case script_host_abi::script_error::unsupported:
+        mapped = error_code::unsupported;
+        break;
+    case script_host_abi::script_error::budget_exceeded:
+        mapped = error_code::permission_denied;
+        break;
+    case script_host_abi::script_error::deadline_exceeded:
+        mapped = error_code::timeout;
+        break;
+    case script_host_abi::script_error::guest_trapped:
+        mapped = error_code::mod_error;
+        break;
+    case script_host_abi::script_error::internal:
+        mapped = error_code::unknown;
+        break;
+    }
+    if (detail.empty()) {
+        detail = "refrain:script.host call failed";
+    }
+    return make_error(mapped, std::move(detail));
+}
+
+} // namespace
+
+auto register_script_host(mod::host &host, const script_host_provider &provider)
+    -> status {
+    if (host.is_sealed_service(script_host_abi::service_id)) {
+        return status_ok();
+    }
+    if (provider.vtable == nullptr || provider.self == nullptr) {
+        return std::unexpected{
+            make_error(error_code::invalid_argument,
+                       "script host registration needs a vtable and a self "
+                       "pointer")};
+    }
+    return host.register_sealed_provider(
+        script_host_abi::service_id,
+        mod::provider_api{.vtable = provider.vtable,
+                          .self = provider.self,
+                          .abi_major = provider.abi_major});
+}
+
+auto dispatch_guest_call(const mod::host &host, std::uint64_t instance,
+                         std::string_view callback,
+                         std::span<const std::byte> arguments)
+    -> result<guest_call_result> {
+    const auto active{
+        host.services().active_provider(script_host_abi::service_id)};
+    if (!active || active->instance == nullptr) {
+        return std::unexpected{make_error(
+            error_code::unsupported,
+            "no active refrain:script.host provider: the host bootstrap "
+            "registers the script host with its script loaders")};
+    }
+    const auto *api{static_cast<const mod::provider_api *>(active->instance)};
+    if (api->vtable == nullptr || api->self == nullptr) {
+        return std::unexpected{make_error(
+            error_code::unknown,
+            "the active refrain:script.host provider has no ABI table")};
+    }
+    if (api->abi_major != script_host_abi::abi_major) {
+        return std::unexpected{make_error(
+            error_code::version_mismatch,
+            fmt::format("refrain:script.host provider was built for ABI {}, "
+                        "this host implements {}",
+                        api->abi_major, script_host_abi::abi_major))};
+    }
+    const auto &table{
+        *static_cast<const refrain_services_script_host_vtable *>(api->vtable)};
+    if (table.struct_size < REFRAIN_SERVICES_SCRIPT_HOST_VTABLE_SIZE) {
+        return std::unexpected{make_error(
+            error_code::version_mismatch,
+            "refrain:script.host provider table is shorter than the contract "
+            "vtable")};
+    }
+    if (table.call == nullptr) {
+        return std::unexpected{make_error(
+            error_code::unsupported,
+            "the active refrain:script.host provider does not implement call "
+            "dispatch")};
+    }
+
+    auto request{script_host_abi::make_script_call_request()};
+    request.callback = contracts::to_borrowed(callback);
+    request.arguments = contracts::to_borrowed(std::span<const std::uint8_t>{
+        reinterpret_cast<const std::uint8_t *>(arguments.data()),
+        arguments.size()});
+    refrain::mod::clear_loader_diagnostic();
+    const script_host_abi::provider provider{table, api->self};
+    const auto called{provider.call(
+        refrain::services::mod_loader::mod_instance{instance}, request)};
+    if (!called) {
+        auto detail{refrain::mod::take_loader_diagnostic()};
+        return std::unexpected{
+            map_script_failure(called.error(), std::move(detail))};
+    }
+    return guest_call_result{.value = called->value};
+}
+
+} // namespace refrain::script
