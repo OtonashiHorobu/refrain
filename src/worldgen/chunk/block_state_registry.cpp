@@ -391,8 +391,12 @@ auto block_state_registry::verify_frozen() const -> status {
                                           "the frozen block state table does "
                                           "not hold minecraft:air as id 0")};
     }
-    for (block_state_id id = 0; id < keys_.size(); ++id) {
-        const std::string_view key{keys_[id]};
+    // A state's id is its index in the table, and the append guards in
+    // `intern` and `intern_shadow` stop the table before an index outgrows the
+    // state type, so every held id is representable. The loop still uses the
+    // wide size type so its bound stays correct if that guard ever moves.
+    for (std::size_t index = 0; index < keys_.size(); ++index) {
+        const std::string_view key{keys_[index]};
         if (key.empty()) {
             return std::unexpected{make_error(
                 error_code::parse_error,
@@ -405,7 +409,7 @@ auto block_state_registry::verify_frozen() const -> status {
                 ? visible->second
                 : (hidden != shadow_index_.end() ? hidden->second
                                                  : no_block_state);
-        if (resolved != id) {
+        if (static_cast<std::size_t>(resolved) != index) {
             return std::unexpected{make_error(
                 error_code::parse_error,
                 "the frozen block state table does not resolve state " +
