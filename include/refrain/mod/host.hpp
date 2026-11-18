@@ -125,6 +125,14 @@ struct loaded_mod {
     bool external{false}; ///< false = internal/static (always false here)
     bool has_code{false}; ///< a static factory was registered and called
     std::string provides_summary{};
+    /// Custom service contracts this generation declares (manifest
+    /// `[contracts]`), recorded before its loader runs and pubished with the
+    /// committed composition.
+    std::vector<mod::contract_definition> contracts{};
+    /// Custom service contracts this generation consumes (manifest
+    /// `[contract_requires]`), checked against the definitions of the
+    /// composition it joins.
+    std::vector<mod::contract_requirement> contract_requires{};
     /// Lowercase BLAKE3 hex (64 chars) of the raw `manifest.toml` bytes read
     /// from the builtin image. Discovery re-hashes the on-disk manifests, so
     /// this is the reference value for `candidate.manifest_hash`; parse it
@@ -225,8 +233,15 @@ class host {
     ///    declared capabilities drift from its registration, or when a provider
     ///    vtable's ABI header disagrees with `provider_api::abi_major`;
     ///  * `permission_denied` from a factory that registers a service its
-    ///    manifest does not provide or the plan did not select it for, or from
-    ///    a sandboxed loader trying to register a provider;
+    ///    manifest does not provide or the plan did not select it for, from a
+    ///    sandboxed loader trying to register a provider, or from a provider
+    ///    of a custom contract that no loaded mod declares or that the
+    ///    declaration owner does not trust;
+    ///  * `version_mismatch` when a custom contract provider's vtable header
+    ///    disagrees with the declared contract version or vtable size, when a
+    ///    consumer's required range falls outside the declared compatibility
+    ///    band, or when two mods declare one custom service id with different
+    ///    ABI versions; the message names both mods and both versions;
     ///  * whatever else a static factory or loader returns (startup aborts).
     ///
     /// On any failure the host drops the providers/API copies/image/mod list it
@@ -371,6 +386,14 @@ class host {
     /// `provider_api::abi_major` disagrees with the vtable's generated ABI
     /// header, or with the service-registry errors
     /// (duplicate/unsupported/frozen).
+    ///
+    /// A service id outside the reserved `refrain` namespace is a custom
+    /// contract: the table is accepted only when a loaded mod declares the
+    /// service in its manifest `[contracts]`, the registering mod is the
+    /// declaration owner or is listed in the declaration's
+    /// `trusted_providers`, and the vtable header matches the declared
+    /// contract version and vtable size exactly. The host never reads the
+    /// contract's function slots, only the generated header.
     auto register_provider(std::string_view service, const provider_api &api,
                            std::string_view version = {},
                            kernel::capability_bits capabilities = 0) -> status;
@@ -500,6 +523,44 @@ class host {
         std::map<std::string, std::map<std::string, std::set<std::string>>>
             instances{};
     };
+
+    /// One custom contract definition recorded from a loaded mod's manifest.
+    /// `owner` is the declaring mod; `definition` is the validated descriptor
+    /// the host conformance-checks provider tables and consumer ranges
+    /// against.
+    struct contract_record {
+        std::string owner{};
+        mod::contract_definition definition{};
+    };
+
+    /// Record the custom contract definitions of `manifest` for the mod being
+    /// loaded. Fails closed when a different loaded mod already declares the
+    /// same service: an incompatible ABI is `version_mismatch`, an identical
+    /// declaration is `already_exists`. Both errors name both mods. The
+    /// record is added to the committed map during an initial load and to the
+    /// staged overlay during a hot epoch.
+    auto record_contract_definitions(const mod_manifest &manifest) -> status;
+
+    /// Definition of `service` visible to the mod being loaded or staged: its
+    /// own manifest first, then the staged epoch, then the committed
+    /// composition. Nullptr when no loaded mod declares the service.
+    [[nodiscard]] auto find_contract_definition(std::string_view service) const
+        -> const contract_record *;
+
+    /// Validate a custom-contract provider table against the declared
+    /// descriptor: the generated vtable header (`struct_size`, `abi_major`,
+    /// `abi_minor`, `abi_patch`) must match the declaration exactly. Fails
+    /// with `version_mismatch` naming both versions and sizes.
+    [[nodiscard]] auto check_contract_provider(const contract_record &record,
+                                               const provider_api &api) const
+        -> status;
+
+    /// Validate the contract definitions and requirements of the composition
+    /// being published (committed composition during load, or the staged
+    /// result during a hot epoch): one owner per service id, and every
+    /// required range inside the owner's compatible range. Errors name both
+    /// mods and both versions.
+    [[nodiscard]] auto verify_contract_composition() const -> status;
 
     /// Project a composition's provider selection onto the per-mod slot map
     /// the factory permission checks and the plan verification use.
@@ -699,6 +760,10 @@ class host {
     /// Manifest and candidate of the mod being dispatched, borrowed for the
     /// duration of one `load_one()` call.
     const mod_manifest *current_manifest_{nullptr};
+    /// Custom contract definitions of the mod whose factory is running, copied
+    /// so `find_contract_definition()` can return a stable address while the
+    /// manifest is being dispatched.
+    std::vector<contract_record> current_contract_records_{};
     const candidate *current_candidate_{nullptr};
     const package_source *current_package_{nullptr};
     /// Static descriptor matched by the builtin loader for the current mod.
@@ -741,6 +806,12 @@ class host {
     /// The complete plan the staged change will publish on commit.
     std::optional<composition> staged_next_composition_{};
     std::vector<loaded_mod> staged_mods_{};
+    /// Custom contract definitions of the committed composition, by service
+    /// id. Rebuilt from the loaded mods on every commit.
+    std::map<std::string, contract_record> contract_definitions_{};
+    /// Custom contract definitions recorded while staging a hot epoch; the
+    /// committed map is authoritative until the commit publishes them.
+    std::map<std::string, contract_record> staged_contract_definitions_{};
     bool staging_{false};
     /// Handle and generation of the instance a staged `load_one()` replaces,
     /// when the diff asked the loader to rebuild the mod.

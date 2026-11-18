@@ -122,6 +122,10 @@ struct candidate {
     mod::manifest_meta meta{};
     /// Manifest `[provides]` contract ids (the declared provider roles).
     std::vector<std::string> provides{};
+    /// Manifest `[contracts]` custom service declarations.
+    std::vector<mod::contract_definition> contracts{};
+    /// Manifest `[contract_requires]` custom service requirements.
+    std::vector<mod::contract_requirement> contract_requires{};
     std::string path{};
     data::digest32 manifest_hash{};
     std::vector<mod::mod_requirement> required{};

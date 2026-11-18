@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: MIT
+#
+# SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
+
+# Custom contract consumer fixture: it depends on the declaring mod (so the
+# provider loads first) and requires the contract's compatibility band.
+[mod]
+id = "example.shop.client"
+version = "1.0.0"
+abi = "1"
+side = "server"
+
+[requires]
+"example.shop" = "^1.0.0"
+
+[contract_requires]
+"example:shop" = "^1.0.0"

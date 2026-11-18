@@ -513,6 +513,51 @@ world = "missing.mod@^1.0.0"
         }
     };
 
+    "gamepack/custom contract ids are provider keys"_test = [] {
+        constexpr std::string_view manifest{R"([gamepack]
+id = "refrain.custom"
+version = "1.0.0"
+side = "server"
+abi = 1
+auto_scan = false
+[mods]
+list = ["example.shop@1.0.0"]
+[providers]
+"example:shop" = "example.shop@^1.0.0"
+)"};
+        const auto plan{resolve_spec(manifest)};
+        expect(static_cast<bool>(plan));
+        if (!plan) {
+            return;
+        }
+        const auto *shop{plan->provider("example:shop")};
+        expect(shop != nullptr);
+        if (shop != nullptr) {
+            expect(shop->provider == "example.shop@1.0.0");
+        }
+    };
+
+    "gamepack/rejects a first-party service id as a provider key"_test = [] {
+        constexpr std::string_view manifest{R"([gamepack]
+id = "refrain.custom"
+version = "1.0.0"
+side = "server"
+abi = 1
+auto_scan = false
+[mods]
+list = ["example.shop@1.0.0"]
+[providers]
+"refrain:data.packs" = "example.shop@^1.0.0"
+)"};
+        const auto spec{parse_spec(manifest)};
+        expect(!spec);
+        if (!spec) {
+            expect(spec.error().code == refrain::error_code::invalid_argument);
+            expect(spec.error().message.find("refrain:data.packs") !=
+                   std::string::npos);
+        }
+    };
+
     "gamepack/instanced providers resolve and are sorted"_test = [] {
         constexpr std::string_view manifest{R"([gamepack]
 id = "refrain.instanced"

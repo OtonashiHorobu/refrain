@@ -146,6 +146,8 @@ struct fake_loader_state {
     std::uint32_t struct_size{
         REFRAIN_SERVICES_MOD_LOADER_MOD_LOADER_CAPABILITIES_SIZE};
     fake_mode mode{fake_mode::normal};
+    /// Service a `register_provider` guest claims during `load`.
+    std::string register_service{"refrain:data.packs"};
     int capabilities_calls{0};
     int validate_calls{0};
     int load_calls{0};
@@ -187,7 +189,7 @@ auto fake_load(void *self,
     if (state.mode == fake_mode::register_provider) {
         // A sandboxed guest can only reach the host through its imports; a
         // direct provider registration must be refused before it is recorded.
-        auto registered{state.owner->register_provider("refrain:data.packs",
+        auto registered{state.owner->register_provider(state.register_service,
                                                        guest_provider_api())};
         if (!registered) {
             state.inner_error = registered.error();
@@ -776,6 +778,54 @@ const suite mod_loader_tests = [] {
         expect(
             !host.services().active_provider("refrain:data.packs").has_value());
     };
+
+    "mod_loader/sandboxed loader cannot register a custom contract provider"_test =
+        [] {
+            mod::static_mod_registry registry{};
+            auto plan{make_gamepack(
+                "\"refrain.test.loader.sandbox.custom@1.0.0\"",
+                "\"example:shop\" = "
+                "\"refrain.test.loader.sandbox.custom@^1.0.0\"\n")};
+            expect(static_cast<bool>(plan));
+            if (!plan) {
+                return;
+            }
+            auto manifest{make_manifest("refrain.test.loader.sandbox.custom",
+                                        "1.0.0", 1, "server", "example:shop")};
+            manifest += "\n[contracts.\"example:shop\"]\n"
+                        "version = \"1.0.0\"\n"
+                        "vtable_size = 16\n";
+            manifest += "\n[entry]\nloader = \"test.sandbox\"\n";
+            image_builder builder{};
+            builder.add("refrain.test.loader.sandbox.custom",
+                        std::move(manifest));
+            const auto image{builder.build()};
+
+            mod::host host{registry};
+            fake_loader_state state{};
+            state.owner = &host;
+            state.loader_id = "test.sandbox";
+            state.sandboxed = 1;
+            state.mode = fake_mode::register_provider;
+            state.register_service = "example:shop";
+            expect(static_cast<bool>(host.register_mod_loader(
+                "test.sandbox", fake_provider_api_for(state))));
+
+            auto loaded{host.load(*plan, image)};
+            expect(!loaded);
+            if (!loaded) {
+                expect(loaded.error().code == error_code::permission_denied);
+                expect(loaded.error().message.find("sandboxed") !=
+                       std::string::npos);
+            }
+            // The guest's registration is refused by the host before it is
+            // recorded, and the diagnostic names the custom service.
+            expect(state.inner_error.code == error_code::permission_denied);
+            expect(state.inner_error.message.find("example:shop") !=
+                   std::string::npos);
+            expect(
+                !host.services().active_provider("example:shop").has_value());
+        };
 
     "mod_loader/records unload semantics on the loaded mods"_test = [] {
         mod::static_mod_registry registry{};
