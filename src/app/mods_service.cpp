@@ -82,34 +82,22 @@ namespace script = refrain::script;
 
 // --- mods (manifest tree) --------------------------------------------------
 
-/// `mods list`: scan one or more instance roots (each containing
-/// `mods/<id>/manifest.toml`) and optionally re-verify a `mods.lock`.
-///
-/// `--gamepack` + `--image` seed the same `origin=builtin` candidates the
-/// server derives from the mod host, so a server-written lock (builtin + user)
-/// can be re-verified here; both options must be given together.
 /// Does `mod` declare the contract behind a gamepack provider slot?
-/// Gamepack keys are short slot names (`data`, `protocol`, ...) while
-/// `[provides]` lists full contract ids (`refrain:data.packs`,
-/// `refrain:net.protocol`). A slot is satisfied by
-/// the exact contract, a sub-contract in its namespace (`data` ->
-/// `refrain:data.packs`) or the default network namespace (`protocol` ->
-/// `refrain:net.protocol`, `session` -> `refrain:net.session`).
+///
+/// A gamepack keys a service by a short slot (`net_session`) while `[provides]`
+/// lists contract ids (`refrain:net.session`). The slot matcher is shared with
+/// the host resolver, so this check accepts exactly the declarations that let
+/// the host activate the planned provider.
 // TODO: an unsatisfied gamepack provider slot only produces a warning, because
 // the first-party provider implementations are absent. The correct behavior is
 // to fail `mods check` and refuse a composition that binds the slot when no
 // loaded mod declares the required contract.
 [[nodiscard]] auto declares_provider_service(const mod::candidate &mod,
                                              std::string_view service) -> bool {
-    const auto exact{fmt::format("refrain:{}", service)};
-    const auto sub_contract{exact + "."};
-    const auto network_contract{fmt::format("refrain:net.{}", service)};
-    return std::any_of(mod.provides.begin(), mod.provides.end(),
-                       [&](const std::string &provided) {
-                           return provided == exact ||
-                                  provided.starts_with(sub_contract) ||
-                                  provided == network_contract;
-                       });
+    return std::ranges::any_of(mod.provides,
+                               [service](const std::string &provided) {
+                                   return mod::matches_slot(provided, service);
+                               });
 }
 
 auto run_mods_check(const mods_check_options &options) -> int {
@@ -327,6 +315,12 @@ auto run_mods_check(const mods_check_options &options) -> int {
     return std::move(composition->load_order);
 }
 
+/// `mods list`: scan one or more instance roots (each containing
+/// `mods/<id>/manifest.toml`) and optionally re-verify a `mods.lock`.
+///
+/// `--gamepack` + `--image` seed the same `origin=builtin` candidates the
+/// server derives from the mod host, so a server-written lock (builtin + user)
+/// can be re-verified here; both options must be given together.
 auto run_mods_list(const mods_list_options &options) -> int {
     if (options.gamepack.empty() != options.image.empty()) {
         return report_error(refrain::make_error(

@@ -673,7 +673,8 @@ auto run_chunk_hash(const options &config, generation_target target,
 /// latency the per-chunk scheduler exists for. `hash` switches the run to the
 /// digest protocol instead of the timing one.
 auto run_scheduler_case(const options &config, jint chunks, std::size_t workers,
-                        bool hash, std::ostream *stream) -> bool {
+                        bool hash, jint repeat_index, std::ostream *stream)
+    -> bool {
     const auto [width, depth] = rectangle_for(chunks);
     const std::size_t worker_count = std::clamp<std::size_t>(workers, 1, 8);
     auto created = chunk_scheduler::create(chunk_scheduler::config{
@@ -777,8 +778,8 @@ auto run_scheduler_case(const options &config, jint chunks, std::size_t workers,
         }
         const auto line = fmt::format(
             "CHUNK_HASH_TOTAL target=full seed={} chunks={} workers={} "
-            "scheduler=true digest={:016x}",
-            config.seed, positions.size(), worker_count, total);
+            "repeat={} scheduler=true digest={:016x}",
+            config.seed, positions.size(), worker_count, repeat_index, total);
         fmt::print("{}\n", line);
         if (stream != nullptr) {
             *stream << line << '\n';
@@ -820,7 +821,7 @@ auto run_scheduler_scenarios(const options &config, std::ostream *stream)
         for (const auto workers : config.worker_counts) {
             bool failed{false};
             for (jint repeat = 0; repeat < config.repeat; ++repeat) {
-                if (!run_scheduler_case(config, chunks, workers, false,
+                if (!run_scheduler_case(config, chunks, workers, false, repeat,
                                         stream)) {
                     failed = true;
                     break;
@@ -835,12 +836,23 @@ auto run_scheduler_scenarios(const options &config, std::ostream *stream)
 }
 
 auto run_scheduler_hash(const options &config, std::ostream *stream) -> bool {
-    const auto chunks = config.chunk_counts.front();
-    if (chunks <= 0) {
-        return false;
+    // Every requested chunk count and worker count is hashed, and every
+    // combination repeats, so one invocation proves both that the served
+    // content is worker-count independent and that it repeats run to run.
+    for (const auto chunks : config.chunk_counts) {
+        if (chunks <= 0) {
+            continue;
+        }
+        for (const auto workers : config.worker_counts) {
+            for (jint repeat = 0; repeat < config.repeat; ++repeat) {
+                if (!run_scheduler_case(config, chunks, workers, true, repeat,
+                                        stream)) {
+                    return false;
+                }
+            }
+        }
     }
-    return run_scheduler_case(config, chunks, config.worker_counts.front(),
-                              true, stream);
+    return true;
 }
 
 #if defined(REFRAIN_CLIMATE_TIE_STATS)
@@ -1059,6 +1071,7 @@ auto parse_options(int argc, char **argv) -> std::optional<options> {
                 "  --seed <n>               world seed (default 12345)\n"
                 "  --biome <key>            fixed biome (default "
                 "minecraft:plains)\n"
+                "  --natural-biome          use the dimension's biome source\n"
                 "  --dimension <kind>       overworld, the_nether or the_end\n"
                 "  --targets <list>         terrain,features,full (default "
                 "terrain,full)\n"
@@ -1096,6 +1109,10 @@ auto parse_options(int argc, char **argv) -> std::optional<options> {
                 return std::nullopt;
             }
             config.templates_root = *value;
+        } else if (argument == "--natural-biome") {
+            // An empty fixed biome makes the dimension's own biome source run,
+            // which is the case the climate search hint could affect.
+            config.biome.clear();
         } else if (argument == "--biome") {
             const auto value = next(argument);
             if (!value) {

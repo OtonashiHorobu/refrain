@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: MIT
+#
+# SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
+#
+# Synthetic provider mod used by the CLI contract: declares the dotted world
+# migration contract, so the `world_migration` gamepack slot is covered.
+
+[mod]
+id = "refrain.test.migration"
+version = "1.0.0"
+abi = "1"
+side = "server"
+
+[meta]
+display_name = "Test migration provider"
+description = "Declares refrain:world.migration for the world_migration slot."
+
+[provides]
+services = ["refrain:world.migration"]

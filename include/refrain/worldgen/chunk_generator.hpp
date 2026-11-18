@@ -143,11 +143,13 @@ struct chunk_generator_config {
     /// feature writes its neighbours make across its border, exactly as a
     /// saved world does. The single-chunk entry points ignore it.
     jint tile_size{8};
-    /// Chunks one generator's per-chunk pipeline cache keeps. Each cached
-    /// chunk costs about one terrain chunk, roughly 200 KiB at full height, so
-    /// the default bound is a few tens of megabytes per worker. Entries over
-    /// the bound are evicted in insertion order, and an evicted chunk loses
-    /// the feature writes its neighbours already made into it.
+    /// Chunks the per-chunk pipeline cache keeps. Each cached chunk costs
+    /// about one terrain chunk, roughly 200 KiB at full height. On the
+    /// per-generator paths the bound is per worker and entries over it are
+    /// evicted in insertion order. The scheduler owns one shared cache whose
+    /// capacity bounds its terrain-only entries; decorated entries are kept
+    /// because they carry the feature writes their neighbours already made,
+    /// so a caller sizes the bound above a viewport's working set.
     jint proto_cache_capacity{256};
 };
 
@@ -225,10 +227,19 @@ class chunk_generator {
 
     /// Runs only the terrain step of the pipeline for `pos`: fills the
     /// five-by-five terrain ring and the structure starts of the reference
-    /// window. The scheduler calls this as its first status job; it is a no-op
-    /// for a chunk whose dependencies are already cached. A terrain target has
-    /// no pipeline and reports an invalid request.
+    /// window. The tile and batch entry points use it; it is a no-op for a
+    /// chunk whose dependencies are already cached.
     [[nodiscard]] auto advance_terrain(const chunk_pos &pos) -> result<void>;
+
+    /// Fills the terrain of the scheduler's `positions` with the structure
+    /// beard of the dependency window around `window_pos`. The scheduler's
+    /// terrain jobs use this: the chunk positions a demand fills first are
+    /// chosen from the demand sequence, so which window fills a chunk does not
+    /// depend on which worker finished first, and an already cached chunk is
+    /// left alone.
+    [[nodiscard]] auto advance_terrain_for(const chunk_pos &window_pos,
+                                           std::span<const chunk_pos> positions)
+        -> result<void>;
 
     /// Runs only the decorated step of the pipeline for `pos`: places the
     /// structure pieces of the three-by-three, repairs the shape of `pos` and
@@ -254,7 +265,7 @@ class chunk_generator {
 
     /// Counters of this generator's per-chunk cache.
     [[nodiscard]] auto cache_stats() const noexcept -> proto_cache_stats {
-        return proto_cache_.stats();
+        return pipeline_cache_->stats();
     }
     /// Drops every cached chunk and structure start, so the next request
     /// generates its neighbourhood from scratch.
@@ -308,10 +319,39 @@ class chunk_generator {
         std::unique_ptr<feature::feature_registry> features,
         std::unique_ptr<structure::structure_template_manager> templates);
 
+    /// Loads the immutable data every worker of this configuration shares.
+    [[nodiscard]] static auto
+    load_shared_data(const chunk_generator_config &config)
+        -> result<std::shared_ptr<shared_generator_data>>;
+
     [[nodiscard]] static auto
     create_with_shared(chunk_generator_config config,
                        std::shared_ptr<const shared_generator_data> shared)
         -> result<std::unique_ptr<chunk_generator>>;
+
+    /// The shared state of a scheduler: the immutable data every worker
+    /// reuses and the first worker generator, which was created while the
+    /// shared block-state table was still open. The table is frozen when this
+    /// returns, so every later worker resolves state keys to the same ids
+    /// without appending one.
+    struct scheduler_shared_state {
+        std::shared_ptr<const shared_generator_data> shared{};
+        std::unique_ptr<chunk_generator> first{};
+    };
+
+    /// Loads the content, builds the frozen shared block-state table and the
+    /// first worker generator over it. Fails when the content ships no
+    /// block-state table or when the generator cannot load.
+    [[nodiscard]] static auto
+    create_scheduler_shared(chunk_generator_config config)
+        -> result<scheduler_shared_state>;
+
+    /// Points this generator's per-chunk pipeline at `cache`. The scheduler
+    /// uses it to let every worker operate on the one shared cache; the
+    /// cache must outlive the generator.
+    void attach_pipeline_cache(proto_chunk_cache *cache) noexcept {
+        pipeline_cache_ = cache;
+    }
 
     [[nodiscard]] auto generate_impl(const chunk_pos &pos)
         -> result<std::unique_ptr<proto_chunk>>;
@@ -539,10 +579,13 @@ class chunk_generator {
     std::unique_ptr<structure::structure_template_manager> templates_{};
 
     /// Working set of the per-chunk pipeline: terrain, the neighbour feature
-    /// writes and the served chunks of this worker. Separate from the
-    /// single-chunk neighbour cache above so neither path changes the other.
+    /// writes and the served chunks. Separate from the single-chunk neighbour
+    /// cache above so neither path changes the other. `pipeline_cache_` points
+    /// here on the per-generator paths and at the scheduler's shared cache when
+    /// this generator is a scheduler worker.
     proto_chunk_cache proto_cache_{
         static_cast<std::size_t>(proto_chunk_cache::default_capacity)};
+    proto_chunk_cache *pipeline_cache_{&proto_cache_};
     /// Structure starts of the per-chunk pipeline, keyed by the chunk that
     /// owns them. Bounded like the chunk cache; a missed chunk is regenerated
     /// from the seed and the position.
@@ -587,12 +630,21 @@ enum class pipeline_step : std::uint8_t {
 
 [[nodiscard]] auto pipeline_step_name(pipeline_step step) -> std::string_view;
 
-/// One unit of pipeline work. A job belongs to the worker that owns the
-/// generator cache it must run on: a generator's block state table and proto
-/// cache are thread-private, so a chunk never moves between workers.
+/// One unit of pipeline work.
+///
+/// A scheduler chain owns three job kinds. `terrain` fills one chunk position
+/// from the dependency window of the demanded column `demand`; it is pure and
+/// therefore runs on every worker. `decorated` places the structure pieces of
+/// the demanded column's three-by-three and runs its feature step; `served`
+/// copies the column out. The latter two run as one ordered lane in demand
+/// order, so the decoration order is fixed by the demand sequence and never by
+/// which worker finished a job first. `position` is the chunk the job acts on;
+/// for `decorated` and `served` it equals `demand`.
 struct pipeline_job {
     pipeline_step step{pipeline_step::terrain};
     chunk_pos position{};
+    /// Demanded column whose dependency window the job belongs to.
+    chunk_pos demand{};
     std::size_t worker{0};
 };
 
@@ -613,38 +665,46 @@ struct chunk_scheduler_stats {
     std::size_t failed{0};
     /// Demanded chunks whose pipeline has not completed yet.
     std::size_t pending{0};
-    /// Cached proto chunks across every worker.
+    /// Cached proto chunks in the shared cache.
     std::size_t cache_entries{0};
-    /// Proto cache entries evicted over the worker cache bounds.
+    /// Cached chunks still at terrain stage: the eviction candidates.
+    std::size_t cache_terrain_entries{0};
+    /// Proto chunks evicted over the cache's retention window.
     std::uint64_t cache_evictions{0};
 };
 
-/// Runs per-chunk status jobs on a fixed set of worker generators.
+/// Runs per-chunk status jobs over one shared deterministic pipeline state.
 ///
-/// A demanded chunk queues its three status jobs on one worker, in pipeline
-/// order, and the worker runs them on its own generator and proto cache. The
-/// worker keeps the cache between jobs, so the terrain and decoration of the
-/// chunks around the served one are shared across requests instead of being
-/// regenerated, and a chunk is served as soon as its own dependencies are
-/// decorated rather than after a whole square of chunks.
+/// The scheduler owns one frozen block-state table, one shared proto chunk
+/// cache and the worker generators. `create` loads the content block table and
+/// the first worker generator, so a configuration the content cannot support
+/// fails at start instead of on the first demanded column. Every worker's
+/// generator points its pipeline at the shared cache, so a chunk's terrain,
+/// structures and feature writes are materialised once instead of once per
+/// worker.
 ///
-/// Every scheduling decision is taken from the demand order and the job
-/// position, never from which worker finished first: the worker of a chunk is
-/// fixed when it is demanded (round-robin in demand order), its jobs stay in
-/// that worker's queue, and completions only move a chunk from pending to
-/// served or failed. A caller that demands the same positions in the same order
-/// therefore runs the same jobs in the same order on the same workers.
+/// Determinism comes from three rules. State ids are assigned before the first
+/// job: the shared table holds the content's complete, key-ordered state list
+/// and is frozen, so no worker can append a first-use id. Terrain is a pure
+/// function of seed, data and position, and the scheduler fixes which demand
+/// publishes a chunk the first time it is needed, so a terrain fill does not
+/// depend on worker order. Decoration is the only stage that mutates a
+/// neighbour's blocks; it runs on one ordered lane in demand order, exactly as
+/// the per-generator pipeline runs it serially, and a column is served only
+/// once its own three-by-three is decorated. A served chunk is sealed, so a
+/// later feature write into it is dropped just as on the serial path.
 ///
-/// The workers of one scheduler are independent: each owns its generator,
-/// block state table and proto cache. This is why a scheduler can serve chunks
-/// in parallel without a lock around the generator, and why the served content
-/// is only guaranteed to be identical for the same worker count and demand
-/// sequence.
+/// The shared cache bounds its terrain working set: after a column is served,
+/// terrain entries published by demands older than the cache's retention
+/// window are evicted. Their content is reproducible, so eviction cannot
+/// change a served chunk; a decorated entry carries feature writes and is kept
+/// until `clear`.
 class chunk_scheduler {
   public:
     struct config {
         chunk_generator_config generator{};
-        /// Worker generators; each one also bounds one proto cache.
+        /// Worker generators. Every worker shares the table, cache and
+        /// ordered decoration lane.
         std::size_t workers{1};
     };
 
@@ -656,25 +716,23 @@ class chunk_scheduler {
     auto operator=(chunk_scheduler &&) -> chunk_scheduler & = delete;
     ~chunk_scheduler() = default;
 
-    /// Queue the three status jobs of `pos` on one worker. Returns false when
-    /// the position is already demanded and has not completed yet.
+    /// Queue the pipeline of `pos`. Returns false when the position is already
+    /// demanded and has not completed yet.
     auto demand(const chunk_pos &pos) -> bool;
 
-    /// Whether `worker` has a job to run. Failed-position jobs are still
-    /// queued and are skipped by `next_job`, so a non-empty queue is enough
-    /// for the caller's wait predicate.
+    /// Whether any kind of job is ready. The caller's worker threads use it as
+    /// the wait predicate; `next_job` then decides which worker takes what.
     [[nodiscard]] auto has_job(std::size_t worker) const -> bool;
 
-    /// Pop the next job of `worker`. Jobs of a position that already failed
-    /// are skipped. Returns nothing when the worker has no queued job.
+    /// Take the next ready job for `worker`: the ordered decoration lane when
+    /// it is free and its next demand has terrain, otherwise a terrain fill.
+    /// Returns nothing when nothing is ready for this worker.
     [[nodiscard]] auto next_job(std::size_t worker)
         -> std::optional<pipeline_job>;
 
-    /// Run one job on its worker's generator. The served step returns the
-    /// finished chunk; the two earlier steps return a null pointer. A worker
-    /// generator is created on its first job, so a scheduler costs nothing
-    /// until it is used and a missing datapack fails the jobs instead of the
-    /// scheduler.
+    /// Run one job on the shared pipeline state. The terrain and decorated
+    /// steps return a null pointer; the served step returns the finished
+    /// chunk.
     [[nodiscard]] auto run(const pipeline_job &job)
         -> result<std::unique_ptr<proto_chunk>>;
 
@@ -687,49 +745,91 @@ class chunk_scheduler {
 
     /// Biome keys of the scheduler's dimension. Every worker generator loads
     /// the same data, so one copy names the biome ids of every served chunk.
-    /// Empty until a worker generator was created.
     [[nodiscard]] auto biome_names() const -> const std::vector<std::string> &;
 
     [[nodiscard]] auto pending() const -> std::size_t;
 
     [[nodiscard]] auto stats() const -> chunk_scheduler_stats;
 
-    /// Drops every cached chunk of every worker. The scheduler keeps running
-    /// after it; the next demand rebuilds its neighbourhood from the seed.
+    /// Drops every cached chunk and the chain bookkeeping. The scheduler keeps
+    /// running after it; the next demand rebuilds its neighbourhood from the
+    /// seed.
     void clear();
 
   private:
     explicit chunk_scheduler(config settings);
 
-    /// The generator of `worker`, created on the first job of that worker.
-    /// Only the worker's own thread calls this, so a generator is never used
-    /// by two threads; creation is serialised because every later worker
-    /// reuses the first worker's immutable data.
+    /// Builds the frozen shared table and the first worker generator. Called
+    /// once from `create`; workers only read the frozen state afterwards.
+    [[nodiscard]] auto initialize_shared_state() -> result<void>;
+
+    /// The generator of `worker`. The first call builds the frozen shared
+    /// table and the worker generators over it; every later call reuses the
+    /// shared immutable data. Serialised, because the shared table must be
+    /// frozen after the first generator loaded and before any other worker
+    /// reads it.
     [[nodiscard]] auto worker_generator(std::size_t worker)
         -> result<chunk_generator *>;
 
-    struct chain_state {
-        std::uint8_t remaining{3};
+    /// Fills the 25 terrain chunks around `pos` whose entry is missing, each
+    /// from the dependency window of the demand that published it first. The
+    /// ordered lane calls it before decorating: a terrain entry may have been
+    /// evicted by the shared cache's retention window, and refilling it from
+    /// its original window is what keeps the content independent of when the
+    /// eviction happened.
+    [[nodiscard]] auto refill_terrain(chunk_generator &generator,
+                                      const chunk_pos &pos) -> result<void>;
+
+    /// Evicts the terrain entries whose publishing demand is older than the
+    /// cache's retention window.
+    void evict_old_terrain();
+
+    /// What the scheduler knows about one demanded column.
+    struct demand_chain {
+        chunk_pos position{};
+        /// Terrain positions this demand publishes first.
+        std::vector<chunk_pos> terrain{};
+        std::size_t terrain_remaining{0};
+        bool terrain_done{false};
+        bool decorated{false};
+        bool served{false};
+        bool failed{false};
     };
+
+    /// The next demand in the ordered lane that is not finished, skipping
+    /// failed chains.
+    [[nodiscard]] auto ordered_front() const -> const demand_chain *;
+
+    /// Retention of the shared cache's terrain entries, in demanded columns.
+    /// Derived from the configured capacity so the retention window can never
+    /// exceed the bound.
+    [[nodiscard]] auto retention_columns() const noexcept -> std::size_t;
 
     config settings_{};
     mutable std::mutex mutex_{};
     mutable std::mutex create_mutex_{};
+    /// Guards the shared cache's map; the cache takes it through its pointer.
+    mutable std::mutex cache_mutex_{};
+    std::shared_ptr<const chunk_generator::shared_generator_data> shared_{};
+    std::shared_ptr<block_state_registry> states_{};
+    std::unique_ptr<proto_chunk_cache> cache_{};
     std::vector<std::unique_ptr<chunk_generator>> workers_{};
-    std::vector<std::deque<pipeline_job>> queues_{};
-    std::unordered_map<chunk_pos, chain_state, chunk_pos_hash> chains_{};
-    std::unordered_set<chunk_pos, chunk_pos_hash> failed_{};
-    std::vector<pipeline_failure> failures_{};
-    std::vector<std::string> biome_names_{};
     std::optional<std::string> generator_error_{};
-    /// Per-worker cache counters, captured on the worker's own thread after a
-    /// job so a reader never inspects a generator the worker is using.
-    std::vector<std::size_t> worker_entries_{};
-    std::vector<std::uint64_t> worker_evictions_{};
-    std::size_t next_worker_{0};
-    std::size_t demanded_{0};
+    std::vector<std::string> biome_names_{};
+
+    std::vector<demand_chain> chains_{};
+    /// Demanded, not yet served positions to their chain index.
+    std::unordered_map<chunk_pos, std::size_t, chunk_pos_hash> active_{};
+    /// First demanded column that published a terrain position.
+    std::unordered_map<chunk_pos, std::size_t, chunk_pos_hash> terrain_owner_{};
+    /// Demanded columns whose published terrain still has to be filled, in
+    /// demand order.
+    std::deque<std::size_t> terrain_queue_{};
+    std::size_t ordered_front_{0};
+    bool ordered_busy_{false};
     std::size_t served_{0};
     std::size_t failed_count_{0};
+    std::vector<pipeline_failure> failures_{};
 };
 
 } // namespace refrain::worldgen

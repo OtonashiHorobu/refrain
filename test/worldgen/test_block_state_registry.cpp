@@ -29,6 +29,7 @@ using refrain::worldgen::block_state_id;
 using refrain::worldgen::block_state_registry;
 using refrain::worldgen::block_tag_set;
 using refrain::worldgen::build_block_state_registry;
+using refrain::worldgen::build_shared_block_state_registry;
 using refrain::worldgen::load_block_tags;
 using refrain::worldgen::state_traits;
 
@@ -317,3 +318,143 @@ suite<"worldgen/block-state-registry"> block_state_registry_tests = [] {
         expect(registry->find("minecraft:test_custom").has_value());
     };
 };
+
+suite<"worldgen/shared-block-state-registry">
+    shared_block_state_registry_tests = [] {
+        "shared table assigns state ids before any concurrent reader"_test =
+            [] {
+                const auto spec = sample_spec();
+                const auto bytes = build_vanilla_tables(spec);
+                expect(bytes.has_value());
+                if (!bytes) {
+                    return;
+                }
+                const auto tables = vanilla_tables::open(*bytes);
+                expect(tables.has_value());
+                if (!tables) {
+                    return;
+                }
+                block_tag_set tags;
+                tags.add("minecraft:blocks_motion_in_heightmap",
+                         {"minecraft:stone", "minecraft:dirt"});
+                tags.add("minecraft:blocks_motion_in_heightmap_no_leaves",
+                         {"minecraft:stone", "minecraft:dirt"});
+                auto first = build_shared_block_state_registry(*tables, tags);
+                auto second = build_shared_block_state_registry(*tables, tags);
+                expect(first.has_value());
+                expect(second.has_value());
+                if (!first || !second) {
+                    return;
+                }
+                // The id of a key is a function of the content table, not of
+                // the order a worker happens to ask for it.
+                expect(first->size() == second->size());
+                for (block_state_id id = 0; id < first->size(); ++id) {
+                    expect(first->name(id) == second->name(id));
+                    expect(first->traits(id).air == second->traits(id).air);
+                    expect(first->traits(id).fluid == second->traits(id).fluid);
+                }
+                // A default state is interned under its canonical spelling and
+                // the bare block name both.
+                const auto canonical = first->intern(
+                    "minecraft:oak_slab[waterlogged=false]", state_traits{});
+                const auto bare =
+                    first->intern("minecraft:oak_slab", state_traits{});
+                expect(canonical.has_value());
+                expect(bare.has_value());
+                if (canonical && bare) {
+                    expect(*canonical != *bare);
+                    expect(first->name(*canonical) ==
+                           "minecraft:oak_slab[waterlogged=false]");
+                    expect(first->name(*bare) == "minecraft:oak_slab");
+                }
+                // A key the data pack spells but the table only holds as a
+                // non-default spelling resolves through the table without
+                // appending anything.
+                const auto water =
+                    first->intern("minecraft:water[level=3]", state_traits{});
+                expect(water.has_value());
+                if (water) {
+                    expect(first->name(*water) == "minecraft:water[level=3]");
+                }
+            };
+
+        "a shared table hides interned keys from find and rejects unknown keys after freezing"_test =
+            [] {
+                const auto spec = sample_spec();
+                const auto bytes = build_vanilla_tables(spec);
+                expect(bytes.has_value());
+                if (!bytes) {
+                    return;
+                }
+                const auto tables = vanilla_tables::open(*bytes);
+                expect(tables.has_value());
+                if (!tables) {
+                    return;
+                }
+                block_tag_set tags;
+                auto registry =
+                    build_shared_block_state_registry(*tables, tags);
+                expect(registry.has_value());
+                if (!registry) {
+                    return;
+                }
+                // The per-generator registry only finds keys a data pack
+                // interned; the shared table keeps that lookup behaviour and
+                // resolves its complete state universe through `intern`.
+                expect(!registry->find("minecraft:stone").has_value());
+                expect(!registry->find("minecraft:oak_slab").has_value());
+                const auto stone =
+                    registry->intern("minecraft:stone", state_traits{});
+                expect(stone.has_value());
+                if (stone) {
+                    expect(registry->name(*stone) == "minecraft:stone");
+                }
+                expect(!registry->frozen());
+                registry->freeze();
+                expect(registry->frozen());
+                expect(registry->intern("minecraft:stone", state_traits{})
+                           .has_value());
+                const auto unknown = registry->intern(
+                    "minecraft:not_in_the_table", state_traits{});
+                expect(!unknown.has_value());
+                if (!unknown) {
+                    expect(unknown.error().code ==
+                           refrain::error_code::not_found);
+                }
+                // Freezing does not change a known id.
+                const auto after =
+                    registry->intern("minecraft:stone", state_traits{});
+                expect(after.has_value());
+                if (stone && after) {
+                    expect(*stone == *after);
+                }
+            };
+
+        "shared table carries the per-block default properties"_test = [] {
+            const auto spec = sample_spec();
+            const auto bytes = build_vanilla_tables(spec);
+            expect(bytes.has_value());
+            if (!bytes) {
+                return;
+            }
+            const auto tables = vanilla_tables::open(*bytes);
+            expect(tables.has_value());
+            if (!tables) {
+                return;
+            }
+            block_tag_set tags;
+            auto registry = build_shared_block_state_registry(*tables, tags);
+            expect(registry.has_value());
+            if (!registry) {
+                return;
+            }
+            const auto defaults =
+                registry->default_properties_for_block("minecraft:oak_slab");
+            expect(defaults.size() == 1U);
+            if (defaults.size() == 1U) {
+                expect(defaults.front().name == "waterlogged");
+                expect(defaults.front().value == "false");
+            }
+        };
+    };

@@ -24,6 +24,17 @@ gamepack-dump-plan      | stdout | 0       | # resolved plan | refrain-tools gam
 gamepack-dump-providers | stdout | 0       | providers: 12 | refrain-tools gamepack dump -f {root}/gamepack/gamepack.toml
 mods-check-content      | stdout | 0       | refrain.content.vanilla@1.0.0 | refrain-tools mods check --mods {root}/mods --gamepack {root}/gamepack/gamepack.toml
 mods-check-data         | stdout | 0       | refrain.data.vanilla@1.0.0 | refrain-tools mods check --mods {root}/mods --gamepack {root}/gamepack/gamepack.toml
+# The dotted contract ids cover the underscore provider slots; a slot whose mod
+# declares no [provides] entry keeps warning.
+mods-check-session-slot | stdout | 0       | !does not declare [provides] 'refrain:net_session' | refrain-tools mods check --mods {root}/mods --gamepack {root}/gamepack/gamepack.toml
+mods-check-migration-slot | stdout | 0     | !does not declare [provides] 'refrain:world_migration' | refrain-tools mods check --mods {root}/mods --gamepack {root}/gamepack/gamepack.toml
+mods-check-admin-slot   | stdout | 0       | does not declare [provides] 'refrain:admin' | refrain-tools mods check --mods {root}/mods --gamepack {root}/gamepack/gamepack.toml
+mods-check-worldgen-slot | stdout | 0      | does not declare [provides] 'refrain:worldgen' | refrain-tools mods check --mods {root}/mods --gamepack {root}/gamepack/gamepack.toml
+mods-check-warning-count | stdout | 0      | 2 undeclared provider warning(s) | refrain-tools mods check --mods {root}/mods --gamepack {root}/gamepack/gamepack.toml
+mods-check-slots-session | stdout | 0      | !does not declare [provides] 'refrain:net_session' | refrain-tools mods check --mods {root}/test/fixtures/mods-slots --gamepack {root}/test/fixtures/gamepack/slots.toml
+mods-check-slots-migration | stdout | 0    | !does not declare [provides] 'refrain:world_migration' | refrain-tools mods check --mods {root}/test/fixtures/mods-slots --gamepack {root}/test/fixtures/gamepack/slots.toml
+mods-check-slots-undeclared | stdout | 0   | does not declare [provides] 'refrain:worldgen' | refrain-tools mods check --mods {root}/test/fixtures/mods-slots --gamepack {root}/test/fixtures/gamepack/slots.toml
+mods-check-slots-summary | stdout | 0      | 1 undeclared provider warning(s) | refrain-tools mods check --mods {root}/test/fixtures/mods-slots --gamepack {root}/test/fixtures/gamepack/slots.toml
 # `mods list` reads install receipts; the checked-in instance fixture is a
 # manifest tree only, so it contributes no runtime candidate (directory
 # side-loading is not a load path).

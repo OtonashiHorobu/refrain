@@ -8,6 +8,8 @@
 #include <refrain/mod/manifest.hpp>
 #include <refrain/mod/mod_ref.hpp>
 
+#include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <span>
@@ -78,6 +80,89 @@ struct provider_binding {
     std::optional<mod_requirement> base{};
     std::vector<mod_requirement> wrappers{};
 };
+
+// Short-slot mapping: a gamepack names a service by its `[providers]` key
+// ("data", "world", "protocol"), while a contract table or a factory passes the
+// full contract id ("refrain:data.packs", "refrain:net.protocol"). These
+// predicates are the single definition of that mapping: the host uses them to
+// activate a planned provider, and the tools use them to check that a mod's
+// `[provides]` list covers the slots its gamepack selects it for.
+
+namespace detail {
+
+/// Is `service` exactly `<prefix><slot>`?
+[[nodiscard]] inline auto equals_slot(std::string_view service,
+                                      std::string_view prefix,
+                                      std::string_view slot) -> bool {
+    return service.size() == prefix.size() + slot.size() &&
+           service.starts_with(prefix) && service.substr(prefix.size()) == slot;
+}
+
+/// Is `service` a member of the `<prefix><slot>.` namespace?
+[[nodiscard]] inline auto in_slot_namespace(std::string_view service,
+                                            std::string_view prefix,
+                                            std::string_view slot) -> bool {
+    return service.size() > prefix.size() + slot.size() &&
+           service.starts_with(prefix) &&
+           service.substr(prefix.size(), slot.size()) == slot &&
+           service[prefix.size() + slot.size()] == '.';
+}
+
+/// Compare `refrain:<slot with dots>` against an underscore slot, so
+/// "refrain:session.status" activates the gamepack slot "session_status".
+[[nodiscard]] inline auto equals_dotted_slot(std::string_view service,
+                                             std::string_view slot) -> bool {
+    constexpr std::string_view prefix{"refrain:"};
+    if (!service.starts_with(prefix)) {
+        return false;
+    }
+    const auto rest{service.substr(prefix.size())};
+    if (rest.size() != slot.size()) {
+        return false;
+    }
+    for (std::size_t index{0}; index < rest.size(); ++index) {
+        const auto character{rest[index] == '.' ? '_' : rest[index]};
+        if (character != slot[index]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+} // namespace detail
+
+/// Does the contract id `service` belong to the gamepack service slot `slot`?
+///
+/// A service matches a slot when it is the slot itself, `refrain:<slot>`,
+/// `refrain:net.<slot>`, a member of the `refrain:<slot>.` namespace, or the
+/// dotted spelling of `refrain:<slot>` whose dots are underscores in the slot
+/// (`refrain:net.session` matches `net_session`). Anything else is a different
+/// service.
+[[nodiscard]] inline auto matches_slot(std::string_view service,
+                                       std::string_view slot) -> bool {
+    if (service.empty() || slot.empty()) {
+        return false;
+    }
+    constexpr std::string_view namespace_prefix{"refrain:"};
+    constexpr std::string_view net_prefix{"refrain:net."};
+    return service == slot ||
+           detail::equals_slot(service, namespace_prefix, slot) ||
+           detail::equals_slot(service, net_prefix, slot) ||
+           detail::in_slot_namespace(service, namespace_prefix, slot) ||
+           detail::equals_dotted_slot(service, slot);
+}
+
+/// Does the manifest `[provides]` list cover `service`? Exact id match, or the
+/// short-slot rule applied to a declared entry (a mod may declare "data"
+/// instead of "refrain:data.packs").
+[[nodiscard]] inline auto
+declares_service(std::span<const std::string> provides,
+                 std::string_view service) -> bool {
+    return std::ranges::any_of(
+        provides, [service](const std::string &declared) {
+            return declared == service || matches_slot(service, declared);
+        });
+}
 
 /// Display metadata for launcher/UI (never used by resolution). The shape is
 /// shared with mod manifests.

@@ -4,6 +4,8 @@
 
 #include <refrain/worldgen/dimension_generator.hpp>
 
+#include <refrain/core/io.hpp>
+#include <refrain/data/vanilla.hpp>
 #include <refrain/worldgen/biome/biome_manager.hpp>
 #include <refrain/worldgen/biome/biome_view.hpp>
 #include <refrain/worldgen/carver/carver_data.hpp>
@@ -27,6 +29,18 @@ namespace {
 
 auto fail(std::string_view message) -> error {
     return make_error(error_code::invalid_argument, message);
+}
+
+/// The block-state table container beside the data directory, the layout of an
+/// installed content root.
+auto table_path(std::string_view data_root) -> std::string {
+    while (data_root.size() > 1 &&
+           (data_root.back() == '/' || data_root.back() == '\\')) {
+        data_root.remove_suffix(1);
+    }
+    std::string path = core::io::parent_directory(data_root);
+    path += "/tables.rvtb";
+    return path;
 }
 
 /// `<namespace>/<path>` to the document id `<namespace>:<path>`.
@@ -97,7 +111,8 @@ struct dimension_shared_data {
 dimension_generator::dimension_generator(
     dimension_generator_config config,
     std::shared_ptr<const dimension_shared_data> shared,
-    dimension_biome_source biome_source, block_state_registry states)
+    dimension_biome_source biome_source,
+    std::shared_ptr<block_state_registry> states)
     : config_{std::move(config)}, shared_{std::move(shared)},
       profile_{&shared_->profile}, biome_source_{std::move(biome_source)},
       states_{std::move(states)},
@@ -113,21 +128,29 @@ dimension_generator::dimension_generator(
                *shared_->settings.router.ridges,
                sampler_context_} {
     // The rule table must share the registry the chunk and the fill use.
-    rule_states_ = surface::block_states{states_};
-    air_state_ = states_.air();
-    const auto block =
-        states_.intern(shared_->settings.default_block, solid_traits());
-    default_block_state_ = block.value_or(no_block_state);
+    rule_states_ = surface::block_states{*states_};
+    air_state_ = states_->air();
+    const auto resolve = [this](std::string_view name,
+                                state_traits traits) -> block_state_id {
+        // A shared table already holds the content's complete state list, so
+        // the lookup must not append a first-use duplicate of a name the
+        // table resolves.
+        if (const auto found = states_->find(name); found.has_value()) {
+            return *found;
+        }
+        const auto interned = states_->intern(name, traits);
+        return interned.value_or(no_block_state);
+    };
+    default_block_state_ =
+        resolve(shared_->settings.default_block, solid_traits());
     if (shared_->settings.default_fluid == "minecraft:air") {
         default_fluid_state_ = air_state_;
     } else {
         const bool water = shared_->settings.default_fluid == "minecraft:water";
-        const auto fluid = states_.intern(shared_->settings.default_fluid,
-                                          fluid_traits(water));
-        default_fluid_state_ = fluid.value_or(no_block_state);
+        default_fluid_state_ =
+            resolve(shared_->settings.default_fluid, fluid_traits(water));
     }
-    lava_state_ = states_.intern("minecraft:lava", fluid_traits(false))
-                      .value_or(no_block_state);
+    lava_state_ = resolve("minecraft:lava", fluid_traits(false));
 }
 
 auto dimension_generator::load_shared(dimension_generator_config config)
@@ -227,6 +250,18 @@ auto dimension_generator::load_shared(dimension_generator_config config)
     return std::shared_ptr<const dimension_shared_data>{std::move(shared)};
 }
 
+namespace {
+
+auto load_biome_source(const dimension_generator_config &config)
+    -> result<dimension_biome_source> {
+    if (!config.fixed_biome.empty()) {
+        return dimension_biome_source::fixed(config.kind, config.fixed_biome);
+    }
+    return dimension_biome_source::load(config.data_root, config.kind);
+}
+
+} // namespace
+
 auto dimension_generator::create(dimension_generator_config config)
     -> result<std::unique_ptr<dimension_generator>> {
     auto shared = load_shared(config);
@@ -243,29 +278,93 @@ auto dimension_generator::create(
     if (config.data_root.empty()) {
         return std::unexpected{fail("dimension generator has no data root")};
     }
-    result<dimension_biome_source> biome_source =
-        result<dimension_biome_source>{
-            dimension_biome_source::fixed(config.kind, config.fixed_biome)};
-    if (config.fixed_biome.empty()) {
-        biome_source =
-            dimension_biome_source::load(config.data_root, config.kind);
-    }
+    auto biome_source = load_biome_source(config);
     if (!biome_source) {
         return std::unexpected{biome_source.error()};
     }
-    block_state_registry states;
-    if (const auto applied = apply_block_tags(states, shared->tags); !applied) {
+    auto states = std::make_shared<block_state_registry>();
+    if (const auto applied = apply_block_tags(*states, shared->tags);
+        !applied) {
         return std::unexpected{applied.error()};
     }
     // A snapshot that also ships the block default report lets a bare state
     // key answer state-dependent questions. Older snapshots omit it, and the
     // generator keeps the spelling-only behaviour.
     if (!shared->block_defaults.empty()) {
-        states.set_block_defaults(shared->block_defaults);
+        states->set_block_defaults(shared->block_defaults);
     }
     return std::unique_ptr<dimension_generator>{
         new dimension_generator{std::move(config), std::move(shared),
                                 std::move(*biome_source), std::move(states)}};
+}
+
+auto dimension_generator::create(
+    dimension_generator_config config,
+    std::shared_ptr<const dimension_shared_data> shared,
+    std::shared_ptr<block_state_registry> states)
+    -> result<std::unique_ptr<dimension_generator>> {
+    if (config.data_root.empty()) {
+        return std::unexpected{fail("dimension generator has no data root")};
+    }
+    if (states == nullptr) {
+        return std::unexpected{fail("dimension generator has no state table")};
+    }
+    auto biome_source = load_biome_source(config);
+    if (!biome_source) {
+        return std::unexpected{biome_source.error()};
+    }
+    return std::unique_ptr<dimension_generator>{
+        new dimension_generator{std::move(config), std::move(shared),
+                                std::move(*biome_source), std::move(states)}};
+}
+
+auto dimension_generator::possible_biomes(
+    const dimension_generator_config &config,
+    const std::shared_ptr<const dimension_shared_data> &shared)
+    -> result<std::vector<std::string>> {
+    (void)shared;
+    if (!config.fixed_biome.empty()) {
+        return std::vector<std::string>{config.fixed_biome};
+    }
+    auto source = load_biome_source(config);
+    if (!source) {
+        return std::unexpected{source.error()};
+    }
+    return std::vector<std::string>{source->biomes().begin(),
+                                    source->biomes().end()};
+}
+
+auto dimension_generator::build_shared_states(
+    dimension_generator_config config,
+    const std::shared_ptr<const dimension_shared_data> &shared)
+    -> result<std::shared_ptr<block_state_registry>> {
+    if (shared == nullptr) {
+        return std::unexpected{
+            fail("the shared block state table needs dimension data")};
+    }
+    const std::string tables_path = config.tables_path.empty()
+                                        ? table_path(config.data_root)
+                                        : config.tables_path;
+    if (!core::io::is_regular_file(tables_path)) {
+        return std::unexpected{make_error(
+            error_code::not_found,
+            "the shared block state table needs the content block table at " +
+                tables_path)};
+    }
+    auto bytes = core::io::read_file(tables_path);
+    if (!bytes) {
+        return std::unexpected{bytes.error()};
+    }
+    auto tables = data::vanilla_tables::open(*bytes);
+    if (!tables) {
+        return std::unexpected{tables.error()};
+    }
+    auto registry = build_shared_block_state_registry(*tables, shared->tags);
+    if (!registry) {
+        return std::unexpected{registry.error()};
+    }
+    return std::shared_ptr<block_state_registry>{
+        std::make_shared<block_state_registry>(std::move(*registry))};
 }
 
 auto dimension_generator::settings() const noexcept
@@ -319,8 +418,8 @@ auto dimension_generator::make_aquifer(
 
 auto dimension_generator::make_chunk(const chunk_pos &pos) const
     -> std::unique_ptr<proto_chunk> {
-    return std::make_unique<proto_chunk>(states_, pos.x, pos.z, profile_->min_y,
-                                         profile_->height);
+    return std::make_unique<proto_chunk>(*states_, pos.x, pos.z,
+                                         profile_->min_y, profile_->height);
 }
 
 auto dimension_generator::generate_height_column(const chunk_pos &pos)
@@ -552,7 +651,7 @@ auto dimension_generator::generate_terrain(const chunk_pos &pos,
         const auto mask = generator.generate(pos);
         carver::carve_apply_context apply{
             .aquifer = aquifer.aquifer.get(),
-            .states = &states_,
+            .states = states_.get(),
             .top_material = {},
             .filter = {},
         };
