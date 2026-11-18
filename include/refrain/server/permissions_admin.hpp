@@ -21,6 +21,7 @@
 #pragma once
 
 #include <refrain/core/error.hpp>
+#include <refrain/permissions/policy.hpp>
 
 #include <cstdint>
 #include <functional>
@@ -43,6 +44,15 @@ struct permissions_online_player {
     std::string uuid{};
     std::string world{};
     std::string gamemode{};
+};
+
+/// A player profile resolved without a live session: the canonical uuid and the
+/// profile name it belongs to. An offline-mode server derives it from the name
+/// with the same rule the login uses; an online-mode server cannot resolve a
+/// name without the account, so it only has this for a connected player.
+struct permissions_player_profile {
+    std::string uuid{};
+    std::string name{};
 };
 
 /// Who runs a permission command. The console has no uuid; a player carries
@@ -94,6 +104,21 @@ struct permissions_admin_state {
     /// Resolve an online player name (case-insensitive) to its identity.
     std::function<std::optional<permissions_online_player>(std::string_view)>
         find_player{};
+    /// Resolve a player who is not connected to its canonical profile. The
+    /// composition root installs it when the composition has a profile service
+    /// that answers without a session: an offline-mode server derives the same
+    /// deterministic profile the login would create. Null leaves an offline
+    /// subject addressable only by an explicit `player:<uuid>` key.
+    std::function<std::optional<permissions_player_profile>(std::string_view)>
+        find_profile{};
+    /// Chain-aware answer of the active provider, including wrapper providers.
+    /// `check` uses it so a node a wrapper decided is not reported with the
+    /// base resolver's answer. Null when the composition has no permission
+    /// service.
+    std::function<services::permissions::permission_result(
+        const permissions::subject_view &, std::string_view node,
+        const permissions::context_view &)>
+        query{};
     /// Audit sink. Empty writes the formatted record through the
     /// `permissions-audit` logger.
     std::function<void(const permissions_audit_record &)> audit{};

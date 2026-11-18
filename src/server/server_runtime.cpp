@@ -2,7 +2,10 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 
+#include <refrain/contracts/abi.hpp>
+#include <refrain/contracts/services/net_session.hpp>
 #include <refrain/contracts/services/sim.hpp>
+#include <refrain/permissions/client.hpp>
 #include <refrain/protocol/current.hpp>
 #include <refrain/server/server_runtime.hpp>
 
@@ -684,6 +687,36 @@ auto run_server(const server_run_options &options,
         refrain::server::bind_permissions(command_environment,
                                           *services.permissions,
                                           services.permissions_self);
+        // `/permissions check` asks the active provider itself, so a node a
+        // chain wrapper decided is not reported with the base resolver's
+        // answer.
+        const refrain::permissions::client permission_client{
+            *services.permissions, services.permissions_self};
+        command_environment->permissions.query =
+            [permission_client](
+                const refrain::permissions::subject_view &subject,
+                std::string_view node,
+                const refrain::permissions::context_view &context)
+            -> refrain::services::permissions::permission_result {
+            const std::string id{subject.id};
+            const std::string profile_name{subject.profile_name};
+            std::vector<refrain::permissions::context_entry> extra{};
+            extra.reserve(context.extra.size());
+            for (const auto &entry : context.extra) {
+                extra.push_back(refrain::permissions::context_entry{
+                    .key = entry.key, .value = entry.value});
+            }
+            const refrain::permissions::subject who{.kind = subject.kind,
+                                                    .id = id,
+                                                    .profile_name =
+                                                        profile_name,
+                                                    .op_level = 0};
+            const refrain::permissions::context query_context{
+                .world = context.world,
+                .gamemode = context.gamemode,
+                .extra = extra};
+            return permission_client.query(who, node, query_context);
+        };
         log_permissions.info(
             "command permissions are served by {}, policy revision {}",
             services.permissions_provider.empty()
@@ -704,6 +737,49 @@ auto run_server(const server_run_options &options,
             [raw](std::string_view name) {
                 return raw->find_online_player(name);
             };
+        // An offline-mode server can resolve a name that is not connected with
+        // the same deterministic profile its login creates, through the session
+        // provider. An online-mode server has no way to map a name to an
+        // account, so an offline subject stays addressable by its uuid only.
+        if (!online_mode && options.mod_host != nullptr) {
+            auto *const host{options.mod_host};
+            command_environment->permissions.find_profile =
+                [host](std::string_view name)
+                -> std::optional<refrain::server::permissions_player_profile> {
+                if (name.empty()) {
+                    return std::nullopt;
+                }
+                const auto session{
+                    host->services().active_provider("refrain:net.session")};
+                if (!session || session->instance == nullptr) {
+                    return std::nullopt;
+                }
+                const auto *api{static_cast<const refrain::mod::provider_api *>(
+                    session->instance)};
+                if (api == nullptr || api->vtable == nullptr ||
+                    api->self == nullptr) {
+                    return std::nullopt;
+                }
+                const auto *table{
+                    static_cast<const refrain_services_net_session_vtable *>(
+                        api->vtable)};
+                if (table->offline_profile == nullptr) {
+                    return std::nullopt;
+                }
+                auto profile{
+                    refrain::services::net_session::make_session_profile()};
+                if (table->offline_profile(
+                        api->self, refrain::contracts::to_borrowed(name),
+                        &profile) != REFRAIN_STATUS_OK) {
+                    return std::nullopt;
+                }
+                return refrain::server::permissions_player_profile{
+                    .uuid = std::string{refrain::contracts::as_string_view(
+                        profile.id)},
+                    .name = std::string{
+                        refrain::contracts::as_string_view(profile.name)}};
+            };
+        }
         log_permissions.info("permission administration is available to the "
                              "'refrain.permissions.admin' node");
     }

@@ -255,7 +255,10 @@ Two hooks control which commands a source sees and may run:
   source and the declared node and answers `allowed`, `denied` or
   `not_handled`; `not_handled` falls back to the declared ladder level. The
   composition root installs the check backed by the `refrain:permissions`
-  service; the command module itself has no permission registry.
+  service; the command module itself has no permission registry. The query the
+  bridge builds carries the player's world and game mode, so the policy can
+  match context-sensitive rules; a node a chain wrapper owns is answered by
+  that wrapper, and only the nodes it forwards reach the base resolver.
 
 The same filter decides the tree snapshot, the completion list and the
 execution path, so the three cannot disagree about who may use a command. A
@@ -277,8 +280,11 @@ The built-in command tree also consumes the policy for administration:
 executors call the host-side management surface of the base resolver. A grant or
 revoke changes the policy, persists it and advances the revision, so the tree
 snapshot, the completion list and the execution check of every player refresh on
-their next tick. The audit record of each change is described in
-[Running a server](running.md#permission-administration).
+their next tick; the revision a chain reports covers its wrappers as well as the
+base policy, so a wrapper change invalidates the same caches. `check` asks the
+active provider first, so it reports a node a wrapper decided together with the
+answer the base resolver alone would give. The audit record of each change is
+described in [Running a server](running.md#permission-administration).
 
 ## World and player command batch
 
@@ -405,7 +411,7 @@ commands are delivered in the batches named in the notes.
 | `/pardon-ip` | planned | batch 5: remaining administration |
 | `/particle` | planned | batch 2: blocks and entities |
 | `/perf` | planned | batch 5: remaining administration |
-| `/permissions` | implemented | Server command outside the reference root set: `check`, `grant`, `revoke`, `groups` and `reload` administer the built-in permission policy under the `refrain.permissions.admin` node; the console frontend uses `permissions ...`. See [Running a server](running.md#permission-administration). |
+| `/permissions` | implemented | Server command outside the reference root set: `check`, `grant`, `revoke`, `groups` and `reload` administer the built-in permission policy under the `refrain.permissions.admin` node; `check` reports context rules and chain-wrapper answers, `grant`/`revoke` resolve a bare player name through the live session or, on an offline-mode server, through the deterministic offline profile, and `reload` reloads the base policy and every chain wrapper; the console frontend uses `permissions ...`. See [Running a server](running.md#permission-administration). |
 | `/place` | planned | batch 2: blocks and entities |
 | `/playsound` | planned | batch 2: blocks and entities |
 | `/posteffect` | planned | batch 1: player and world basics |

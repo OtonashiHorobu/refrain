@@ -74,6 +74,38 @@ struct resolved_subject {
     }
 };
 
+/// Resolve an online player by name or uuid through the live session table.
+[[nodiscard]] auto online_player(const permissions_admin_state &state,
+                                 std::string_view identity)
+    -> std::optional<permissions_online_player> {
+    if (!state.find_player) {
+        return std::nullopt;
+    }
+    return state.find_player(identity);
+}
+
+/// Resolve a player who is not connected through the composition's profile
+/// service, when it has one.
+[[nodiscard]] auto offline_profile(const permissions_admin_state &state,
+                                   std::string_view name)
+    -> std::optional<permissions_player_profile> {
+    if (!state.find_profile) {
+        return std::nullopt;
+    }
+    return state.find_profile(name);
+}
+
+/// The context a query for this subject carries. Only a live session knows the
+/// world and game mode; a resolved offline profile has no context.
+[[nodiscard]] auto query_context(const resolved_subject &subject) noexcept
+    -> permissions::context_view {
+    if (!subject.online.has_value()) {
+        return {};
+    }
+    return permissions::context_view{.world = subject.online->world,
+                                     .gamemode = subject.online->gamemode};
+}
+
 /// Resolve a subject word into the identity the policy evaluates and the key a
 /// change targets.
 [[nodiscard]] auto resolve_subject(const permissions_admin_state &state,
@@ -105,18 +137,40 @@ struct resolved_subject {
         resolved.id = std::string{identity};
         if (kind_name == "player") {
             resolved.kind = subject_kind::player;
-            if (!permissions::is_uuid(identity)) {
-                resolved.profile_name = resolved.id;
+            resolved.online = online_player(state, identity);
+            if (resolved.online.has_value() && !resolved.online->name.empty()) {
+                resolved.profile_name = resolved.online->name;
             }
-            // An online player gives the query its world and game mode context
-            // and, for a uuid subject, its profile name so the name fallback
-            // rule set applies exactly like it does at query time.
-            if (state.find_player) {
-                if (auto online{state.find_player(identity)}) {
-                    if (resolved.profile_name.empty()) {
-                        resolved.profile_name = online->name;
+            if (permissions::is_uuid(identity)) {
+                // A uuid identifies the account directly; the online session
+                // only adds the profile name and the query context.
+                if (resolved.online.has_value() &&
+                    !resolved.online->uuid.empty()) {
+                    resolved.id = resolved.online->uuid;
+                }
+            } else {
+                // A profile name is mutable. Canonicalise it to the account
+                // uuid when the composition can, so a grant follows the
+                // account instead of whoever holds the name next.
+                resolved.profile_name = std::string{identity};
+                if (resolved.online.has_value() &&
+                    !resolved.online->uuid.empty()) {
+                    resolved.id = resolved.online->uuid;
+                } else if (auto profile{offline_profile(state, identity)};
+                           profile.has_value() && !profile->uuid.empty()) {
+                    resolved.id = profile->uuid;
+                    if (!profile->name.empty()) {
+                        resolved.profile_name = profile->name;
                     }
-                    resolved.online = std::move(*online);
+                } else {
+                    // No profile service can resolve the name; keep the
+                    // configured name key as the compatibility fallback.
+                    resolved.id = std::string{identity};
+                }
+                resolved.key = permissions::make_subject_key(
+                    subject_kind::player, resolved.id);
+                if (!resolved.key.empty()) {
+                    resolved.display = resolved.key;
                 }
             }
         } else if (kind_name == "entity") {
@@ -126,28 +180,57 @@ struct resolved_subject {
         }
         return resolved;
     }
-    if (state.find_player) {
-        if (auto online{state.find_player(text)}) {
-            resolved_subject resolved{};
-            resolved.kind = subject_kind::player;
-            resolved.online = std::move(*online);
-            if (!resolved.online->uuid.empty()) {
-                resolved.id = resolved.online->uuid;
-            } else {
-                resolved.id = resolved.online->name;
-            }
-            resolved.profile_name = resolved.online->name;
-            resolved.key = permissions::make_subject_key(subject_kind::player,
-                                                         resolved.id);
-            if (resolved.key.empty()) {
-                return std::unexpected{make_error(
-                    error_code::invalid_argument,
-                    fmt::format("'{}' has no configurable permission identity",
-                                text))};
-            }
-            resolved.display = resolved.key;
-            return resolved;
+    if (auto online{online_player(state, text)}; online.has_value()) {
+        resolved_subject resolved{};
+        resolved.kind = subject_kind::player;
+        resolved.online = std::move(*online);
+        if (!resolved.online->uuid.empty()) {
+            resolved.id = resolved.online->uuid;
+        } else {
+            resolved.id = resolved.online->name;
         }
+        resolved.profile_name = resolved.online->name;
+        resolved.key =
+            permissions::make_subject_key(subject_kind::player, resolved.id);
+        if (resolved.key.empty()) {
+            return std::unexpected{make_error(
+                error_code::invalid_argument,
+                fmt::format("'{}' has no configurable permission identity",
+                            text))};
+        }
+        resolved.display = resolved.key;
+        return resolved;
+    }
+    if (auto profile{offline_profile(state, text)}; profile.has_value()) {
+        if (profile->uuid.empty()) {
+            return std::unexpected{make_error(
+                error_code::invalid_argument,
+                fmt::format("the profile of '{}' has no canonical uuid",
+                            text))};
+        }
+        resolved_subject resolved{};
+        resolved.kind = subject_kind::player;
+        resolved.id = profile->uuid;
+        resolved.profile_name =
+            profile->name.empty() ? std::string{text} : profile->name;
+        resolved.key =
+            permissions::make_subject_key(subject_kind::player, resolved.id);
+        if (resolved.key.empty()) {
+            return std::unexpected{make_error(
+                error_code::invalid_argument,
+                fmt::format("'{}' has no configurable permission identity",
+                            text))};
+        }
+        resolved.display = resolved.key;
+        return resolved;
+    }
+    if (state.find_profile) {
+        return std::unexpected{make_error(
+            error_code::not_found,
+            fmt::format("no player profile is named '{}'; use console or "
+                        "player:<uuid> for a subject this server cannot "
+                        "resolve",
+                        text))};
     }
     return std::unexpected{
         make_error(error_code::not_found,
@@ -190,6 +273,18 @@ struct resolved_subject {
         break;
     case decision_source::group_deny:
         text = fmt::format("deny from group '{}'", answer.group);
+        break;
+    case decision_source::context_grant:
+        text = answer.group.empty()
+                   ? fmt::format("grant in context '{}'", answer.context)
+                   : fmt::format("grant from group '{}' in context '{}'",
+                                 answer.group, answer.context);
+        break;
+    case decision_source::context_deny:
+        text = answer.group.empty()
+                   ? fmt::format("deny in context '{}'", answer.context)
+                   : fmt::format("deny from group '{}' in context '{}'",
+                                 answer.group, answer.context);
         break;
     case decision_source::op_grant:
         text = "operator node";
@@ -267,17 +362,55 @@ void write_audit(const permissions_admin_state &state,
             fmt::format("'{}' is not a concrete permission node", node);
         return report;
     }
-    if (state.admin == nullptr) {
+    if (state.admin == nullptr && !state.query) {
         report.lines.push_back(fmt::format(
             "not-handled '{}' for {}: no permission service with an "
             "administration surface is active",
             node, subject->display));
         return report;
     }
-    const auto answer{state.admin->explain(subject->view(), node, 0)};
-    report.lines.push_back(fmt::format(
-        "{} '{}' for {} ({}; context {})", result_word(answer.result), node,
-        subject->display, source_text(answer), context_text(*subject)));
+
+    // The chain-aware query is authoritative when the composition provides it;
+    // the administration surface of the base resolver names the deciding rule
+    // for the answers the base took. A wrapper answer therefore reports that a
+    // wrapper decided and what the base would have answered.
+    const auto context{query_context(*subject)};
+    auto answer{permission_result::not_handled};
+    auto have_answer{false};
+    if (state.query) {
+        answer = state.query(subject->view(), node, context);
+        have_answer = true;
+    }
+    permissions::decision_explanation explanation{};
+    if (state.admin != nullptr) {
+        explanation = state.admin->explain(subject->view(), node, 0, context);
+        if (!have_answer) {
+            answer = explanation.result;
+            have_answer = true;
+        }
+    }
+    if (!have_answer) {
+        report.lines.push_back(fmt::format(
+            "not-handled '{}' for {}: no permission provider answered", node,
+            subject->display));
+        return report;
+    }
+
+    std::string detail{};
+    if (state.admin == nullptr) {
+        detail = "the active permission provider answered; this composition "
+                 "has no administration surface";
+    } else if (explanation.result == answer) {
+        detail = source_text(explanation);
+    } else {
+        detail = fmt::format(
+            "a wrapper provider answered; the base resolver alone would "
+            "report {} ({})",
+            result_word(explanation.result), source_text(explanation));
+    }
+    report.lines.push_back(
+        fmt::format("{} '{}' for {} ({}; context {})", result_word(answer),
+                    node, subject->display, detail, context_text(*subject)));
     return report;
 }
 

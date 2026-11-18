@@ -76,6 +76,18 @@ class admin {
                                        std::uint32_t op_level) const
         -> decision_explanation = 0;
 
+    /// Read one query with the caller's context and name the deciding rule.
+    /// The default implementation ignores the context, so a provider that has
+    /// no context rules keeps its answer; the built-in resolver matches its
+    /// `[contexts]` predicates.
+    [[nodiscard]] virtual auto
+    explain(const subject_view &subject, std::string_view node,
+            std::uint32_t op_level, const context_view &context) const
+        -> decision_explanation {
+        static_cast<void>(context);
+        return explain(subject, node, op_level);
+    }
+
     /// Copy of the current policy and the revision it is published at.
     [[nodiscard]] virtual auto snapshot() const -> policy_snapshot = 0;
 

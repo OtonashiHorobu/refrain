@@ -410,12 +410,47 @@ players = []
 
 [groups]
 moderators = ["refrain.mods.admin"]
+
+[contexts]
+# A named predicate over the query context: it applies only when every entry
+# matches. `world` and `gamemode` address those context fields; any other key
+# matches one extra key/value pair a caller supplied.
+creative = { gamemode = "creative" }
+overworld = { world = "minecraft:overworld" }
+
+[context_grants]
+# Rules attached to a subject while one context applies. The subject key has
+# the same shape as in `[grants]`, and `@group` joins a global group.
+creative = { "player:069a79f4-44e9-4726-a5be-fca90e38aaf5" = ["!refrain.command.gamemode"] }
 ```
+
+Context rules are additive. Every `[contexts]` predicate that matches the
+query applies, and its `[context_grants]` rule set joins the subject's own rule
+sets in the same deny-wins order: a matching deny in any applicable set
+(global, group, operator, public default or context) denies, otherwise a
+matching grant allows, otherwise `[defaults].default` decides. A context rule
+therefore narrows or extends one subject's access for that context but cannot
+override a deny. Groups stay global and single-level; a context rule joins one
+with `@name` but does not make the group's rules conditional. When several
+contexts match they are scanned in name order, and `permissions check` names
+the first matching deny, or the first matching grant, that decided.
+
+A query context carries the player's world, its game mode and any extra
+key/value pairs the caller supplies. The command bridge fills the game mode;
+this server leaves the world key empty because the session does not track a
+dimension, so a `world` predicate matches only a context a caller supplies
+explicitly. A context with no `[contexts]` rule never changes an answer, and a
+policy without `[contexts]`/`[context_grants]` answers the same way for every
+context. A malformed context is rejected and the query is denied instead of
+being matched: an oversized or empty key, a reserved key in the extra list or
+a duplicate extra key all fail closed, so a caller that cannot supply a
+well-formed context does not get a match.
 
 The console always holds every node. Rules resolve in this order: console, a
 matching deny, a matching grant, an operator's `[op].nodes` (an operator is a
 player in `[ops].players` or at `[op].min_level` on the ladder), a grant in
-`[defaults].nodes`, then `[defaults].default`.
+`[defaults].nodes`, then `[defaults].default`. The rule sets of every matching
+context are folded into the same order, as described above.
 
 The generated first-start policy leaves the public command surface
 (`refrain.command.help`, `refrain.command.list`, `refrain.command.me`,
@@ -436,6 +471,28 @@ gamepack that does not select `refrain.permissions`) keeps the vanilla
 op-level semantics: every command node declares a fallback level next to its
 node, and a player at or above that level may use the command.
 
+`refrain:permissions` is a chain, and a gamepack may name wrapper providers in
+front of the built-in resolver:
+
+```toml
+[providers]
+permissions = { base = "refrain.permissions@^1.0.0", wrappers = ["com.example.permissions@^1.0.0"] }
+```
+
+A wrapper answers `allowed` or `denied` for the nodes it owns and
+`not_handled` for every other node, which forwards the query to the next
+provider until the base resolver answers. The wrappers are listed from the
+innermost to the outermost, so the outermost wrapper sees the query first. A
+wrapper can deny a node the base would grant and grant a node the base would
+deny, which is how an external policy extends the built-in one. The served
+revision is the base revision plus every wrapper revision, so a change in a
+wrapper invalidates the command tree exactly like a policy change, and
+`permissions reload` reloads the base and every wrapper. A wrapper the
+gamepack names but the host did not register fails composition, so the running
+server always has a complete chain. Change the wrapper list in the gamepack and
+restart the server: a running composition keeps the chain links it resolved at
+startup, and removing a wrapper while commands may query it is not supported.
+
 The service publishes a monotonic revision for caches. The administration
 commands below re-read the file or change one rule at runtime, and every policy
 change advances the revision, which invalidates the command-tree cache and makes
@@ -452,20 +509,26 @@ the commands.
 
 | Command | Effect |
 |---|---|
-| `permissions check <subject> <node>` | Answer allowed, denied or not-handled for one subject and node, name the deciding rule set (console, grant, deny, group, operator, public default or fallback) and print the player's world and game mode context |
+| `permissions check <subject> <node>` | Answer allowed, denied or not-handled for one subject and node, name the deciding rule set (console, grant, deny, group, context, operator, public default or fallback) and print the player's world and game mode context; a node a chain wrapper decided is reported as such with the base resolver's own answer |
 | `permissions grant <subject> <node>` | Add one rule to the subject's `[grants]` entry, write the configuration file and report the new revision |
 | `permissions revoke <subject> <node>` | Remove one rule from the subject's `[grants]` entry, write the configuration file and report the new revision |
 | `permissions groups` | List every `[groups]` entry with its rules and the subjects that joined it |
 | `permissions reload` | Re-read `config/permissions.toml` and report the old and new revision |
 
-A `<subject>` is `console`, an online player name (resolved to the player's
-canonical uuid), or one configured subject key: `player:<uuid>`,
-`player:<profile name>`, `entity:<uuid>` or `plugin:<mod id>`. An unknown bare
-name is an error; use a `player:<uuid>` key to grant a player who is not online.
-A `<node>` is a rule: a concrete node, a namespace wildcard such as
-`refrain.command.*`, a bare `*`, or one of those prefixed with `!` for an
-explicit deny. Granting a rule that is already present and revoking one that is
-absent report the unchanged revision and write nothing.
+A `<subject>` is `console`, a player name, or one configured subject key:
+`player:<uuid>`, `player:<profile name>`, `entity:<uuid>` or `plugin:<mod id>`.
+A name resolves to the canonical account uuid: first through a live session,
+then, on a server running with online mode disabled, through the deterministic
+offline profile the login would create. A `player:<profile name>` key is
+canonicalised the same way, so a change follows the account instead of the
+mutable name; a name that resolves through the offline profile does not
+authenticate anything, it only names the account a change targets. An
+online-mode server cannot map a name to an account without the account, so a
+player who is not online is addressed by `player:<uuid>` there, and an unknown
+bare name is an error. A `<node>` is a rule: a concrete node, a namespace
+wildcard such as `refrain.command.*`, a bare `*`, or one of those prefixed with
+`!` for an explicit deny. Granting a rule that is already present and revoking
+one that is absent report the unchanged revision and write nothing.
 
 A change edits the loaded configuration file and replaces it atomically before
 it becomes visible to queries. Comments, table order and every unrelated entry
