@@ -173,6 +173,11 @@ equals_ascii_case_insensitive(std::string_view left,
 [[nodiscard]] auto make_color_console_sink(bool stderr_terminal)
     -> spdlog::sink_ptr {
     if (!stderr_terminal) {
+        // A redirected stream takes the ANSI sink, which writes through
+        // `FILE*`. On Windows that stream is in text mode and would translate
+        // the already-CRLF line ending into CRCRLF, so the platform helper
+        // switches it to byte-exact mode first; POSIX needs no change.
+        static_cast<void>(platform::set_stderr_binary_mode());
         return std::make_shared<spdlog::sinks::ansicolor_stderr_sink_mt>(
             spdlog::color_mode::always);
     }
@@ -269,10 +274,6 @@ auto console_color_enabled(color_mode mode, bool stderr_terminal,
         return false;
     }
     return false;
-}
-
-auto console_pattern() noexcept -> std::string_view {
-    return console_pattern_text;
 }
 
 auto to_string(level lvl) noexcept -> std::string_view {

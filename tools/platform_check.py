@@ -35,6 +35,8 @@ ALLOWED_PREFIXES = (
 # under test. Keep this list minimal; every addition needs a rationale here.
 ALLOWED_WHITE_BOX_TESTS = (
     # Signals: fork + waitpid + rlimit to observe how the child died.
+    # Terminal detection: dup2/_dup2 replaces the stderr descriptor with a
+    # regular file (or a pseudo-terminal on Linux) to prove the isatty probe.
     Path("test/platform/test_process.cpp"),
     # File permissions: POSIX mode bits, compiled out on Windows (`#if
     # !defined(_WIN32)`) because the ACL model differs.
@@ -48,11 +50,13 @@ ALLOWED_WHITE_BOX_TESTS = (
     # file) is the POSIX ENOTDIR model; Windows reports it as a missing path
     # instead, so that assertion is compiled out there (`#if !defined(_WIN32)`).
     Path("test/core/test_config.cpp"),
-    # Console sink direction: proving that diagnostics go to stderr and never
-    # to the command's stdout data channel is only observable at the stdio
-    # descriptor level; the test dup2's fd 1/2 onto temp files and restores
-    # them. A production "redirect stdio" abstraction would exist solely for
-    # this test. POSIX-only (`#if !defined(_WIN32)`).
+    # Console sink direction and colour: proving that diagnostics go to stderr
+    # and never to the command's stdout data channel, and capturing the escape
+    # sequences a forced-colour console writes, is only observable at the
+    # stdio descriptor level; the test dup2's fd 1/2 onto temp files (and onto a
+    # pseudo-terminal for the automatic-terminal arm) and restores them. A
+    # production "redirect stdio" abstraction would exist solely for this test.
+    # POSIX-only (`#if !defined(_WIN32)`).
     Path("test/core/test_log.cpp"),
     # Windows command-line quoting: the only way to prove the command line the
     # subprocess backend builds means the caller's arguments to the child is to

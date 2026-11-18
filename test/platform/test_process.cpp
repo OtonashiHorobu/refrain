@@ -28,12 +28,16 @@
 #include <unistd.h>
 #else
 // White-box Windows test of the liveness probe: the access-denied arm needs a
-// real process object with a restricted DACL. The same allow-list entry covers
-// this arm.
+// real process object with a restricted DACL, and the terminal probe replaces
+// the stderr descriptor. The same allow-list entry covers both arms.
 #include <windows.h>
 
 #include <aclapi.h>
 #include <sddl.h>
+
+#include <fcntl.h>
+#include <io.h>
+#include <sys/stat.h>
 #endif
 
 namespace {
@@ -336,6 +340,31 @@ suite<"platform/process"> process_tests = [] {
         expect(terminal);
     };
 #endif
+#endif
+
+#if defined(_WIN32)
+    // The console log sink colours only an interactive terminal; this probe is
+    // what keeps a redirected stderr (CI, pipes, files) plain.
+    "platform/process: stderr is not a terminal when redirected"_test = [] {
+        const refrain::test_support::scratch_directory scratch;
+        const auto path{scratch.path() / "stderr.txt"};
+        const int saved{::_dup(::_fileno(stderr))};
+        expect(saved >= 0);
+        const int file{::_wopen(path.c_str(),
+                                _O_WRONLY | _O_CREAT | _O_TRUNC | _O_BINARY,
+                                _S_IREAD | _S_IWRITE)};
+        expect(file >= 0);
+        if (file >= 0) {
+            (void)::_dup2(file, ::_fileno(stderr));
+            (void)::_close(file);
+        }
+        const auto terminal{refrain::platform::stderr_is_terminal()};
+        if (saved >= 0) {
+            (void)::_dup2(saved, ::_fileno(stderr));
+            (void)::_close(saved);
+        }
+        expect(!terminal);
+    };
 #endif
 };
 

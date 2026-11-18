@@ -102,6 +102,16 @@ set_fallback_dump_directory(std::string_view utf8_directory) noexcept -> bool;
 /// `isatty(STDERR_FILENO)`, Windows asks `_isatty(_fileno(stderr))`.
 [[nodiscard]] auto stderr_is_terminal() noexcept -> bool;
 
+/// Put standard error into byte-exact mode for a redirected ANSI capture.
+///
+/// Windows runs CRT streams in text mode, which would translate the "\r\n"
+/// line ending the formatter already emits into "\r\r\n". The console log
+/// sink calls this before it writes escape sequences to a redirected stream.
+/// POSIX streams have no text translation, so the function reports success
+/// without doing anything. Returns false when the mode cannot be changed; the
+/// caller still writes, only without the byte-exact guarantee.
+[[nodiscard]] auto set_stderr_binary_mode() noexcept -> bool;
+
 /// Absolute path of the running executable, as a UTF-8 string.
 ///
 /// The path is resolved by the operating system, not from `argv[0]`: a

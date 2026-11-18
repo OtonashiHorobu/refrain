@@ -24,6 +24,7 @@
 #include <string>
 #include <string_view>
 
+#include <fcntl.h>
 #include <io.h>
 
 namespace refrain::platform {
@@ -389,6 +390,12 @@ auto unset_environment_variable(std::string_view name) -> status {
 
 auto stderr_is_terminal() noexcept -> bool {
     return ::_isatty(::_fileno(stderr)) != 0;
+}
+
+auto set_stderr_binary_mode() noexcept -> bool {
+    // Text mode would turn the formatter's CRLF ending into CRCRLF on a
+    // redirected ANSI capture.
+    return ::_setmode(::_fileno(stderr), _O_BINARY) != -1;
 }
 
 void trigger_segmentation_fault() noexcept {

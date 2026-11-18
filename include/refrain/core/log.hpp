@@ -53,14 +53,6 @@ enum class color_mode : std::uint8_t {
 [[nodiscard]] auto console_color_enabled(color_mode mode, bool stderr_terminal,
                                          bool no_color) noexcept -> bool;
 
-/// Pattern of the console sink.
-///
-/// The `%^`/`%$` markers delimit the colour range around the level only, so a
-/// coloured line differs from a plain one inside `[.../level]` and nowhere
-/// else. The same pattern is installed on the colour and the plain sink; the
-/// markers emit nothing when the sink does not colour.
-[[nodiscard]] auto console_pattern() noexcept -> std::string_view;
-
 struct config {
     /// Console sink level. `off` disables the console sink entirely.
     ///
