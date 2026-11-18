@@ -19,6 +19,7 @@
 #include <refrain/data/builtin_image.hpp>
 #include <refrain/data/checksum.hpp>
 #include <refrain/data/path.hpp>
+#include <refrain/mod/gamepack.hpp>
 #include <refrain/mod/loader.hpp>
 #include <refrain/mod/package.hpp>
 #include <refrain/mod/static_mod.hpp>
@@ -253,80 +254,6 @@ using mod::static_mod_registry;
         summary += service;
     }
     return summary;
-}
-
-// ---------------------------------------------------------------------------
-// Short-slot mapping (gamepack `[providers]` keys vs. contract service ids)
-// ---------------------------------------------------------------------------
-
-/// Is `service` exactly `<prefix><slot>`?
-[[nodiscard]] auto equals_slot(std::string_view service,
-                               std::string_view prefix, std::string_view slot)
-    -> bool {
-    return service.size() == prefix.size() + slot.size() &&
-           service.starts_with(prefix) && service.substr(prefix.size()) == slot;
-}
-
-/// Is `service` a member of the `<prefix><slot>.` namespace?
-[[nodiscard]] auto in_slot_namespace(std::string_view service,
-                                     std::string_view prefix,
-                                     std::string_view slot) -> bool {
-    return service.size() > prefix.size() + slot.size() &&
-           service.starts_with(prefix) &&
-           service.substr(prefix.size(), slot.size()) == slot &&
-           service[prefix.size() + slot.size()] == '.';
-}
-
-/// Compare `refrain:<slot with dots>` against an underscore slot, so
-/// "refrain:session.status" activates the gamepack slot "session_status".
-[[nodiscard]] auto equals_dotted_slot(std::string_view service,
-                                      std::string_view slot) -> bool {
-    constexpr std::string_view prefix{"refrain:"};
-    if (!service.starts_with(prefix)) {
-        return false;
-    }
-    const auto rest{service.substr(prefix.size())};
-    if (rest.size() != slot.size()) {
-        return false;
-    }
-    for (std::size_t index{0}; index < rest.size(); ++index) {
-        const auto character{rest[index] == '.' ? '_' : rest[index]};
-        if (character != slot[index]) {
-            return false;
-        }
-    }
-    return true;
-}
-
-/// A gamepack names a service by its `[providers]` key ("data", "world",
-/// "protocol"), while a factory passes the full contract id
-/// ("refrain:data.packs", "refrain:net.protocol"). A service matches a slot
-/// when it is the slot itself, `refrain:<slot>`, `refrain:net.<slot>`, or a
-/// member of the `refrain:<slot>.` namespace; everything else is a different
-/// service.
-[[nodiscard]] auto matches_slot(std::string_view service, std::string_view slot)
-    -> bool {
-    if (service.empty() || slot.empty()) {
-        return false;
-    }
-    constexpr std::string_view namespace_prefix{"refrain:"};
-    constexpr std::string_view net_prefix{"refrain:net."};
-    return service == slot || equals_slot(service, namespace_prefix, slot) ||
-           equals_slot(service, net_prefix, slot) ||
-           in_slot_namespace(service, namespace_prefix, slot) ||
-           equals_dotted_slot(service, slot);
-}
-
-/// Does the manifest `[provides]` list cover `service`? Exact id match, or the
-/// short-slot rule applied to the declared entry (a mod may declare "data"
-/// instead of "refrain:data.packs").
-[[nodiscard]] auto declares_service(const std::vector<std::string> &provides,
-                                    std::string_view service) -> bool {
-    return std::any_of(provides.begin(), provides.end(),
-                       [service](const std::string &declared) {
-                           return declared == service ||
-                                  matches_slot(service, declared);
-                       });
 }
 
 // ---------------------------------------------------------------------------

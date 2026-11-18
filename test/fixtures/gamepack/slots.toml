@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: MIT
+#
+# SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
+#
+# Synthetic gamepack used by the CLI contract to exercise provider-slot
+# matching. No Mojang content: every mod below is a manifest-only first-party
+# entry, so `mods check` only reads declares and never loads a payload.
+
+[gamepack]
+id = "refrain.test.slots"
+version = "1.0.0"
+side = "server"
+abi = "1"
+auto_scan = false
+
+[meta]
+display_name = "Test provider slots"
+description = "Provider-slot matching fixture (no Mojang content)."
+
+[mods]
+list = [
+    "refrain.test.session@1.0.0",
+    "refrain.test.migration@1.0.0",
+    "refrain.test.bare@1.0.0",
+]
+
+[providers]
+net_session = "refrain.test.session@^1.0.0"
+world_migration = "refrain.test.migration@^1.0.0"
+worldgen = "refrain.test.bare@^1.0.0"
