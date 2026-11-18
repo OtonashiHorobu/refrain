@@ -741,10 +741,12 @@ auto run_server(const server_run_options &options,
         // the same deterministic profile its login creates, through the session
         // provider. An online-mode server has no way to map a name to an
         // account, so an offline subject stays addressable by its uuid only.
-        if (!online_mode && options.mod_host != nullptr) {
+        // The gate owns the mode decision so it is exercised by the command
+        // tests independently of this startup function.
+        refrain::server::session_profile_resolver offline_profiles{};
+        if (options.mod_host != nullptr) {
             auto *const host{options.mod_host};
-            command_environment->permissions.find_profile =
-                [host](std::string_view name)
+            offline_profiles = [host](std::string_view name)
                 -> std::optional<refrain::server::permissions_player_profile> {
                 if (name.empty()) {
                     return std::nullopt;
@@ -780,6 +782,9 @@ auto run_server(const server_run_options &options,
                         refrain::contracts::as_string_view(profile.name)}};
             };
         }
+        static_cast<void>(refrain::server::install_offline_profile_lookup(
+            command_environment->permissions, online_mode,
+            std::move(offline_profiles)));
         log_permissions.info("permission administration is available to the "
                              "'refrain.permissions.admin' node");
     }

@@ -54,16 +54,19 @@ constexpr std::string_view online_name{"Bob"};
 }
 
 /// A command frontend wired to a real policy provider plus the subject lookup
-/// callbacks the composition root installs. `profile_uuid` empty disables the
-/// offline profile service.
+/// callbacks the composition root installs. The profile resolver goes through
+/// the same online-mode gate the runtime uses, so an online-mode fixture proves
+/// the gate and not just the callback body.
 struct subject_fixture {
     test_support::permission_policy_provider provider{};
     std::vector<server::permissions_audit_record> audit{};
     server::permissions_admin_state state{};
     std::vector<std::string> lines{};
+    bool profile_lookup_installed{false};
 
     explicit subject_fixture(std::string_view policy_text,
-                             bool profile_service = true) {
+                             bool profile_service = true,
+                             bool online_mode = false) {
         expect(provider.reload(policy_text));
         state.admin = provider.admin();
         state.audit = [this](const server::permissions_audit_record &record) {
@@ -87,7 +90,7 @@ struct subject_fixture {
             };
         };
         if (profile_service) {
-            state.find_profile = [](std::string_view name)
+            const auto resolve = [](std::string_view name)
                 -> std::optional<server::permissions_player_profile> {
                 if (name != offline_name) {
                     return std::nullopt;
@@ -99,6 +102,8 @@ struct subject_fixture {
                 return server::permissions_player_profile{
                     .uuid = uuid, .name = std::string{offline_name}};
             };
+            profile_lookup_installed = server::install_offline_profile_lookup(
+                state, online_mode, resolve);
         }
     }
 
@@ -184,6 +189,67 @@ const suite offline_subject_tests = [] {
             expect(fixture.subject_keys() ==
                    std::vector<std::string>{"player:11111111-2222-3333-"
                                             "4444-555555555555"});
+        };
+
+    "offline subject/an online-mode composition does not install the lookup"_test =
+        [] {
+            subject_fixture fixture{empty_policy, true, true};
+            expect(!fixture.profile_lookup_installed);
+            expect(!fixture.state.find_profile);
+            const std::string_view tokens[]{"grant", offline_name,
+                                            "refrain.command.teleport"};
+            const auto report{fixture.run(tokens)};
+            expect(!report.ok);
+            expect(report.error.find("no online player") != std::string::npos)
+                << report.error;
+            expect(fixture.audit.size() == 1U);
+            if (fixture.audit.size() == 1U) {
+                expect(fixture.audit.front().result == "invalid");
+            }
+        };
+
+    "offline subject/the lookup gate ignores an unavailable resolver"_test =
+        [] {
+            server::permissions_admin_state state{};
+            expect(!server::install_offline_profile_lookup(state, false, {}));
+            expect(!state.find_profile);
+            const auto resolver = [](std::string_view)
+                -> std::optional<server::permissions_player_profile> {
+                return std::nullopt;
+            };
+            expect(
+                !server::install_offline_profile_lookup(state, true, resolver));
+            expect(!state.find_profile);
+            expect(
+                server::install_offline_profile_lookup(state, false, resolver));
+            expect(static_cast<bool>(state.find_profile));
+        };
+
+    "offline subject/a name-keyed grant is refused while a revoke removes it"_test =
+        [] {
+            constexpr std::string_view name_grant_policy{R"(
+[grants]
+"player:Alice" = ["refrain.command.teleport"]
+)"};
+            // Online mode: the lookup is not installed, so the fixture cannot
+            // resolve the name, exactly like a server without the account.
+            subject_fixture fixture{name_grant_policy, true, true};
+            const std::string_view grant_tokens[]{"grant", "player:Alice",
+                                                  "refrain.mods.admin"};
+            auto report{fixture.run(grant_tokens)};
+            expect(!report.ok);
+            expect(report.error.find("grant player:<uuid>") !=
+                   std::string::npos)
+                << report.error;
+            const std::string_view revoke_tokens[]{"revoke", "player:Alice",
+                                                   "refrain.command.teleport"};
+            report = fixture.run(revoke_tokens);
+            expect(report.ok) << report.error;
+            expect(has_line(report.lines, "revoked"));
+            const std::string_view check_tokens[]{"check", "player:Alice",
+                                                  "refrain.command.teleport"};
+            report = fixture.run(check_tokens);
+            expect(has_line(report.lines, "denied")) << report.error;
         };
 
     "offline subject/without a profile service a bare name stays unknown"_test =

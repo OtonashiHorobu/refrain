@@ -448,13 +448,16 @@ const suite chain_service_tests = [] {
                    permission_result::allowed);
 
             // A duplicate extra key is a context the resolver cannot match, so
-            // the query fails closed.
+            // the query fails closed before any link is called: a wrapper that
+            // owns the node cannot turn the malformed query into a grant.
             const permissions::context_entry duplicated[] = {
                 {.key = "event", .value = "a"}, {.key = "event", .value = "b"}};
             const permissions::context broken{.world = "minecraft:overworld",
                                               .extra = duplicated};
-            expect(client.query(player(), "refrain.command.teleport", broken) ==
+            const auto wrapper_queries_before{g_wrapper.queries.load()};
+            expect(client.query(player(), "com.example.owned.home", broken) ==
                    permission_result::denied);
+            expect(g_wrapper.queries.load() == wrapper_queries_before);
         };
 
     "chain service/a wrapper reload failure keeps the base policy serving"_test =

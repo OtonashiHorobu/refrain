@@ -189,6 +189,33 @@ creative = { gamemode = "creative" }
                permission_result::allowed);
     };
 
+    "context/list_groups reports a context-qualified membership"_test = [] {
+        const auto policy{parse_ok(R"(
+[groups]
+moderators = ["refrain.mods.admin"]
+
+[contexts]
+survival = { gamemode = "survival" }
+
+[context_grants.survival]
+"player:069a79f4-44e9-4726-a5be-fca90e38aaf5" = ["@moderators"]
+)")};
+        const auto groups{permissions::list_groups(policy)};
+        expect(groups.size() == 1U);
+        if (groups.size() != 1U) {
+            return;
+        }
+        expect(groups.front().name == "moderators");
+        const auto expected{
+            "player:069a79f4-44e9-4726-a5be-fca90e38aaf5 (context "
+            "'survival')"};
+        expect(groups.front().members.size() == 1U);
+        if (groups.front().members.size() == 1U) {
+            expect(groups.front().members.front() == expected)
+                << groups.front().members.front();
+        }
+    };
+
     "context/a context rule joins a global single-level group"_test = [] {
         const auto policy{parse_ok(R"(
 [groups]

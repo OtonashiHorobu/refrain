@@ -67,6 +67,10 @@ struct resolved_subject {
     /// Operator-facing identity: the canonical key.
     std::string display{};
     std::optional<permissions_online_player> online{};
+    /// True when the key is a mutable `player:<profile name>` a grant or revoke
+    /// names literally, because no session or profile service resolved it to an
+    /// account. A grant must not create such a key; a revoke may remove one.
+    bool name_keyed{false};
 
     [[nodiscard]] auto view() const noexcept -> permissions::subject_view {
         return permissions::subject_view{
@@ -163,9 +167,11 @@ struct resolved_subject {
                         resolved.profile_name = profile->name;
                     }
                 } else {
-                    // No profile service can resolve the name; keep the
-                    // configured name key as the compatibility fallback.
+                    // No session or profile service resolved the name. Keep it
+                    // so a revoke can remove a legacy name-keyed rule, but
+                    // remember that a grant must not create one.
                     resolved.id = std::string{identity};
+                    resolved.name_keyed = true;
                 }
                 resolved.key = permissions::make_subject_key(
                     subject_kind::player, resolved.id);
@@ -444,6 +450,17 @@ void write_audit(const permissions_admin_state &state,
         report.error = subject.error().message;
         return finish("invalid", report.error, current_revision(state));
     }
+    if (add && subject->name_keyed) {
+        // A grant must target an account, not a mutable profile name: another
+        // account can claim the name after a rename. A revoke still accepts the
+        // literal key so a legacy name-keyed rule can be removed.
+        report.ok = false;
+        report.error = fmt::format(
+            "the profile name in '{}' does not resolve to an account on this "
+            "server; grant player:<uuid> instead",
+            tokens[1]);
+        return finish("invalid", report.error, current_revision(state));
+    }
     const auto rule{tokens[2]};
     auto parsed_rule{permissions::parse_rule(rule, "permission rule")};
     if (!parsed_rule) {
@@ -569,6 +586,17 @@ void write_audit(const permissions_admin_state &state,
 }
 
 } // namespace
+
+auto install_offline_profile_lookup(
+    permissions_admin_state &state, bool online_mode,
+    session_profile_resolver resolve_offline_profile) -> bool {
+    state.find_profile = {};
+    if (online_mode || !resolve_offline_profile) {
+        return false;
+    }
+    state.find_profile = std::move(resolve_offline_profile);
+    return true;
+}
 
 auto format_permissions_audit_record(const permissions_audit_record &record)
     -> std::string {

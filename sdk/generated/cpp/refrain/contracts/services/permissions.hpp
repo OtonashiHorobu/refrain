@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 22ed9cba76524a0f
+// Schema hash: 0596e2c96392a578
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_CONTRACTS_SERVICES_PERMISSIONS_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_CONTRACTS_SERVICES_PERMISSIONS_HPP
@@ -60,9 +60,10 @@ using permission_context_entry = ::refrain_services_permissions_permission_conte
     ::refrain::contracts::init_struct(value);
     return value;
 }
-/// Context a rule may match. The default resolver answers globally, so v1
-/// carries the context without matching rules against it; wrapper providers
-/// and later rule sets can use it without a contract change.
+/// Context a rule may match: the world, the game mode and provider-defined
+/// extra entries. The built-in resolver matches its configured context
+/// predicates against this value and a wrapper provider may match it too. A
+/// consumer that matches context rejects duplicate extra keys.
 using permission_context = ::refrain_services_permissions_permission_context;
 /// Zero-initialized `permission_context` with the mandatory `struct_size` set; fill the fields before passing it across the ABI.
 [[nodiscard]] inline auto make_permission_context() noexcept -> permission_context {
@@ -178,8 +179,12 @@ class provider final {
     }
 
     /// Re-read the provider configuration, publish it and return the new
-    /// revision. On failure the current snapshot and revision stay in effect
-    /// and the error names the offending file or key.
+    /// revision. A provider updates its own snapshot atomically: on failure
+    /// its snapshot and revision stay in effect and the error names the
+    /// offending file or key. A chain reloads each link in turn, base first;
+    /// when a later wrapper fails, the links that already reloaded keep their
+    /// new snapshot because a provider has no rollback, and the error names
+    /// the failing link.
     [[nodiscard]] auto reload() const -> std::expected<std::uint64_t, ::refrain::services::permissions::permission_error> {
         ::uint64_t value{};
         if (const auto code = table_->reload(self_, &value); code != REFRAIN_STATUS_OK) {

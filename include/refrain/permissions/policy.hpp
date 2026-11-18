@@ -39,10 +39,12 @@
 //   creative = { "player:<uuid>" = ["!refrain.command.gamemode"] }
 //
 // A group is a node set; a subject joins a group with an `@name` entry in
-// `[grants]`. Groups are single-level in v1: a group list may not reference
-// another group. Unknown tables, unknown keys, invalid nodes, invalid subject
-// keys, unknown groups and unknown context references are configuration errors
-// rather than silently ignored text, so a typo cannot widen an access rule.
+// `[grants]` or in a `[context_grants]` rule set. A join written in a context
+// rule set applies only while that context matches the query. Groups are
+// single-level in v1: a group list may not reference another group. Unknown
+// tables, unknown keys, invalid nodes, invalid subject keys, unknown groups and
+// unknown context references are configuration errors rather than silently
+// ignored text, so a typo cannot widen an access rule.
 //
 // `[ops].players` is the operator source the built-in resolver owns: a player
 // named by canonical uuid or profile name is treated as an operator and holds
@@ -77,9 +79,11 @@
 //     decide as above.
 // A context rule therefore narrows or extends one subject's access for a
 // matching context but cannot override a deny. A context rule may join a global
-// `[groups]` entry; groups stay single-level and their rules are global. When
-// several contexts match they are scanned in name order, and `explain()`
-// reports the first matching deny (or the first matching grant) in that order.
+// `[groups]` entry with `@name`: the group definitions stay global and
+// single-level, while that membership (and therefore the group's rules) applies
+// only to queries whose context matches the rule's context. When several
+// contexts match they are scanned in name order, and `explain()` reports the
+// first matching deny (or the first matching grant) in that order.
 //
 // A malformed query context (an empty or oversized key or value, more entries
 // than the limit, a reserved key in the extra slice, or a duplicate extra key)
@@ -348,7 +352,9 @@ struct decision_explanation {
 
 /// One group of the configured policy. `nodes` are the group's rule texts in
 /// configuration order; `members` are the configured subject keys that join the
-/// group, sorted.
+/// group, sorted: the global `[grants]` memberships first, then the
+/// `[context_grants]` memberships sorted by context name and subject key, each
+/// written as `<subject key> (context '<name>')`.
 struct group_listing {
     std::string name{};
     std::vector<std::string> nodes{};

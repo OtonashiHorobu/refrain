@@ -4,9 +4,14 @@
 
 #include <refrain/permissions/chain.hpp>
 
+#include <refrain/permissions/policy.hpp>
+
 #include <fmt/format.h>
 
+#include <array>
 #include <cstddef>
+#include <cstdint>
+#include <span>
 #include <utility>
 
 namespace refrain::permissions {
@@ -14,6 +19,57 @@ namespace refrain::permissions {
 namespace {
 
 namespace contract = services::permissions;
+
+/// Highest value the tri-state contract defines. A provider that answers with
+/// any other value cannot name its answer, so the walk treats it as a denial
+/// instead of casting it to an enumerator with a different meaning.
+constexpr std::uint32_t max_permission_result{
+    static_cast<std::uint32_t>(contract::permission_result::not_handled)};
+
+[[nodiscard]] auto normalize(refrain_services_permissions_permission_result raw)
+    -> permission_result {
+    const auto value{static_cast<std::uint32_t>(raw)};
+    if (value > max_permission_result) {
+        return permission_result::denied;
+    }
+    return static_cast<permission_result>(value);
+}
+
+/// Validate the query context against the policy's context grammar without
+/// allocating: every extra entry must have the contract struct size, the slice
+/// must be bounded, and the assembled view must pass `valid_context` (lengths,
+/// reserved keys and duplicates).
+[[nodiscard]] auto
+valid_query_context(const contract::permission_context &context) noexcept
+    -> bool {
+    if (context.world.len > permissions::max_context_length ||
+        context.gamemode.len > permissions::max_context_length) {
+        return false;
+    }
+    if (context.extra.len > permissions::max_context_entries) {
+        return false;
+    }
+    if (context.extra.len != 0 && context.extra.data == nullptr) {
+        return false;
+    }
+    std::array<context_value_view, permissions::max_context_entries> entries{};
+    for (std::uint64_t index{0}; index < context.extra.len; ++index) {
+        const auto &entry{context.extra.data[index]};
+        if (entry.struct_size <
+            sizeof(refrain_services_permissions_permission_context_entry)) {
+            return false;
+        }
+        entries[index] = context_value_view{
+            .key = refrain::contracts::as_string_view(entry.key),
+            .value = refrain::contracts::as_string_view(entry.value)};
+    }
+    const context_view view{
+        .world = refrain::contracts::as_string_view(context.world),
+        .gamemode = refrain::contracts::as_string_view(context.gamemode),
+        .extra = std::span<const context_value_view>{
+            entries.data(), static_cast<std::size_t>(context.extra.len)}};
+    return permissions::valid_context(view);
+}
 
 [[nodiscard]] auto reload_error(const provider_link &link, refrain_status code)
     -> error {
@@ -81,14 +137,13 @@ auto provider_chain::query(const contract::permission_query &value) const
         return permission_result::denied;
     }
     for (const auto &wrapper : wrappers_) {
-        const auto answer{wrapper.vtable->query(wrapper.self, &value)};
-        if (answer !=
-            REFRAIN_SERVICES_PERMISSIONS_PERMISSION_RESULT_NOT_HANDLED) {
-            return static_cast<permission_result>(answer);
+        const auto answer{
+            normalize(wrapper.vtable->query(wrapper.self, &value))};
+        if (answer != permission_result::not_handled) {
+            return answer;
         }
     }
-    return static_cast<permission_result>(
-        base_.vtable->query(base_.self, &value));
+    return normalize(base_.vtable->query(base_.self, &value));
 }
 
 auto provider_chain::default_result(
@@ -96,8 +151,7 @@ auto provider_chain::default_result(
     if (!valid_query(&value)) {
         return permission_result::denied;
     }
-    return static_cast<permission_result>(
-        base_.vtable->default_result(base_.self, &value));
+    return normalize(base_.vtable->default_result(base_.self, &value));
 }
 
 auto provider_chain::has(const contract::permission_query &value) const
@@ -155,8 +209,15 @@ auto provider_chain::valid_query(
     if (value->context.struct_size < sizeof(contract::permission_context)) {
         return false;
     }
-    return value->subject.kind <=
-           static_cast<std::uint32_t>(contract::subject_kind::plugin);
+    if (value->subject.kind >
+        static_cast<std::uint32_t>(contract::subject_kind::plugin)) {
+        return false;
+    }
+    if (!permissions::valid_node(
+            refrain::contracts::as_string_view(value->node))) {
+        return false;
+    }
+    return valid_query_context(value->context);
 }
 
 namespace {

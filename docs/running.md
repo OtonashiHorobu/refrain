@@ -430,10 +430,11 @@ sets in the same deny-wins order: a matching deny in any applicable set
 (global, group, operator, public default or context) denies, otherwise a
 matching grant allows, otherwise `[defaults].default` decides. A context rule
 therefore narrows or extends one subject's access for that context but cannot
-override a deny. Groups stay global and single-level; a context rule joins one
-with `@name` but does not make the group's rules conditional. When several
-contexts match they are scanned in name order, and `permissions check` names
-the first matching deny, or the first matching grant, that decided.
+override a deny. Group definitions stay global and single-level; a context rule
+can join one with `@name`, and that membership, together with the group's rules,
+applies only while the context matches. When several contexts match they are
+scanned in name order, and `permissions check` names the first matching deny,
+or the first matching grant, that decided.
 
 A query context carries the player's world, its game mode and any extra
 key/value pairs the caller supplies. The command bridge fills the game mode;
@@ -489,9 +490,13 @@ revision is the base revision plus every wrapper revision, so a change in a
 wrapper invalidates the command tree exactly like a policy change, and
 `permissions reload` reloads the base and every wrapper. A wrapper the
 gamepack names but the host did not register fails composition, so the running
-server always has a complete chain. Change the wrapper list in the gamepack and
-restart the server: a running composition keeps the chain links it resolved at
-startup, and removing a wrapper while commands may query it is not supported.
+server always has a complete chain. A running composition refreshes the chain
+when the committed composition epoch changes: a wrapper the host retires stops
+being asked at the next revision poll, and the composed revision moves with the
+link-set change so the command tree is resent. The declared wrapper list itself
+is read on the first answer after startup, so adding or removing an entry in
+the gamepack binding needs a restart; uninstalling a wrapper package at runtime
+is picked up by the refresh.
 
 The service publishes a monotonic revision for caches. The administration
 commands below re-read the file or change one rule at runtime, and every policy
@@ -512,8 +517,8 @@ the commands.
 | `permissions check <subject> <node>` | Answer allowed, denied or not-handled for one subject and node, name the deciding rule set (console, grant, deny, group, context, operator, public default or fallback) and print the player's world and game mode context; a node a chain wrapper decided is reported as such with the base resolver's own answer |
 | `permissions grant <subject> <node>` | Add one rule to the subject's `[grants]` entry, write the configuration file and report the new revision |
 | `permissions revoke <subject> <node>` | Remove one rule from the subject's `[grants]` entry, write the configuration file and report the new revision |
-| `permissions groups` | List every `[groups]` entry with its rules and the subjects that joined it |
-| `permissions reload` | Re-read `config/permissions.toml` and report the old and new revision |
+| `permissions groups` | List every `[groups]` entry with its rules and the subjects that joined it; a membership contributed by `[context_grants]` is listed with its context |
+| `permissions reload` | Re-read `config/permissions.toml` and every chain wrapper, and report the old and new revision |
 
 A `<subject>` is `console`, a player name, or one configured subject key:
 `player:<uuid>`, `player:<profile name>`, `entity:<uuid>` or `plugin:<mod id>`.
@@ -522,7 +527,10 @@ then, on a server running with online mode disabled, through the deterministic
 offline profile the login would create. A `player:<profile name>` key is
 canonicalised the same way, so a change follows the account instead of the
 mutable name; a name that resolves through the offline profile does not
-authenticate anything, it only names the account a change targets. An
+authenticate anything, it only names the account a change targets. `grant`
+refuses a subject whose name does not resolve to an account, so a new rule never
+targets a mutable profile name; `revoke` still accepts the literal
+`player:<profile name>` key so a legacy name-keyed rule can be removed. An
 online-mode server cannot map a name to an account without the account, so a
 player who is not online is addressed by `player:<uuid>` there, and an unknown
 bare name is an error. A `<node>` is a rule: a concrete node, a namespace

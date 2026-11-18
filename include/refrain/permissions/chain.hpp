@@ -19,7 +19,11 @@
 // `allowed` or `denied` for a node it owns, which ends the walk; a wrapper can
 // therefore narrow a base grant with a deny and extend the base with a grant
 // for its own nodes. A malformed query is answered `denied` before any link is
-// called, so a broken caller cannot turn a wrapper's parsing into a grant.
+// called, so a broken caller cannot turn a wrapper's parsing into a grant: the
+// chain validates the struct sizes, the subject kind, the concrete node and the
+// whole context (world, game mode, extra entries with their length, reserved
+// and duplicate key rules) before the walk, and an answer outside the
+// tri-state enum counts as a denial.
 //
 // Lifetime: a chain borrows its links. The owner keeps every linked provider
 // table and instance valid for as long as the chain is published, and changes

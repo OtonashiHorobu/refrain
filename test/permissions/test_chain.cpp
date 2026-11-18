@@ -8,10 +8,13 @@
 #include <refrain/contracts/services/permissions.hpp>
 #include <refrain/core/error.hpp>
 #include <refrain/permissions/chain.hpp>
+#include <refrain/permissions/policy.hpp>
 
 #include <boost/ut.hpp>
 
+#include <array>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -36,6 +39,9 @@ struct fake_provider {
     std::uint64_t revision{1};
     bool reload_succeeds{true};
     std::uint64_t reload_increment{1};
+    /// Raw answer a link returns instead of its tri-state field, to exercise a
+    /// provider that breaks the contract.
+    std::optional<std::uint32_t> raw_answer{};
     std::vector<std::string> *calls{nullptr};
     std::vector<std::string> *reload_calls{nullptr};
 
@@ -54,6 +60,9 @@ struct fake_provider {
         }
         auto *fake{static_cast<fake_provider *>(self)};
         fake->record("query");
+        if (fake->raw_answer.has_value()) {
+            return *fake->raw_answer;
+        }
         return static_cast<refrain_services_permissions_permission_result>(
             fake->answer);
     }
@@ -66,6 +75,9 @@ struct fake_provider {
         }
         auto *fake{static_cast<fake_provider *>(self)};
         fake->record("default_result");
+        if (fake->raw_answer.has_value()) {
+            return *fake->raw_answer;
+        }
         return static_cast<refrain_services_permissions_permission_result>(
             fake->default_answer);
     }
@@ -337,11 +349,105 @@ const suite chain_tests = [] {
         if (!chain) {
             return;
         }
+        const auto denied = [&chain](const contract::permission_query &value) {
+            return chain->query(value) == permission_result::denied &&
+                   !chain->has(value);
+        };
+
+        // Struct size and subject kind.
         auto query{make_query("refrain.command.teleport")};
-        query.struct_size = 0;
-        expect(chain->query(query) == permission_result::denied);
-        expect(chain->has(query) == false);
+        auto broken{query};
+        broken.struct_size = 0;
+        expect(denied(broken));
+        broken = query;
+        broken.subject.kind = 99;
+        expect(denied(broken));
+
+        // The node must be a concrete permission node.
+        broken = query;
+        broken.node = refrain::contracts::to_borrowed("NotANode");
+        expect(denied(broken));
+        broken = query;
+        broken.node = refrain::contracts::to_borrowed("*");
+        expect(denied(broken));
+
+        // The context must be well-formed: no null data for a non-empty slice,
+        // bounded length, entry struct size, and the policy's reserved and
+        // duplicate key rules.
+        refrain_services_permissions_permission_context_entry entry{
+            refrain::services::permissions::make_permission_context_entry()};
+        entry.key = refrain::contracts::to_borrowed("event");
+        entry.value = refrain::contracts::to_borrowed("halloween");
+        const auto with_entries =
+            [&query](const refrain_services_permissions_permission_context_entry
+                         *data,
+                     std::uint64_t len) {
+                auto copy{query};
+                copy.context.extra.data = data;
+                copy.context.extra.len = len;
+                return copy;
+            };
+        broken = with_entries(nullptr, 1);
+        expect(denied(broken));
+        broken = with_entries(&entry, permissions::max_context_entries + 1U);
+        expect(denied(broken));
+
+        auto zero_entry{entry};
+        zero_entry.struct_size = 0;
+        broken = with_entries(&zero_entry, 1);
+        expect(denied(broken));
+
+        // A reserved key may not come from the extra slice.
+        auto reserved{entry};
+        reserved.key = refrain::contracts::to_borrowed("world");
+        broken = with_entries(&reserved, 1);
+        expect(denied(broken));
+
+        // Duplicate extra keys are ambiguous and rejected.
+        const auto duplicated = std::array<decltype(entry), 2>{entry, entry};
+        broken = with_entries(duplicated.data(), duplicated.size());
+        expect(denied(broken));
+
+        // Empty context key.
+        auto empty_key{entry};
+        empty_key.key = refrain::contracts::to_borrowed("");
+        broken = with_entries(&empty_key, 1);
+        expect(denied(broken));
+
         expect(calls.empty());
+    };
+
+    "chain/an answer outside the tri-state is treated as a denial"_test = [] {
+        std::vector<std::string> calls{};
+        fake_provider wrapper{
+            .id = "wrapper", .raw_answer = std::uint32_t{7}, .calls = &calls};
+        fake_provider base{.id = "base",
+                           .answer = permission_result::allowed,
+                           .calls = &calls};
+        auto chain{
+            permissions::provider_chain::create({wrapper.link()}, base.link())};
+        expect(static_cast<bool>(chain));
+        if (!chain) {
+            return;
+        }
+        const auto query{make_query("com.example.home")};
+        expect(chain->query(query) == permission_result::denied);
+        // The walk stops at the malformed answer; the base is not asked.
+        expect(calls == std::vector<std::string>{"wrapper.query"});
+
+        calls.clear();
+        fake_provider forwarding{.id = "forwarding", .calls = &calls};
+        fake_provider broken_base{
+            .id = "base", .raw_answer = std::uint32_t{7}, .calls = &calls};
+        auto second_chain{permissions::provider_chain::create(
+            {forwarding.link()}, broken_base.link())};
+        expect(static_cast<bool>(second_chain));
+        if (!second_chain) {
+            return;
+        }
+        expect(second_chain->query(query) == permission_result::denied);
+        expect(second_chain->default_result(query) ==
+               permission_result::denied);
     };
 
     "chain/create rejects an incomplete link"_test = [] {

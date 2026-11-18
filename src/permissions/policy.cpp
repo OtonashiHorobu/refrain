@@ -1200,15 +1200,31 @@ auto list_groups(const policy &policy_value) -> std::vector<group_listing> {
         }
         groups.push_back(std::move(listing));
     }
-    for (const auto &[subject_key, rules] : policy_value.subjects) {
+    const auto append_members = [&groups](std::string_view subject_key,
+                                          const subject_rules &rules,
+                                          std::string_view context) {
         for (const auto &group : rules.groups) {
             const auto found{std::ranges::find_if(
                 groups, [&group](const group_listing &listing) {
                     return listing.name == group;
                 })};
-            if (found != groups.end()) {
-                found->members.push_back(subject_key);
+            if (found == groups.end()) {
+                continue;
             }
+            if (context.empty()) {
+                found->members.push_back(std::string{subject_key});
+            } else {
+                found->members.push_back(
+                    fmt::format("{} (context '{}')", subject_key, context));
+            }
+        }
+    };
+    for (const auto &[subject_key, rules] : policy_value.subjects) {
+        append_members(subject_key, rules, {});
+    }
+    for (const auto &[context_name, subjects] : policy_value.context_subjects) {
+        for (const auto &[subject_key, rules] : subjects) {
+            append_members(subject_key, rules, context_name);
         }
     }
     return groups;
