@@ -431,6 +431,12 @@ auto run_mods_lock(const mods_lock_options &options) -> int {
             refrain::make_error(refrain::error_code::invalid_argument,
                                 "mods lock: --gamepack <path> is required"));
     }
+    if (options.force_auto_scan && options.no_auto_scan) {
+        return report_error(refrain::make_error(
+            refrain::error_code::invalid_argument,
+            "mods lock: --auto-scan and --no-auto-scan are mutually "
+            "exclusive"));
+    }
     auto spec{mod::load_gamepack_spec(options.gamepack, options.side)};
     if (!spec) {
         return report_error(spec.error());
@@ -451,7 +457,10 @@ auto run_mods_lock(const mods_lock_options &options) -> int {
     }
 
     // Explicit roots must be content stores, so a typo cannot resolve to an
-    // empty catalog and silently drop installed mods.
+    // empty catalog and silently drop installed mods. The resolver itself uses
+    // the server's catalog options (`require_mods_dir = false`): a fresh store
+    // root without a `mods/` directory is an empty catalog, exactly as it is
+    // for a server started with `--content-store`.
     for (const auto &root : options.roots) {
         if (!io::is_directory(root)) {
             return report_error(refrain::make_error(
@@ -462,11 +471,24 @@ auto run_mods_lock(const mods_lock_options &options) -> int {
         }
     }
 
+    std::vector<std::string_view> required_services{};
+    required_services.reserve(options.required_services.size());
+    for (const auto &service : options.required_services) {
+        required_services.push_back(service);
+    }
+    // The discovery override and the required services are the ones a server
+    // start computes from the same flags; resolution itself is the shared
+    // `resolve_server_mods` path, so the two commands cannot diverge.
+    const bool effective_auto_scan{
+        options.force_auto_scan ||
+        ((*spec).auto_scan && !options.no_auto_scan)};
     auto plan{resolve_server_mods(
         *spec, server_mods_options{.installed_stores = options.roots,
                                    .builtin_image = image_span,
+                                   .required_services = required_services,
+                                   .auto_scan = effective_auto_scan,
                                    .discovery = mod::discover_options{
-                                       .require_mods_dir = true}})};
+                                       .require_mods_dir = false}})};
     if (!plan) {
         return report_error(plan.error());
     }

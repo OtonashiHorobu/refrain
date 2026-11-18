@@ -669,8 +669,8 @@ int main(int argc, char **argv) {
     bool force_auto_install{false};
     auto *auto_install_option =
         app.add_flag("--auto-install", force_auto_install,
-                     "Install inbox packages (default: follow gamepack "
-                     "auto_scan)");
+                     "Install inbox packages even when discovery is disabled "
+                     "(default: follow the effective auto-discovery policy)");
     bool no_auto_install{false};
     auto *no_auto_install_option =
         app.add_flag("--no-auto-install", no_auto_install,
@@ -1119,8 +1119,12 @@ int main(int argc, char **argv) {
         }
         content.pinned_versions = refrain::mod::merge_pinned_versions(
             baseline ? &*baseline : nullptr, gamepack_pins);
-        content.auto_install = force_auto_install ||
-                               (gamepack_spec->auto_scan && !no_auto_install);
+        // Inbox auto-install follows the effective discovery policy: the
+        // opt-out that keeps scanned mods out of the composition also keeps
+        // the startup bootstrap from installing them. `--auto-install` is the
+        // explicit override for a run that wants the store maintained anyway.
+        content.auto_install =
+            force_auto_install || (effective_auto_scan && !no_auto_install);
         content.keep_installed = true;
         content.policy = install_policy;
         content.gc = *content_gc_mode;
@@ -1668,9 +1672,6 @@ int main(int argc, char **argv) {
                     fmt::format("refrain-server --gamepack '{}'", gamepack)};
                 if (force_auto_scan) {
                     refresh += " --auto-scan";
-                }
-                if (no_auto_scan) {
-                    refresh += " --no-auto-scan";
                 }
                 for (const auto &root : installed_stores) {
                     if (!content_store.empty() && root == content_store) {

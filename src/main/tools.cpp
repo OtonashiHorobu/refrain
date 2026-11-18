@@ -283,6 +283,18 @@ int main(int argc, char **argv) {
     mods_lock_cmd->add_option("--side", mods_lock.side,
                               "Host side for the side compatibility check");
     mods_lock_cmd->add_flag(
+        "--auto-scan", mods_lock.force_auto_scan,
+        "Force mod auto-discovery on regardless of gamepack auto_scan");
+    mods_lock_cmd->add_flag(
+        "--no-auto-scan", mods_lock.no_auto_scan,
+        "Disable mod auto-discovery: only [mods].list entries resolve");
+    mods_lock_cmd
+        ->add_option(
+            "--require", mods_lock.required_services,
+            "Service keys the host cannot start without (repeatable, comma "
+            "separated)")
+        ->delimiter(',');
+    mods_lock_cmd->add_flag(
         "--write", mods_lock.write,
         "Write the lock when it is missing or drifted instead of only "
         "reporting it");
@@ -811,6 +823,16 @@ int main(int argc, char **argv) {
     struct log_guard {
         ~log_guard() { refrain::log::shutdown(); }
     } log_guard_instance{};
+
+    // The server treats contradictory scan overrides as a usage error; the
+    // lock command mirrors that so a written lock always has one meaning.
+    if (mods_lock_cmd->parsed() && mods_lock.force_auto_scan &&
+        mods_lock.no_auto_scan) {
+        fmt::println(stderr,
+                     "refrain-tools: --auto-scan and --no-auto-scan are "
+                     "mutually exclusive");
+        return 2;
+    }
 
     if (dump_cmd->parsed()) {
         return app_services::run_gamepack_dump(gamepack_path, gamepack_side);

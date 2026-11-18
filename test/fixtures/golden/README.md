@@ -17,7 +17,8 @@ reviewable diff.
 `gamepack/gamepack.toml` (13 builtin mods, `auto_scan=true`) plus the
 repository root `mods/` (origin=builtin) plus `test/fixtures/instance`
 (origin=user, discovered through the same auto-scan policy, matching the CI
-`refrain-server --auto-scan` smoke) produce the 11-mod `mods.lock`.
+`refrain-server --auto-scan` smoke) produce the 14-mod `mods.lock` (13 builtin
+pins plus the test extra).
 
 ## Updating
 

@@ -1095,6 +1095,93 @@ const suite discovery_tests = [] {
             }
         };
 
+    // A short slot spelling names the contract its bound provider declares, so
+    // `refrain:data` competes with the `data` binding even though the shipped
+    // provider declares the full `refrain:data.packs` id.
+    "discovery/resolve rejects a short spelling of a namespaced contract"_test =
+        [] {
+            temp_directory scratch{make_temp_directory()};
+            const auto root{create_root(scratch, "root")};
+            write_manifest(
+                root, "pinned-data", "1.0.0",
+                "\n[provides]\nservices = [\"refrain:data.packs\"]\n");
+            write_manifest(root, "extra-data", "1.0.0",
+                           "\n[provides]\nservices = [\"refrain:data\"]\n");
+            auto spec{make_spec(true)};
+            pin_mod(spec, "pinned-data", "1.0.0");
+            spec.providers.push_back(mod::provider_binding{
+                .service = "data",
+                .mode = mod::provider_mode::exclusive,
+                .candidates = {mod::mod_requirement{.id = "pinned-data",
+                                                    .range = "^1.0.0"}}});
+            const auto scanned{scan_single(root, mod_origin::user)};
+            expect(static_cast<bool>(scanned));
+            if (!scanned) {
+                return;
+            }
+            const auto resolved{mod::resolve(spec, *scanned)};
+            expect(!resolved);
+            if (!resolved) {
+                expect(resolved.error().code ==
+                       refrain::error_code::already_exists);
+                const auto &message{resolved.error().message};
+                expect(message.find("extra-data") != std::string::npos);
+                expect(message.find("pinned-data") != std::string::npos);
+                expect(message.find("data") != std::string::npos);
+            }
+
+            // Naming the mod explicitly keeps the gamepack's precedence and
+            // records the competition as a warning instead of failing.
+            pin_mod(spec, "extra-data", "1.0.0");
+            const auto explicit_resolution{mod::resolve(spec, *scanned)};
+            expect(static_cast<bool>(explicit_resolution));
+            if (explicit_resolution) {
+                expect(explicit_resolution->warnings.size() == 1U);
+            }
+        };
+
+    // The built-in image of a build always contains its mods, so a gamepack
+    // that drops a built-in pin and binds the slot elsewhere cannot repair the
+    // conflict by uninstalling the built-in copy. The diagnostic says so.
+    "discovery/resolve names an actionable repair for a builtin claim"_test =
+        [] {
+            temp_directory scratch{make_temp_directory()};
+            const auto builtin_root{create_root(scratch, "builtin")};
+            const auto user_root{create_root(scratch, "user")};
+            write_manifest(builtin_root, "refrain.world.vanilla", "1.0.0",
+                           "\n[provides]\nservices = [\"refrain:world\"]\n");
+            write_manifest(user_root, "custom-world", "1.0.0",
+                           "\n[provides]\nservices = [\"refrain:world\"]\n");
+            auto spec{make_spec(true)};
+            pin_mod(spec, "custom-world", "1.0.0");
+            spec.providers.push_back(mod::provider_binding{
+                .service = "world",
+                .mode = mod::provider_mode::exclusive,
+                .candidates = {mod::mod_requirement{.id = "custom-world",
+                                                    .range = "^1.0.0"}}});
+            const std::array<discovery_root, 2> roots{
+                discovery_root{.path = builtin_root,
+                               .origin = mod_origin::builtin},
+                discovery_root{.path = user_root, .origin = mod_origin::user}};
+            const auto scanned{scan(roots)};
+            expect(static_cast<bool>(scanned));
+            if (!scanned) {
+                return;
+            }
+            const auto resolved{mod::resolve(spec, *scanned)};
+            expect(!resolved);
+            if (!resolved) {
+                expect(resolved.error().code ==
+                       refrain::error_code::already_exists);
+                const auto &message{resolved.error().message};
+                expect(message.find("refrain.world.vanilla") !=
+                       std::string::npos);
+                expect(message.find("built-in image") != std::string::npos);
+                expect(message.find("build profile") != std::string::npos);
+                expect(message.find("uninstall") == std::string::npos);
+            }
+        };
+
     "discovery/resolve dependency satisfied across selected mods"_test = [] {
         temp_directory scratch{make_temp_directory()};
         const auto root{create_root(scratch, "root")};

@@ -1692,6 +1692,139 @@ const suite mod_catalog_discovery_tests = [] {
         expect(refrain::app::run_mods_lock(options) != 0);
         expect(!fs::exists(options.lock));
     };
+
+    // The lock command accepts the server's discovery options: the scan
+    // override, the required services and the server's catalog rules (a store
+    // root without `mods/` is an empty catalog), so tools and server resolve
+    // the same inputs the same way.
+    "catalog/mods lock resolves with the server's options"_test = [] {
+        temp_workspace work{"catalog-tools-lock-options"};
+        expect(materialise(work, "mod", "refrain.test.discovered", "1.0.0"));
+        auto archive{pack(work, "mod", "out/mod.rfmod")};
+        expect(archive.has_value());
+        if (!archive) {
+            return;
+        }
+        auto store{make_store(work)};
+        expect(store.has_value());
+        if (!store) {
+            return;
+        }
+        auto installed{install_archive(*store, *archive)};
+        expect(static_cast<bool>(installed));
+        if (!installed) {
+            return;
+        }
+        const auto image_path{write_embedded_image(work)};
+        expect(image_path.has_value());
+        if (!image_path) {
+            return;
+        }
+        auto image_bytes{io::read_file(*image_path)};
+        expect(image_bytes.has_value());
+        if (!image_bytes) {
+            return;
+        }
+        const std::vector<std::string> roots{work.path("store").string()};
+        const auto resolved_with{[&](std::string_view gamepack,
+                                     bool auto_scan) {
+            auto spec{mod::load_gamepack_spec(std::string{gamepack}, "server")};
+            expect(static_cast<bool>(spec));
+            if (!spec) {
+                return std::string{};
+            }
+            auto plan{mod::resolve_installed_composition(
+                *spec, roots,
+                mod::composition_load_options{
+                    .builtin_image = std::span<const std::byte>{*image_bytes},
+                    .auto_scan = auto_scan})};
+            expect(static_cast<bool>(plan));
+            if (!plan) {
+                return std::string{};
+            }
+            plan->profile = refrain::version::mod_profile;
+            plan->build_id = refrain::version::mod_build_id;
+            return plan->to_toml();
+        }};
+
+        // A gamepack with discovery disabled, forced on by the flag the server
+        // also accepts: the installed mod joins the lock.
+        auto text{io::read_text(shipped_path(shipped_gamepack))};
+        expect(text.has_value());
+        if (!text) {
+            return;
+        }
+        constexpr std::string_view scan_on{"auto_scan = true"};
+        const auto marker{text->find(scan_on)};
+        expect(marker != std::string::npos);
+        if (marker == std::string::npos) {
+            return;
+        }
+        text->replace(marker, scan_on.size(), "auto_scan = false");
+        expect(work.write("forced-gamepack.toml", *text));
+
+        refrain::app::mods_lock_options options{};
+        options.gamepack = work.path("forced-gamepack.toml").string();
+        options.image = *image_path;
+        options.roots = roots;
+        options.lock = work.path("forced.lock").string();
+        options.write = true;
+        options.force_auto_scan = true;
+        expect(refrain::app::run_mods_lock(options) == 0);
+        auto forced{io::read_text(options.lock)};
+        expect(forced.has_value());
+        if (!forced) {
+            return;
+        }
+        expect(forced->find("refrain.test.discovered") != std::string::npos);
+        expect(*forced == resolved_with(options.gamepack, true));
+
+        // `--no-auto-scan` resolves the shipped gamepack with the pinned
+        // composition only, exactly like the server's opt-out.
+        options.gamepack = shipped_path(shipped_gamepack);
+        options.force_auto_scan = false;
+        options.no_auto_scan = true;
+        options.lock = work.path("pinned.lock").string();
+        expect(refrain::app::run_mods_lock(options) == 0);
+        auto pinned{io::read_text(options.lock)};
+        expect(pinned.has_value());
+        if (!pinned) {
+            return;
+        }
+        expect(pinned->find("refrain.test.discovered") == std::string::npos);
+        expect(*pinned == resolved_with(options.gamepack, false));
+
+        // Contradictory scan overrides are rejected like the server's usage
+        // error, never resolved with one ambiguous meaning.
+        options.force_auto_scan = true;
+        expect(refrain::app::run_mods_lock(options) != 0);
+
+        // The server's `--require` services take part in the same resolution.
+        refrain::app::mods_lock_options required{};
+        required.gamepack = shipped_path(shipped_gamepack);
+        required.image = *image_path;
+        required.roots = roots;
+        required.lock = work.path("required.lock").string();
+        required.write = true;
+        required.required_services = {"world"};
+        expect(refrain::app::run_mods_lock(required) == 0);
+        required.required_services = {"refrain.no-such-service"};
+        expect(refrain::app::run_mods_lock(required) != 0);
+
+        // A fresh content-store root has no `mods/` directory yet; the server
+        // accepts it as an empty catalog and so must the lock command.
+        std::error_code error;
+        fs::create_directories(work.path("fresh-store"), error);
+        expect(!error);
+        refrain::app::mods_lock_options fresh{};
+        fresh.gamepack = shipped_path(shipped_gamepack);
+        fresh.image = *image_path;
+        fresh.roots = {work.path("fresh-store").string()};
+        fresh.lock = work.path("fresh.lock").string();
+        fresh.write = true;
+        expect(refrain::app::run_mods_lock(fresh) == 0);
+        expect(fs::exists(fresh.lock));
+    };
 };
 
 } // namespace

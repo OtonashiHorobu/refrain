@@ -16,7 +16,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <map>
-#include <optional>
 #include <ranges>
 #include <set>
 #include <span>
@@ -376,38 +375,57 @@ struct loader_ordering {
                                });
 }
 
-/// Canonical identity of a `[provides]` entry relative to one gamepack service
-/// slot: the slot itself for the contract that owns the slot (its short,
-/// namespaced and dotted spellings), the full contract id for a member of the
-/// slot's namespace. Two mods compete for the same contract only when these
-/// identities intersect, so a mod that provides `refrain:world.migration`
-/// does not collide with the `world` binding.
-[[nodiscard]] auto canonical_slot_service(std::string_view provided,
-                                          std::string_view slot)
-    -> std::optional<std::string> {
-    if (provided == slot || detail::equals_slot(provided, "refrain:", slot) ||
-        detail::equals_slot(provided, "refrain:net.", slot) ||
-        detail::equals_dotted_slot(provided, slot)) {
-        return std::string{slot};
-    }
-    if (detail::in_slot_namespace(provided, "refrain:", slot)) {
-        return std::string{provided};
-    }
-    return std::nullopt;
-}
+/// Contract claims a manifest makes for one gamepack service slot.
+///
+/// A `[provides]` entry belongs to a slot when the shared slot matcher
+/// (`matches_slot`) says so. Entries come in two shapes. A *direct spelling* of
+/// the slot (`data`, `refrain:data`, `refrain:net.session`, or the dotted
+/// `refrain:world.migration` for the `world_migration` slot) names the contract
+/// the binding's provider declares for the slot. A *namespace member*
+/// (`refrain:data.packs` for `data`) is a contract of its own. Keeping the two
+/// shapes apart lets a `refrain:world.migration` provider stay distinct from
+/// the `world` binding while a `refrain:data` provider still competes for the
+/// `data` binding whose provider declares `refrain:data.packs`.
+struct slot_claims {
+    /// Namespace-member contracts the manifest declares for the slot.
+    std::set<std::string> members{};
+    /// The manifest declares the slot itself under one of its spellings.
+    bool names_slot{false};
+};
 
-/// Contract identities a manifest claims within one gamepack slot.
-[[nodiscard]] auto provided_slot_services(const discovered_mod &mod,
+/// Contract claims of one manifest for one gamepack slot.
+[[nodiscard]] auto claimed_slot_contracts(const discovered_mod &mod,
                                           std::string_view slot)
-    -> std::set<std::string> {
-    std::set<std::string> services{};
+    -> slot_claims {
+    slot_claims claims{};
     for (const auto &entry : mod.provides) {
-        if (auto canonical{canonical_slot_service(entry, slot)};
-            canonical.has_value()) {
-            services.insert(std::move(*canonical));
+        if (!matches_slot(entry, slot)) {
+            continue;
+        }
+        if (detail::in_slot_namespace(entry, "refrain:", slot)) {
+            claims.members.insert(entry);
+        } else {
+            claims.names_slot = true;
         }
     }
-    return services;
+    return claims;
+}
+
+/// Do a discovered mod's claims compete with the contracts the binding's
+/// active providers declare? A direct slot spelling names whatever contract
+/// those providers bind to the slot, so it competes with an active provider
+/// that declares the slot itself or a namespace member. Namespace members
+/// compete only with the same contract: a sibling contract is a different
+/// provider role.
+[[nodiscard]] auto claims_compete(const slot_claims &claimed,
+                                  const slot_claims &bound) -> bool {
+    if (claimed.names_slot && (bound.names_slot || !bound.members.empty())) {
+        return true;
+    }
+    return std::ranges::any_of(claimed.members,
+                               [&bound](const std::string &member) {
+                                   return bound.members.contains(member);
+                               });
 }
 
 /// Provider ids of one resolved binding (base/active plus chain wrappers).
@@ -449,30 +467,26 @@ struct loader_ordering {
             continue;
         }
         const auto active{binding_provider_ids(binding)};
-        std::set<std::string> bound_services{};
+        slot_claims bound{};
         for (const auto &id : active) {
             const auto found{selected_by_id.find(id)};
             if (found == selected_by_id.end()) {
                 continue;
             }
-            for (const auto &service :
-                 provided_slot_services(*found->second, binding.service)) {
-                bound_services.insert(service);
-            }
+            const auto claims{
+                claimed_slot_contracts(*found->second, binding.service)};
+            bound.members.insert(claims.members.begin(), claims.members.end());
+            bound.names_slot = bound.names_slot || claims.names_slot;
         }
-        if (bound_services.empty()) {
+        if (!bound.names_slot && bound.members.empty()) {
             continue; // data-only binding: no contract provider is active
         }
         for (const auto *mod : selected) {
             if (active.contains(mod->id)) {
                 continue;
             }
-            const auto claimed{provided_slot_services(*mod, binding.service)};
-            const auto competes{std::ranges::any_of(
-                claimed, [&bound_services](const std::string &service) {
-                    return bound_services.contains(service);
-                })};
-            if (!competes) {
+            const auto claimed{claimed_slot_contracts(*mod, binding.service)};
+            if (!claims_compete(claimed, bound)) {
                 continue;
             }
             if (explicitly_declared(spec, mod->id)) {
@@ -484,23 +498,35 @@ struct loader_ordering {
             }
             const auto base{
                 binding.provider.substr(0, binding.provider.rfind('@'))};
-            const auto bound{selected_by_id.find(base)};
-            const auto candidate{bound == selected_by_id.end()
+            const auto bound_mod{selected_by_id.find(base)};
+            const auto candidate{bound_mod == selected_by_id.end()
                                      ? describe_mod(mod->id, mod->origin,
                                                     mod->version, mod->path)
-                                     : describe_mod(bound->second->id,
-                                                    bound->second->origin,
-                                                    bound->second->version,
-                                                    bound->second->path)};
+                                     : describe_mod(bound_mod->second->id,
+                                                    bound_mod->second->origin,
+                                                    bound_mod->second->version,
+                                                    bound_mod->second->path)};
+            // A built-in candidate cannot be uninstalled: this build's image
+            // always ships it, so the repair has to work with the image.
+            const auto repair{
+                mod->origin == mod_origin::builtin
+                    ? fmt::format(
+                          "the built-in image of this build always ships it, "
+                          "so "
+                          "bind [providers].{} to it, or use a build profile "
+                          "whose image does not contain it",
+                          binding.service)
+                    : fmt::format("pin it in [mods].list and bind it under "
+                                  "[providers].{} to choose it, or uninstall "
+                                  "it",
+                                  binding.service)};
             return std::unexpected{fail(
                 error_code::already_exists,
                 fmt::format(
                     "resolve: discovered mod {} provides service '{}', "
-                    "which the gamepack already binds to {}; pin it in "
-                    "[mods].list and bind it under [providers].{} to "
-                    "choose it, or uninstall it",
+                    "which the gamepack already binds to {}; {}",
                     describe_mod(mod->id, mod->origin, mod->version, mod->path),
-                    binding.service, candidate, binding.service))};
+                    binding.service, candidate, repair))};
         }
     }
     return status_ok();
