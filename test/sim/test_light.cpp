@@ -323,6 +323,37 @@ constexpr block_override torch_at(std::int32_t x, std::int32_t y,
     return bytes;
 }
 
+/// The same flat byte vector as `light_bytes_of`, read from a stored record.
+[[nodiscard]] auto light_bytes_of_record(const storage::chunk &column)
+    -> std::vector<std::byte> {
+    std::vector<std::byte> bytes{};
+    for (const auto &layer : column.light_sections) {
+        bytes.push_back(static_cast<std::byte>(layer.y));
+        bytes.insert(bytes.end(), layer.sky_light.begin(),
+                     layer.sky_light.end());
+        bytes.insert(bytes.end(), layer.block_light.begin(),
+                     layer.block_light.end());
+    }
+    return bytes;
+}
+
+/// Read one committed record through a fresh store handle.
+[[nodiscard]] auto read_stored_column(const world_fixture &fixture,
+                                      const world::chunk_pos &pos)
+    -> std::optional<storage::chunk> {
+    auto store{world::world_store::open(fixture.directory.string())};
+    expect(store.has_value());
+    if (!store) {
+        return std::nullopt;
+    }
+    auto record{store->read_chunk(pos)};
+    expect(record.has_value());
+    if (!record) {
+        return std::nullopt;
+    }
+    return std::optional<storage::chunk>{std::move(*record)};
+}
+
 /// One sparse column with block sections only at `bottom_section` (stone) and
 /// `top_section` (air): the sections between them are a vertical gap, which
 /// RWF and Anvil both allow. No light layers and no heightmaps are stored;
@@ -1023,4 +1054,550 @@ suite<"sim/light"> light_tests = [] {
         expect(eq(static_cast<int>(sky(*world, 8, 80, 8)), 15));
         expect(eq(static_cast<int>(sky(*world, 8, 81, 8)), 15));
     };
+
+    "a column saved with correct light reloads without an initial pass"_test =
+        [] {
+            world_fixture fixture{};
+            auto created{
+                world::world_store::create(fixture.directory.string())};
+            expect(created.has_value())
+                << (created ? "" : created.error().message);
+            if (!created) {
+                return;
+            }
+            fixture.store.emplace(std::move(*created));
+            auto world{open_world(fixture)};
+            expect(world.has_value());
+            if (!world) {
+                return;
+            }
+            const auto left{world::chunk_pos{0, 0}};
+            const auto right{world::chunk_pos{1, 0}};
+            const std::array<block_override, 1> left_overrides{{
+                torch_at(15, 64, 8),
+            }};
+            const std::array<block_override, 0> right_overrides{};
+            const auto left_column{make_column(left_overrides)};
+            const auto right_column{make_column(right_overrides)};
+            auto inserted_left{world->insert_chunk(left, left_column)};
+            expect(inserted_left.has_value())
+                << (inserted_left ? "" : inserted_left.error().message);
+            auto inserted_right{world->insert_chunk(right, right_column)};
+            expect(inserted_right.has_value())
+                << (inserted_right ? "" : inserted_right.error().message);
+            if (!inserted_left || !inserted_right) {
+                return;
+            }
+            // The lighting pass completed before the record claimed
+            // correctness, and both columns are saved with that claim.
+            expect((*inserted_left)->storage.light_correct);
+            expect((*inserted_right)->storage.light_correct);
+            expect(eq(static_cast<int>(block_light(*world, 16, 64, 8)), 13));
+            expect(world->flush().has_value());
+            const auto left_lit{light_bytes_of(*world, left)};
+            const auto right_lit{light_bytes_of(*world, right)};
+            expect(!left_lit.empty());
+            expect(!right_lit.empty());
+            expect(world->unload_chunk(left).has_value());
+            expect(world->unload_chunk(right).has_value());
+
+            auto &engine{world->light()};
+            engine.reset_stats();
+            // Reload in the opposite order: a trusted column must not depend on
+            // the order its neighbours joined the loaded set.
+            expect(world->ensure_chunk(right).has_value());
+            expect(world->ensure_chunk(left).has_value());
+            const auto stats{engine.stats()};
+            expect(eq(stats.columns_trusted, std::uint64_t{2}));
+            expect(eq(stats.columns_lit, std::uint64_t{0}));
+            expect(eq(stats.initial_drain_calls, std::uint64_t{0}));
+            expect(eq(stats.initial_nodes, std::uint64_t{0}));
+            expect(eq(stats.drain_calls, std::uint64_t{0}));
+            expect(light_bytes_of(*world, left) == left_lit);
+            expect(light_bytes_of(*world, right) == right_lit);
+            expect(eq(static_cast<int>(block_light(*world, 16, 64, 8)), 13));
+        };
+
+    "a stored column without the correct-light mark is relit on load"_test =
+        [] {
+            world_fixture fixture{};
+            std::vector<std::pair<world::chunk_pos, storage::chunk>> columns{};
+            const std::array<block_override, 1> overrides{{
+                torch_at(8, 64, 8),
+            }};
+            columns.emplace_back(world::chunk_pos{0, 0},
+                                 make_column(overrides));
+            write_columns(fixture, columns);
+            auto world{open_world(fixture)};
+            expect(world.has_value());
+            if (!world) {
+                return;
+            }
+            auto &engine{world->light()};
+            engine.reset_stats();
+            auto loaded{world->ensure_chunk(world::chunk_pos{0, 0})};
+            expect(loaded.has_value());
+            if (!loaded) {
+                return;
+            }
+            const auto stats{engine.stats()};
+            expect(eq(stats.columns_lit, std::uint64_t{1}));
+            expect(eq(stats.columns_trusted, std::uint64_t{0}));
+            expect(stats.initial_drain_calls > 0U);
+            expect(stats.initial_nodes > 0U);
+            expect(eq(static_cast<int>(sky(*world, 8, 70, 8)), 15));
+            expect(eq(static_cast<int>(block_light(*world, 8, 64, 8)), 14));
+            // The completed pass marked the runtime record correct; whether the
+            // record is saved is the save path's concern.
+            expect((*loaded)->storage.light_correct);
+        };
+
+    "a record that claims correct light with a partial layer set is relit"_test =
+        [] {
+            world_fixture fixture{};
+            std::vector<std::pair<world::chunk_pos, storage::chunk>> columns{};
+            const std::array<block_override, 1> overrides{{
+                torch_at(8, 64, 8),
+            }};
+            auto column{make_column(overrides)};
+            // The claim is not enough: the record carries one zeroed layer out
+            // of the complete set, so the loader can prove nothing and
+            // relights.
+            column.light_correct = true;
+            storage::light_section claimed{};
+            claimed.y = 0;
+            claimed.block_light.assign(world::light_nibble_bytes, std::byte{0});
+            claimed.sky_light.assign(world::light_nibble_bytes, std::byte{0});
+            column.light_sections.push_back(std::move(claimed));
+            columns.emplace_back(world::chunk_pos{0, 0}, std::move(column));
+            write_columns(fixture, columns);
+            auto world{open_world(fixture)};
+            expect(world.has_value());
+            if (!world) {
+                return;
+            }
+            auto &engine{world->light()};
+            engine.reset_stats();
+            expect(world->ensure_chunk(world::chunk_pos{0, 0}).has_value());
+            const auto stats{engine.stats()};
+            expect(eq(stats.columns_lit, std::uint64_t{1}));
+            expect(eq(stats.columns_trusted, std::uint64_t{0}));
+            expect(stats.initial_nodes > 0U);
+            expect(eq(static_cast<int>(sky(*world, 8, 70, 8)), 15));
+            expect(eq(static_cast<int>(block_light(*world, 8, 64, 8)), 14));
+        };
+
+    "an edit keeps the light mark dirty until the relight drains"_test = [] {
+        world_fixture fixture{};
+        auto created{world::world_store::create(fixture.directory.string())};
+        expect(created.has_value());
+        if (!created) {
+            return;
+        }
+        fixture.store.emplace(std::move(*created));
+        auto world{open_world(fixture)};
+        expect(world.has_value());
+        if (!world) {
+            return;
+        }
+        const auto pos{world::chunk_pos{0, 0}};
+        const std::array<block_override, 0> overrides{};
+        auto inserted{world->insert_chunk(pos, make_column(overrides))};
+        expect(inserted.has_value());
+        if (!inserted) {
+            return;
+        }
+        auto *column{world->find_chunk(pos)};
+        expect(column != nullptr);
+        if (column == nullptr) {
+            return;
+        }
+        auto &engine{world->light()};
+        // An edit makes the stored arrays stale; the record must not claim
+        // correctness until the queued relight has actually been applied.
+        engine.block_changed(sim::block_pos{8, 65, 8});
+        expect(!column->storage.light_correct);
+        expect(engine.pending());
+        expect(eq(engine.run(0), std::size_t{0}));
+        expect(!column->storage.light_correct);
+        expect(engine.run() > std::size_t{0});
+        expect(column->storage.light_correct);
+        expect(!engine.pending());
+
+        // The world edit path finishes the incremental relight before it
+        // returns, so the record is correct again immediately.
+        const auto torch{world->registry().intern("minecraft:torch")};
+        expect(world->set_block(sim::block_pos{8, 64, 8}, torch).has_value());
+        expect(column->storage.light_correct);
+        expect(eq(static_cast<int>(block_light(*world, 8, 64, 8)), 14));
+        expect(eq(static_cast<int>(block_light(*world, 9, 64, 8)), 13));
+    };
+
+    "the correct-light mark survives save and reload"_test = [] {
+        world_fixture fixture{};
+        const auto pos{world::chunk_pos{0, 0}};
+        long long saved_layer_count{0};
+        {
+            auto created{
+                world::world_store::create(fixture.directory.string())};
+            expect(created.has_value());
+            if (!created) {
+                return;
+            }
+            fixture.store.emplace(std::move(*created));
+            auto world{open_world(fixture)};
+            expect(world.has_value());
+            if (!world) {
+                return;
+            }
+            const std::array<block_override, 0> overrides{};
+            auto inserted{world->insert_chunk(pos, make_column(overrides))};
+            expect(inserted.has_value());
+            if (!inserted) {
+                return;
+            }
+            saved_layer_count = static_cast<long long>(
+                (*inserted)->storage.light_sections.size());
+            expect(saved_layer_count > 0);
+            expect(world->flush().has_value());
+        }
+        fixture.store.reset();
+        {
+            auto store{world::world_store::open(fixture.directory.string())};
+            expect(store.has_value()) << (store ? "" : store.error().message);
+            if (!store) {
+                return;
+            }
+            auto record{store->read_chunk(pos)};
+            expect(record.has_value());
+            if (!record) {
+                return;
+            }
+            expect(record->light_correct);
+            expect(record->light_table != 0U);
+            expect(eq(static_cast<long long>(record->light_sections.size()),
+                      saved_layer_count));
+        }
+        {
+            auto world{open_world(fixture)};
+            expect(world.has_value());
+            if (!world) {
+                return;
+            }
+            world->light().reset_stats();
+            expect(world->ensure_chunk(pos).has_value());
+            expect(
+                eq(world->light().stats().columns_trusted, std::uint64_t{1}));
+            expect(eq(world->light().stats().columns_lit, std::uint64_t{0}));
+        }
+    };
+
+    "a partial light drain is never persisted as complete"_test = [] {
+        world_fixture fixture{};
+        auto created{world::world_store::create(fixture.directory.string())};
+        expect(created.has_value());
+        if (!created) {
+            return;
+        }
+        fixture.store.emplace(std::move(*created));
+        auto world{open_world(fixture)};
+        expect(world.has_value());
+        if (!world) {
+            return;
+        }
+        const auto edited{world::chunk_pos{0, 0}};
+        const auto source{world::chunk_pos{1, 0}};
+        const std::array<block_override, 0> edited_overrides{};
+        // The torch sits on the border of the second column, so a propagation
+        // reaches the first column's edge cells.
+        const std::array<block_override, 1> source_overrides{{
+            torch_at(16, 64, 8),
+        }};
+        expect(world->insert_chunk(edited, make_column(edited_overrides))
+                   .has_value());
+        expect(world->insert_chunk(source, make_column(source_overrides))
+                   .has_value());
+        // The initial passes complete before these records are saved, so this
+        // is the complete light both columns settle on.
+        expect(world->flush().has_value());
+        auto complete_record{read_stored_column(fixture, edited)};
+        expect(complete_record.has_value());
+        if (!complete_record) {
+            return;
+        }
+        expect(complete_record->light_correct);
+        const auto complete{light_bytes_of_record(*complete_record)};
+
+        // A block edit marks the first column dirty while its light is still
+        // complete.
+        const auto glass{world->registry().intern("minecraft:glass")};
+        expect(world->set_block(sim::block_pos{3, 64, 3}, glass).has_value());
+        auto *column{world->find_chunk(edited)};
+        expect(column != nullptr);
+        if (column == nullptr) {
+            return;
+        }
+        expect(column->storage.light_correct);
+
+        // Re-evaluating the emissive cell starts a fresh update of the same
+        // size a large edit seeds. Running a budget below the queue size
+        // reproduces a drain cut short between ticks: the decrease pass has
+        // already written the first column's edge while the increase pass that
+        // restores it is still queued.
+        world->light().reset_stats();
+        world->light().block_changed(sim::block_pos{16, 64, 8});
+        expect(world->light().pending());
+        expect(eq(world->light().run(3), std::size_t{3}));
+        expect(world->light().pending());
+        expect(!column->storage.light_correct);
+        expect(light_bytes_of(*world, edited) != complete);
+
+        // A save taken now must not hand out the partial arrays as complete.
+        expect(world->flush().has_value());
+        auto partial_record{read_stored_column(fixture, edited)};
+        expect(partial_record.has_value());
+        if (!partial_record) {
+            return;
+        }
+        expect(!partial_record->light_correct);
+        expect(light_bytes_of_record(*partial_record) != complete);
+
+        // The drain finishes on the next tick; the corrected arrays are marked
+        // for saving and the record claims correctness again.
+        for (auto attempts{0}; attempts < 64 && world->light().pending();
+             ++attempts) {
+            expect(world->light().run() > std::size_t{0});
+        }
+        expect(!world->light().pending());
+        expect(column->storage.light_correct);
+        expect(light_bytes_of(*world, edited) == complete);
+        expect(world->flush().has_value());
+        auto corrected{read_stored_column(fixture, edited)};
+        expect(corrected.has_value());
+        if (!corrected) {
+            return;
+        }
+        expect(corrected->light_correct);
+        expect(corrected->light_table != 0U);
+        expect(light_bytes_of_record(*corrected) == complete);
+
+        // A reload trusts the corrected record instead of relighting.
+        expect(world->unload_chunk(edited).has_value());
+        world->light().reset_stats();
+        expect(world->ensure_chunk(edited).has_value());
+        expect(eq(world->light().stats().columns_trusted, std::uint64_t{1}));
+        expect(light_bytes_of(*world, edited) == complete);
+    };
+
+    "a record lit under another light table is relit on load"_test = [] {
+        world_fixture source_fixture{};
+        const auto pos{world::chunk_pos{0, 0}};
+        std::optional<storage::chunk> lit;
+        {
+            auto created{
+                world::world_store::create(source_fixture.directory.string())};
+            expect(created.has_value());
+            if (!created) {
+                return;
+            }
+            source_fixture.store.emplace(std::move(*created));
+            auto world{open_world(source_fixture)};
+            expect(world.has_value());
+            if (!world) {
+                return;
+            }
+            const std::array<block_override, 1> overrides{{
+                torch_at(8, 64, 8),
+            }};
+            expect(
+                world->insert_chunk(pos, make_column(overrides)).has_value());
+            expect(world->flush().has_value());
+            lit = read_stored_column(source_fixture, pos);
+            expect(lit.has_value());
+            if (!lit) {
+                return;
+            }
+            expect(lit->light_correct);
+            expect(lit->light_table != 0U);
+        }
+
+        // The same arrays, saved under a different light content: the
+        // fingerprint no longer describes the runtime table.
+        world_fixture tampered_fixture{};
+        auto created{
+            world::world_store::create(tampered_fixture.directory.string())};
+        expect(created.has_value());
+        if (!created) {
+            return;
+        }
+        auto tampered{*lit};
+        tampered.light_table ^= 0x9E3779B97F4A7C15ULL;
+        expect(created->write_chunk(pos, tampered).has_value());
+        expect(created->commit().has_value());
+        tampered_fixture.store.emplace(std::move(*created));
+        auto world{open_world(tampered_fixture)};
+        expect(world.has_value());
+        if (!world) {
+            return;
+        }
+        world->light().reset_stats();
+        expect(world->ensure_chunk(pos).has_value());
+        expect(eq(world->light().stats().columns_lit, std::uint64_t{1}));
+        expect(eq(world->light().stats().columns_trusted, std::uint64_t{0}));
+        expect(eq(static_cast<int>(block_light(*world, 8, 64, 8)), 14));
+    };
+
+    "installing different light content relights a saved record"_test = [] {
+        world_fixture fixture{};
+        const auto pos{world::chunk_pos{0, 0}};
+        {
+            auto created{
+                world::world_store::create(fixture.directory.string())};
+            expect(created.has_value());
+            if (!created) {
+                return;
+            }
+            fixture.store.emplace(std::move(*created));
+            auto world{open_world(fixture)};
+            expect(world.has_value());
+            if (!world) {
+                return;
+            }
+            const std::array<block_override, 0> overrides{};
+            expect(
+                world->insert_chunk(pos, make_column(overrides)).has_value());
+            expect(world->flush().has_value());
+        }
+        // Reopen the world, then install a table with different content before
+        // the first column loads: production installs the table once at start,
+        // an embedder or mod may change it between runs.
+        auto world{sim::world::open(fixture.directory.string())};
+        expect(world.has_value());
+        if (!world) {
+            return;
+        }
+        auto different_table{make_light_table()};
+        different_table.insert("minecraft:probe_state",
+                               sim::block_light_property{.emission = 7});
+        world->set_block_light_table(std::move(different_table));
+        world->light().reset_stats();
+        expect(world->ensure_chunk(pos).has_value());
+        expect(eq(world->light().stats().columns_lit, std::uint64_t{1}));
+        expect(eq(world->light().stats().columns_trusted, std::uint64_t{0}));
+        auto *column{world->find_chunk(pos)};
+        expect(column != nullptr);
+        if (column == nullptr) {
+            return;
+        }
+        expect(column->storage.light_correct);
+        expect(column->storage.light_table != 0U);
+    };
+
+    "moving a world relights a column whose stored light does not verify"_test =
+        [] {
+            const auto check = [](auto corrupt) {
+                world_fixture fixture{};
+                auto created{
+                    world::world_store::create(fixture.directory.string())};
+                expect(created.has_value());
+                if (!created) {
+                    return;
+                }
+                fixture.store.emplace(std::move(*created));
+                const auto pos{world::chunk_pos{0, 0}};
+                auto world{open_world(fixture)};
+                expect(world.has_value());
+                if (!world) {
+                    return;
+                }
+                const std::array<block_override, 0> overrides{};
+                expect(world->insert_chunk(pos, make_column(overrides))
+                           .has_value());
+                expect(world->flush().has_value());
+                expect(world->unload_chunk(pos).has_value());
+                expect(world->ensure_chunk(pos).has_value());
+                const auto complete{light_bytes_of(*world, pos)};
+                auto *column{world->find_chunk(pos)};
+                expect(column != nullptr);
+                if (column == nullptr) {
+                    return;
+                }
+                expect(column->storage.light_correct);
+                // Break one part of the claim without clearing the flag: the
+                // moved engine must run the same proof as the load path.
+                corrupt(column->storage);
+                sim::world moved{std::move(*world)};
+                expect(eq(moved.light().stats().columns_lit, std::uint64_t{1}));
+                expect(light_bytes_of(moved, pos) == complete);
+                const auto *reloaded{moved.find_chunk(pos)};
+                expect(reloaded != nullptr);
+                if (reloaded == nullptr) {
+                    return;
+                }
+                expect(reloaded->storage.light_correct);
+            };
+            // A claim whose layer set is incomplete.
+            check([](storage::chunk &column) {
+                column.light_sections.pop_back();
+            });
+            // A complete layer set that was lit under another light table.
+            check([](storage::chunk &column) {
+                column.light_table ^= 0x9E3779B97F4A7C15ULL;
+            });
+        };
+
+    "the light-table fingerprint does not depend on map iteration order"_test =
+        [] {
+            constexpr std::size_t entry_count{64};
+            std::vector<std::string> keys{};
+            keys.reserve(entry_count);
+            for (std::size_t index{0}; index < entry_count; ++index) {
+                keys.push_back("minecraft:probe_" + std::to_string(index));
+            }
+            const auto build = [&keys](bool reverse) {
+                sim::block_light_table table{};
+                sim::block_light_shape shape{};
+                sim::block_light_box box{};
+                box.bounds = {0.0, 0.25, 0.0, 1.0, 0.75, 1.0};
+                shape.faces[static_cast<std::size_t>(sim::light_face::up)]
+                    .push_back(box);
+                const auto *shape_ptr = table.append_shape(std::move(shape));
+                for (std::size_t step{0}; step < keys.size(); ++step) {
+                    const auto index{reverse ? keys.size() - 1 - step : step};
+                    table.insert(
+                        keys[index],
+                        sim::block_light_property{
+                            .emission = static_cast<std::uint8_t>(index % 16),
+                            .dampening =
+                                static_cast<std::uint8_t>(index % 14 + 1),
+                            .shape = index % 7 == 0 ? shape_ptr : nullptr});
+                }
+                return table;
+            };
+            auto ordered{build(false)};
+            auto reversed{build(true)};
+            expect(ordered.fingerprint() != 0U);
+            expect(ordered.fingerprint() == reversed.fingerprint());
+
+            // Equal properties under distinct keys still combine commutatively,
+            // and different content still changes the value.
+            const auto build_equal = [](bool reverse) {
+                sim::block_light_table table{};
+                for (std::size_t step{0}; step < 16; ++step) {
+                    const auto index{reverse ? 15 - step : step};
+                    table.insert("minecraft:equal_" + std::to_string(index),
+                                 sim::block_light_property{.emission = 3,
+                                                           .dampening = 2});
+                }
+                return table;
+            };
+            auto first{build_equal(false)};
+            auto second{build_equal(true)};
+            expect(first.fingerprint() == second.fingerprint());
+            auto changed{build_equal(false)};
+            changed.insert(
+                "minecraft:equal_extra",
+                sim::block_light_property{.emission = 3, .dampening = 2});
+            expect(changed.fingerprint() != first.fingerprint());
+        };
 };

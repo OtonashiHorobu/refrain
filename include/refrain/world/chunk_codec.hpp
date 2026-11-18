@@ -13,9 +13,11 @@
 // rejects anything `world::validate` rejects, so a corrupt world fails at the
 // storage boundary instead of inside the engine.
 //
-// The entity field is appended to the contract: a record written before it
-// existed decodes with an empty entity list, and a writer omits the field for
-// a column without entities so an entity-free record keeps its canonical hash.
+// The entity, light-correct and light-table fields are appended to the
+// contract: a record written before a field existed decodes with that field's
+// conservative value (an empty entity list, "light not correct", or the unknown
+// table fingerprint), and a writer omits a field that carries the conservative
+// value so records that do not use it keep their canonical bytes and hash.
 
 #pragma once
 
@@ -46,6 +48,8 @@ enum class chunk_field : std::uint16_t {
     light_sections = 11,  ///< light layers keyed by section Y (incl. padding)
     sections_inline = 12, ///< self-contained sections with palette keys inline
     entities = 13,        ///< generated entities (type, transform, components)
+    light_correct = 14,   ///< u8: stored light arrays are complete and lit
+    light_table = 15,     ///< u64: light-table content fingerprint
 };
 
 /// How a chunk payload references block/biome states.
@@ -78,6 +82,9 @@ encode_chunk(const chunk &value, palette_table *palette = nullptr,
 
 /// Canonical semantic hash (lowercase BLAKE3 hex) of a chunk. Two chunks with
 /// the same storage-level content hash identically regardless of input order.
+/// The light-correct flag and the light-table fingerprint are provenance, not
+/// content: the stored light arrays are hashed, and both fields are cleared
+/// before hashing so the same world has one identity in either layout.
 [[nodiscard]] auto semantic_hash(const chunk &value) -> result<std::string>;
 
 } // namespace refrain::world

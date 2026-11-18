@@ -216,6 +216,8 @@ using world::section_record;
         left.structures != right.structures ||
         left.post_processing != right.post_processing ||
         left.blending != right.blending || left.extra != right.extra ||
+        left.light_correct != right.light_correct ||
+        left.light_table != right.light_table ||
         left.entities.size() != right.entities.size()) {
         return false;
     }
@@ -317,6 +319,167 @@ suite chunk_codec = [] {
             expect(same_chunk(original, *decoded));
         }
     };
+
+    "the light-correct flag is stored only when it is set"_test = [&palette] {
+        auto value{make_full_chunk()};
+        value.light_correct = true;
+        const auto payload{world::encode_chunk(value, &palette)};
+        expect(static_cast<bool>(payload));
+        if (!payload) {
+            return;
+        }
+        const auto has_flag = [](std::span<const std::byte> encoded) {
+            const auto fields{fields_of(encoded)};
+            return std::any_of(
+                fields.begin(), fields.end(), [](const auto &field) {
+                    return field.id == static_cast<std::uint16_t>(
+                                           world::chunk_field::light_correct);
+                });
+        };
+        expect(has_flag(*payload));
+        const auto decoded{world::decode_chunk(*payload, &palette)};
+        expect(static_cast<bool>(decoded));
+        if (decoded) {
+            expect(decoded->light_correct);
+            expect(same_chunk(value, *decoded));
+        }
+
+        // A non-boolean value is malformed, not a truthy claim. Recompute the
+        // field checksum so the value check is what rejects it.
+        const auto fields{fields_of(*payload)};
+        const auto flag_field{
+            std::find_if(fields.begin(), fields.end(), [](const auto &field) {
+                return field.id == static_cast<std::uint16_t>(
+                                       world::chunk_field::light_correct);
+            })};
+        expect(flag_field != fields.end());
+        if (flag_field == fields.end() || flag_field->size != 1) {
+            return;
+        }
+        auto corrupt{*payload};
+        corrupt[flag_field->header + 16] = std::byte{2};
+        const auto body{std::span<const std::byte>{corrupt}.subspan(
+            flag_field->header + 16, flag_field->size)};
+        write_u32(corrupt, flag_field->header + 8, refrain::data::crc32c(body));
+        expect(!world::decode_chunk(corrupt, &palette));
+
+        // The conservative value is omitted, so a record that does not claim
+        // correctness keeps the bytes it had before the field existed.
+        auto plain{make_full_chunk()};
+        plain.light_correct = false;
+        const auto plain_payload{world::encode_chunk(plain, &palette)};
+        expect(static_cast<bool>(plain_payload));
+        if (!plain_payload) {
+            return;
+        }
+        expect(!has_flag(*plain_payload));
+        const auto plain_decoded{world::decode_chunk(*plain_payload, &palette)};
+        expect(static_cast<bool>(plain_decoded));
+        if (plain_decoded) {
+            expect(!plain_decoded->light_correct);
+        }
+
+        // Provenance is not content: the stored arrays are hashed and the flag
+        // is cleared first, so the same world has one semantic identity.
+        expect(*world::semantic_hash(value) == *world::semantic_hash(plain));
+    };
+
+    "a payload without the light-correct field decodes as not correct"_test =
+        [&palette] {
+            auto value{make_full_chunk()};
+            value.light_correct = true;
+            auto payload{*world::encode_chunk(value, &palette)};
+            const auto fields{fields_of(payload)};
+            const auto found{
+                std::find_if(fields.begin(), fields.end(), [](const auto &f) {
+                    return f.id == static_cast<std::uint16_t>(
+                                       world::chunk_field::light_correct);
+                })};
+            expect(found != fields.end());
+            if (found == fields.end()) {
+                return;
+            }
+            // Strip the field: the remaining bytes are the record an older
+            // writer produced, and it must decode with the conservative value.
+            const auto field_end{found->header + 16 +
+                                 ((found->size + 7U) & ~std::size_t{7U})};
+            payload.erase(
+                payload.begin() + static_cast<std::ptrdiff_t>(found->header),
+                payload.begin() + static_cast<std::ptrdiff_t>(field_end));
+            const auto decoded{world::decode_chunk(payload, &palette)};
+            expect(static_cast<bool>(decoded));
+            if (decoded) {
+                expect(!decoded->light_correct);
+            }
+        };
+
+    "the light-table fingerprint round trips and is omitted when unknown"_test =
+        [&palette] {
+            auto value{make_full_chunk()};
+            value.light_correct = true;
+            value.light_table = 0x0123456789ABCDEFULL;
+            const auto payload{world::encode_chunk(value, &palette)};
+            expect(static_cast<bool>(payload));
+            if (!payload) {
+                return;
+            }
+            const auto fields{fields_of(*payload)};
+            const auto table_field{
+                std::find_if(fields.begin(), fields.end(), [](const auto &f) {
+                    return f.id == static_cast<std::uint16_t>(
+                                       world::chunk_field::light_table);
+                })};
+            expect(table_field != fields.end());
+            if (table_field != fields.end()) {
+                expect(table_field->size == 8U);
+            }
+            const auto decoded{world::decode_chunk(*payload, &palette)};
+            expect(static_cast<bool>(decoded));
+            if (decoded) {
+                expect(decoded->light_table == value.light_table);
+                expect(same_chunk(value, *decoded));
+            }
+
+            // A payload that is not eight bytes is malformed. Shrinking the
+            // field keeps the record layout aligned because the padding grows
+            // by the same four bytes; the checksum is recomputed so the length
+            // check is what rejects it.
+            if (table_field != fields.end() && table_field->size == 8U) {
+                auto corrupt{*payload};
+                write_u32(corrupt, table_field->header + 4, 4);
+                const auto body{std::span<const std::byte>{corrupt}.subspan(
+                    table_field->header + 16, 4)};
+                write_u32(corrupt, table_field->header + 8,
+                          refrain::data::crc32c(body));
+                expect(!world::decode_chunk(corrupt, &palette));
+            }
+
+            // Unknown is the conservative value and is omitted, like the other
+            // appended fields; the semantic identity ignores provenance.
+            auto plain{make_full_chunk()};
+            plain.light_correct = false;
+            plain.light_table = 0;
+            const auto plain_payload{world::encode_chunk(plain, &palette)};
+            expect(static_cast<bool>(plain_payload));
+            if (!plain_payload) {
+                return;
+            }
+            const auto plain_fields{fields_of(*plain_payload)};
+            expect(std::none_of(plain_fields.begin(), plain_fields.end(),
+                                [](const auto &field) {
+                                    return field.id ==
+                                           static_cast<std::uint16_t>(
+                                               world::chunk_field::light_table);
+                                }));
+            const auto plain_decoded{
+                world::decode_chunk(*plain_payload, &palette)};
+            expect(static_cast<bool>(plain_decoded));
+            if (plain_decoded) {
+                expect(plain_decoded->light_table == 0);
+            }
+            expect(*world::semantic_hash(value) ==
+                   *world::semantic_hash(plain));
+        };
 
     "inline_palette_payload_is_self_contained"_test = [] {
         const auto original{make_full_chunk()};

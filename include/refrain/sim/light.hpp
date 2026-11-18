@@ -7,8 +7,10 @@
 // The engine keeps the authoritative light arrays in each column's storage
 // record (`light_sections`), so the chunk codec, the world writer and the
 // `level_chunk_with_light` encoder all read the same bytes without a copy. It
-// initialises a column when it joins the loaded set, propagates across column
-// and section borders, and updates light incrementally after a block edit.
+// initialises a column when it joins the loaded set - reusing the persisted
+// arrays when the record marks them correct, relighting from the blocks
+// otherwise - propagates across column and section borders, and updates light
+// incrementally after a block edit.
 //
 // Model:
 //  * light levels are 0..15; a block's `dampening` decides how much a path
@@ -153,6 +155,17 @@ class block_light_table {
         return shapes_.size();
     }
 
+    /// Stable content fingerprint of the table, or 0 for an empty table.
+    ///
+    /// The value identifies the light behaviour a table defines: every state
+    /// key with its emission, dampening and occlusion shape. It is
+    /// order-independent, so the table's iteration order cannot change it, and
+    /// two tables with the same content produce the same value in any process.
+    /// The chunk record stores the fingerprint its arrays were lit under; a
+    /// mismatch on load means the stored light was computed with different
+    /// content and cannot be trusted.
+    [[nodiscard]] auto fingerprint() const noexcept -> std::uint64_t;
+
     /// Append one occlusion shape and return it. The pointer stays valid for
     /// the lifetime of the table.
     auto append_shape(block_light_shape shape) -> const block_light_shape *;
@@ -188,9 +201,12 @@ class block_light_table {
 /// rather than atomics. A snapshot covers the window since the last
 /// `reset_stats()`.
 struct light_stats {
-    /// Columns whose initial light pass ran: a column joined the loaded set,
-    /// or an edit forced a full relight.
+    /// Columns whose initial light pass ran: a column joined the loaded set
+    /// without correct persisted light, or an edit forced a full relight.
     std::uint64_t columns_lit{0};
+    /// Columns that joined the loaded set with persisted light reused as-is:
+    /// the stored arrays were complete and the initial light pass did not run.
+    std::uint64_t columns_trusted{0};
     /// The subset of the drains below that a column's initial light pass ran:
     /// calls, queue entries processed and wall time. A column load drains once,
     /// so this is one call per `columns_lit` in the common case.
@@ -227,15 +243,22 @@ class light_engine {
     auto operator=(light_engine &&other) noexcept -> light_engine &;
     ~light_engine();
 
-    /// Rebuild the internal index after the owned `world` moved. The light
-    /// arrays travel with the storage records, so nothing is recomputed.
+    /// Rebuild the internal index after the owned `world` moved. Columns whose
+    /// stored arrays are complete and were lit under the current light table
+    /// keep their light; any other column is relit, because the queue that
+    /// carried its pending update does not survive the move.
     void attach(world &owner);
 
-    /// A column joined the loaded set: allocate its light layers, compute sky
-    /// and block light and propagate into the loaded neighbours.
+    /// A column joined the loaded set. When the storage record marks its light
+    /// correct, the stored layer set is complete and the record was lit under
+    /// the current light table, the persisted nibble arrays are adopted and no
+    /// light is propagated; any other record is zeroed and lit from its blocks,
+    /// and the column's light-correct marker is set once that pass has
+    /// completed.
     void column_loaded(chunk &column);
 
-    /// The world's light table changed: drop the cached per-state properties.
+    /// The world's light table changed: drop the cached per-state properties,
+    /// refresh the table fingerprint and mark the loaded columns for relight.
     /// Light arrays are not recomputed by this call; `world` relights its
     /// columns after installing a table.
     void reload_properties();

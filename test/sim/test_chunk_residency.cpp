@@ -345,6 +345,10 @@ suite<"sim/chunk-residency"> chunk_residency_tests = [] {
             expect(static_cast<bool>(runtime.ensure_chunk(pos)));
         }
         expect(static_cast<bool>(runtime.ensure_chunk({0, 0})));
+        // Loading an old record relights it, which marks the column for saving
+        // so the upgraded light reaches the store. Flush that first, so the
+        // dirty state below reflects the block edit only.
+        expect(static_cast<bool>(runtime.flush()));
         const auto dirt{runtime.registry().intern("minecraft:dirt")};
         // The edit belongs to chunk (1, 0), not to the origin column.
         expect(static_cast<bool>(
