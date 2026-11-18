@@ -5,8 +5,9 @@
 // The working set of the per-chunk generation pipeline. A chunk is kept after
 // its terrain pass so the neighbours that decorate around it read the same
 // blocks instead of re-running their own terrain, and feature writes from one
-// chunk stay visible to the chunks generated after it. One cache belongs to
-// one generator instance and is not shared between workers.
+// chunk stay visible to the chunks generated after it. A cache is either
+// private to one generator instance, or shared by the workers of a scheduler
+// through the mutex the scheduler passes in.
 
 #pragma once
 
@@ -16,7 +17,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <memory>
+#include <mutex>
 #include <string_view>
 #include <unordered_map>
 #include <utility>
@@ -56,17 +59,25 @@ struct proto_cache_entry {
 /// Counters a caller reads to confirm the cache is doing the work.
 struct proto_cache_stats {
     std::size_t entries{0};
+    /// Entries still at `terrain` stage: the only eviction candidates.
+    std::size_t terrain_entries{0};
     std::size_t capacity{0};
     std::uint64_t hits{0};
     std::uint64_t misses{0};
     std::uint64_t evictions{0};
 };
 
-/// A bounded map from chunk position to cached proto chunk. Entries are
-/// evicted in insertion order once the cache is over capacity: the terrain of
-/// an evicted chunk is reproducible, but the feature writes its neighbours
-/// made into it are lost, so a caller that needs a stable neighbourhood keeps
-/// the capacity above the working set.
+/// A bounded map from chunk position to cached proto chunk.
+///
+/// The cache has two ownership models. A per-generator cache is private to one
+/// generator and not locked. A shared cache is owned by a scheduler and its
+/// workers reach it through one instance with a mutex: the mutex is the lock
+/// the scheduler names in its ownership contract. Shared mode never evicts on
+/// insertion, because an eviction could erase a chunk another worker's
+/// decoration region points into; the owner evicts between ordered steps with
+/// `evict_terrain_if`. Only terrain entries are eviction candidates: their
+/// content is a pure function of seed, data and position, while a decorated
+/// chunk carries the feature writes its neighbours already made into it.
 class proto_chunk_cache {
   public:
     /// One cached chunk costs about one terrain chunk (roughly 200 KiB
@@ -74,8 +85,11 @@ class proto_chunk_cache {
     /// of megabytes per worker.
     static constexpr std::size_t default_capacity = 256;
 
-    explicit proto_chunk_cache(
-        std::size_t capacity = default_capacity) noexcept;
+    /// `lock` non-null makes the cache shared: every operation takes the mutex
+    /// and insertion never evicts on its own. The mutex must outlive the
+    /// cache.
+    explicit proto_chunk_cache(std::size_t capacity = default_capacity,
+                               std::mutex *lock = nullptr) noexcept;
     proto_chunk_cache(const proto_chunk_cache &) = delete;
     auto operator=(const proto_chunk_cache &) -> proto_chunk_cache & = delete;
     proto_chunk_cache(proto_chunk_cache &&) = delete;
@@ -93,6 +107,14 @@ class proto_chunk_cache {
     }
     [[nodiscard]] auto stats() const noexcept -> proto_cache_stats;
     void clear();
+
+    /// Erases the terrain entries for which `keep` returns false. Returns the
+    /// number erased. Only unsealed `terrain` entries are candidates, so the
+    /// content of every decorated chunk and of every served snapshot is
+    /// unaffected. The candidates are erased in ascending position order, so
+    /// the eviction order never follows hash-map iteration.
+    auto evict_terrain_if(const std::function<bool(const chunk_pos &)> &keep)
+        -> std::size_t;
 
     /// Looks an entry up and counts the query. Returns null on a miss.
     [[nodiscard]] auto find(const chunk_pos &pos) -> proto_cache_entry *;
@@ -114,6 +136,8 @@ class proto_chunk_cache {
     void evict_over_capacity();
 
     std::size_t capacity_{default_capacity};
+    /// Non-null on a shared cache: the mutex every operation takes.
+    std::mutex *lock_{nullptr};
     std::unordered_map<chunk_pos, proto_cache_entry, chunk_pos_hash> entries_{};
     std::deque<chunk_pos> insertion_order_{};
     std::uint64_t hits_{0};

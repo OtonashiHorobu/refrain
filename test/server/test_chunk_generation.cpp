@@ -513,9 +513,12 @@ suite<"server/chunk-generation"> chunk_generation_gating_tests = [] {
         };
 
     "server/chunk generation runs the scheduler only when opted in"_test = [] {
+        if (!test_support::vanilla_data().available) {
+            return;
+        }
         auto started{refrain::server::chunk_generation::start(
             refrain::server::chunk_generation::config{
-                .data_root = "/refrain/gating-probe",
+                .data_root = test_support::vanilla_data_root(),
                 .worker_count = 1,
                 .experimental_chunk_pipeline = true,
             })};

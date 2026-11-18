@@ -814,18 +814,26 @@ void chunk_generation::run_pipeline(std::size_t worker) {
         auto generated{scheduler_->run(*job)};
         if (!generated) {
             const auto message{generated.error().message};
+            // A terrain job names the position it fills, but the chain that
+            // failed is the demanded column its dependency window belongs to.
+            const auto failed_position{job->demand};
             scheduler_->complete(*job, &message);
             log_generation.debug(
                 "failed to generate chunk ({}, {}) at the {} step: {}",
-                job->position.x, job->position.z,
+                failed_position.x, failed_position.z,
                 worldgen::pipeline_step_name(job->step), message);
-            fail_task(refrain::world::chunk_pos{.x = job->position.x,
-                                                .z = job->position.z},
+            fail_task(refrain::world::chunk_pos{.x = failed_position.x,
+                                                .z = failed_position.z},
                       message);
+            wake_.notify_all();
             continue;
         }
         if (job->step != worldgen::pipeline_step::served) {
             scheduler_->complete(*job, nullptr);
+            // A completed terrain or decoration step can make the ordered
+            // lane or a queued terrain job ready on another worker; those
+            // workers are asleep on the wake predicate.
+            wake_.notify_all();
             continue;
         }
         auto column{refrain::world::from_proto_chunk(
@@ -844,6 +852,7 @@ void chunk_generation::run_pipeline(std::size_t worker) {
             continue;
         }
         scheduler_->complete(*job, nullptr);
+        wake_.notify_all();
         tile_result result{.origin =
                                refrain::world::chunk_pos{.x = job->position.x,
                                                          .z = job->position.z},

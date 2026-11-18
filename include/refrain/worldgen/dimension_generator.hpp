@@ -56,6 +56,11 @@ struct terrain_stages {
 struct dimension_generator_config {
     /// The datapack `data` directory (`<version>/data`).
     std::string data_root{};
+    /// The content's block-state table container (`<version>/tables.rvtb`).
+    /// Empty derives it as the sibling `tables.rvtb` of the data directory,
+    /// the layout an installed content root has. A shared generator table is
+    /// built from it; without the container there is no shared table.
+    std::string tables_path{};
     dimension_kind kind{dimension_kind::overworld};
     jlong seed{0};
     /// Fixed biome key. When set every biome cell is this biome, matching a
@@ -66,9 +71,11 @@ struct dimension_generator_config {
 /// Loaded dimension data that does not change during generation: the noise
 /// settings and their density documents, material documents and rule,
 /// climates, noise functions, block tags and possible biomes. Workers of one
-/// configuration share one instance. The biome source, the block-state
-/// registry, the surface state cache, the positional factories and the biome
-/// search cache stay per generator instance.
+/// configuration share one instance. The biome source, the surface state
+/// cache, the positional factories and the biome search cache stay per
+/// generator instance. The block-state registry is per generator on the
+/// independent-worker paths and one frozen instance owned by a scheduler when
+/// several workers must resolve state keys to the same ids.
 struct dimension_shared_data;
 
 class dimension_generator {
@@ -87,6 +94,30 @@ class dimension_generator {
     static auto create(dimension_generator_config config,
                        std::shared_ptr<const dimension_shared_data> shared)
         -> result<std::unique_ptr<dimension_generator>>;
+
+    /// Builds a generator over already loaded immutable data and an existing
+    /// block-state table. Several generators may share one frozen table so a
+    /// chunk's state ids mean the same on every worker.
+    static auto create(dimension_generator_config config,
+                       std::shared_ptr<const dimension_shared_data> shared,
+                       std::shared_ptr<block_state_registry> states)
+        -> result<std::unique_ptr<dimension_generator>>;
+
+    /// Biomes the dimension source can select, or the configured fixed biome.
+    [[nodiscard]] static auto
+    possible_biomes(const dimension_generator_config &config,
+                    const std::shared_ptr<const dimension_shared_data> &shared)
+        -> result<std::vector<std::string>>;
+
+    /// Builds the block-state table every scheduler worker shares. The table
+    /// is the content's complete state list, interned in key order, so ids do
+    /// not depend on which worker first needs a key; callers freeze it before
+    /// concurrent generation. Fails when the content ships no table container,
+    /// because a per-generator first-use table cannot be shared.
+    [[nodiscard]] static auto build_shared_states(
+        dimension_generator_config config,
+        const std::shared_ptr<const dimension_shared_data> &shared)
+        -> result<std::shared_ptr<block_state_registry>>;
 
     /// Generates one chunk to `terrain` status: biome cells, fill, surface and
     /// the dimension's carvers.
@@ -137,7 +168,7 @@ class dimension_generator {
         return sampler_;
     }
     [[nodiscard]] auto states() noexcept -> block_state_registry & {
-        return states_;
+        return *states_;
     }
     /// Material-rule document id (`minecraft:nether`).
     [[nodiscard]] auto material_rule() const noexcept -> std::string_view;
@@ -151,7 +182,7 @@ class dimension_generator {
     dimension_generator(dimension_generator_config config,
                         std::shared_ptr<const dimension_shared_data> shared,
                         dimension_biome_source biome_source,
-                        block_state_registry states);
+                        std::shared_ptr<block_state_registry> states);
 
     /// An aquifer borrows its positional random factory, so both live
     /// together for the whole terrain pass.
@@ -170,7 +201,7 @@ class dimension_generator {
     std::shared_ptr<const dimension_shared_data> shared_{};
     const dimension_profile *profile_{nullptr};
     dimension_biome_source biome_source_;
-    block_state_registry states_{};
+    std::shared_ptr<block_state_registry> states_{};
     surface::block_states rule_states_{};
     std::unique_ptr<positional_random_factory> root_factory_{};
     density::sampler_context sampler_context_{};

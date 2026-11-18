@@ -221,13 +221,14 @@ class chunk_generation {
         /// instead of the production tile path. Off by default and not wired
         /// to any server option, so a production server never enables it.
         ///
-        /// The scheduler keeps one proto chunk cache per worker. The chunks a
-        /// worker already served decide how much of a neighbourhood is
-        /// decorated when it serves the next one, so served content can depend
-        /// on the worker count: this path is not worker-count independent yet
-        /// and is not a production replacement. It exists so the status-job
-        /// pipeline, the first-chunk latency and the remaining determinism gap
-        /// can be measured before a shared proto cache lands.
+        /// The scheduler runs one shared deterministic pipeline state: a frozen
+        /// content block-state table, one proto chunk cache and one ordered
+        /// decoration lane. The served content is the serial per-chunk
+        /// pipeline's content and does not depend on the worker count, which
+        /// the scheduler benchmark hashes at one, four and eight workers. The
+        /// flag stays off because the production tile path is still the only
+        /// path with the full reference-oracle, spawn and viewport coverage; a
+        /// separate change switches the default once those are in place.
         bool experimental_chunk_pipeline{false};
         /// Proto chunks each worker's generator keeps when
         /// `experimental_chunk_pipeline` is on. Ignored by the tile path.
