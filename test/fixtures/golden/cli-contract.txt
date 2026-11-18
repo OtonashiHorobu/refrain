@@ -60,3 +60,5 @@ gamepack-check-profile  | stdout | 0       | binary: vanilla build | refrain-too
 mods-check-profile      | stdout | 0       | mods check: profile 'vanilla' OK | refrain-tools mods check --profile vanilla --built --image {build}/generated/builtin.image
 unbuilt-mod-profile     | stderr | nonzero | not built into this binary (profile=vanilla | refrain-server --gamepack {root}/gamepack/presets/minimal-flat.toml --check
 mods-check-missing-loader | stderr | nonzero | entry.loader | refrain-tools mods check --mods {root}/test/fixtures/mods-missing-loader
+mods-check-contracts      | stdout | 0       | contracts: example:shop@1.0.0 vtable 32 | refrain-tools mods check --mods {root}/test/fixtures/mods-contracts
+mods-check-contract-bind  | stdout | 0       | does not declare [provides] 'example:shop' | refrain-tools mods check --mods {root}/test/fixtures/mods-contracts --gamepack {root}/test/fixtures/mods-contracts/gamepack.toml

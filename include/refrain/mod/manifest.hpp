@@ -131,6 +131,32 @@ struct manifest_entry_point {
     std::string symbol{};
 };
 
+/// One custom service contract a package defines (`[contracts."<id>"]`).
+///
+/// The descriptor is data: the host validates the shape without loading mod
+/// code and records the declared contract identity. `version` is the contract
+/// ABI version and is expected verbatim in the provider vtable header
+/// (`abi_major`, `abi_minor`, `abi_patch`); `vtable_size` is the generated
+/// vtable `struct_size`. `compatible` is the SemVer range of contract versions
+/// this declaration is compatible with; a consumer's required range must lie
+/// inside it. `trusted_providers` names additional mod ids allowed to register
+/// a provider for the service; the declaring mod is the owner and is always
+/// allowed.
+struct contract_definition {
+    std::string service{};
+    core::semver version{};
+    std::uint32_t vtable_size{0};
+    std::string compatible{};
+    std::vector<std::string> trusted_providers{};
+};
+
+/// One custom service contract a package consumes
+/// (`[contract_requires] "<id>" = "<range>"`).
+struct contract_requirement {
+    std::string service{};
+    std::string version{};
+};
+
 /// A parsed `mods/<id>/manifest.toml`.
 struct mod_manifest {
     manifest_common common{};
@@ -143,6 +169,10 @@ struct mod_manifest {
     /// Service contract ids this mod can provide, e.g. `refrain:data.packs`
     /// (a role declaration, not a mod type).
     std::vector<std::string> provides{};
+    /// Custom service contracts this package defines (sorted by service id).
+    std::vector<contract_definition> contracts{};
+    /// Custom service contracts this package consumes (sorted by service id).
+    std::vector<contract_requirement> contract_requires{};
     /// Optional host runtime API requirement (full SemVer, for example
     /// "1.0.0"). The loader rejects a major mismatch and a newer minor.
     std::string host_api{};
@@ -163,10 +193,10 @@ struct mod_manifest {
 };
 
 /// Parse a mod manifest document. Root tables: `[mod] [meta] [requires]
-/// [optional_requires] [provides] [entry]`; unknown root keys are rejected
-/// unless `options.allow_package_tables` also admits the package
-/// tables `[files] [packaging] [signature]` (contents are validated by the
-/// container layer).
+/// [optional_requires] [provides] [contracts] [contract_requires] [entry]`;
+/// unknown root keys are rejected unless `options.allow_package_tables` also
+/// admits the package tables `[files] [packaging] [signature]` (contents are
+/// validated by the container layer).
 ///
 /// `[entry].loader` names the loader that executes the package and is
 /// required for an external manifest; it must be a valid loader id

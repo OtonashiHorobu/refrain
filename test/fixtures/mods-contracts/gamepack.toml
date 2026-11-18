@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: MIT
+#
+# SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
+
+# Custom provider binding inspected by the CLI contract check: the bound mod
+# does not declare `example:shop` in `[provides]`.
+[gamepack]
+id = "example.shop.check"
+version = "1.0.0"
+side = "server"
+abi = "1"
+auto_scan = false
+
+[mods]
+list = ["example.shop.undeclared@1.0.0"]
+
+[providers]
+"example:shop" = "example.shop.undeclared@^1.0.0"

@@ -269,10 +269,13 @@ auto run_mods_check(const mods_check_options &options) -> int {
             declares_provider_service(*found, service)) {
             return; // a missing manifest is reported above
         }
+        const auto expected{service.find(':') != std::string_view::npos
+                                ? std::string{service}
+                                : fmt::format("refrain:{}", service)};
         std::cout << fmt::format(
             "warning: provider '{}' -> '{}' does not declare [provides] "
-            "'refrain:{}'\n",
-            service, reference, service);
+            "'{}'\n",
+            service, reference, expected);
         ++provider_warnings;
     };
     for (const auto &provider : plan->providers) {

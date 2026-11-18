@@ -350,6 +350,305 @@ namespace config = core::config;
     return status_ok();
 }
 
+// ---------------------------------------------------------------------------
+// custom service contracts
+// ---------------------------------------------------------------------------
+
+/// Smallest generated vtable: the 4 x `uint32_t` ABI header.
+constexpr std::uint32_t k_min_contract_vtable_size{16};
+/// Upper bound keeps a corrupt descriptor from claiming an absurd size.
+constexpr std::uint32_t k_max_contract_vtable_size{1U << 20U};
+
+/// A release SemVer triple with a non-zero major: the vtable ABI header can
+/// only carry major/minor/patch, so prerelease/build metadata is meaningless
+/// here.
+[[nodiscard]] auto is_contract_version(const core::semver &version) noexcept
+    -> bool {
+    return version.major >= 1 && !version.is_prerelease() &&
+           version.build.empty();
+}
+
+/// True when every comparator bound is a release version; prerelease range
+/// semantics do not apply to a contract ABI band.
+[[nodiscard]] auto is_release_range(const core::semver_range &range) noexcept
+    -> bool {
+    for (const auto &alternative : range.alternatives) {
+        for (const auto &comparator : alternative) {
+            if (comparator.bound.is_prerelease()) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+/// Default compatibility band of a contract version: the whole major line,
+/// because an additive minor change is ABI compatible with consumers of an
+/// earlier minor.
+[[nodiscard]] auto default_contract_compatible(const core::semver &version)
+    -> std::string {
+    return fmt::format(">={}.0.0 <{}.0.0", version.major, version.major + 1U);
+}
+
+[[nodiscard]] auto parse_contract_definition(const config::document &doc,
+                                             std::string_view service)
+    -> result<contract_definition> {
+    const std::string context{fmt::format("mod: [contracts.\"{}\"]", service)};
+    if (!is_custom_service_id(service)) {
+        return std::unexpected{fail(
+            error_code::invalid_argument,
+            fmt::format("{}: invalid custom service id '{}' (expected "
+                        "namespace:name with a namespace other than 'refrain'; "
+                        "first-party contracts are generated from RIDL)",
+                        context, service))};
+    }
+
+    const std::array<std::string_view, 2> table_path{"contracts", service};
+    if (doc.kind_at(table_path) != config::value_kind::table) {
+        return std::unexpected{
+            fail(error_code::parse_error,
+                 fmt::format("{}: the contract descriptor must be a table",
+                             context))};
+    }
+    constexpr std::array<std::string_view, 4> allowed{
+        "version", "vtable_size", "compatible", "trusted_providers"};
+    auto keys{doc.keys_at(table_path)};
+    if (!keys) {
+        return std::unexpected{keys.error()};
+    }
+    for (const auto &key : *keys) {
+        const auto known = std::any_of(
+            allowed.begin(), allowed.end(),
+            [&key](std::string_view candidate) { return candidate == key; });
+        if (!known) {
+            return std::unexpected{
+                fail(error_code::invalid_argument,
+                     fmt::format("{}: unknown key '{}' (expected version, "
+                                 "vtable_size, compatible, trusted_providers)",
+                                 context, key))};
+        }
+    }
+
+    contract_definition definition{};
+    definition.service = std::string{service};
+
+    const std::array<std::string_view, 3> version_path{"contracts", service,
+                                                       "version"};
+    if (!doc.contains_at(version_path)) {
+        return std::unexpected{
+            fail(error_code::parse_error,
+                 fmt::format("{}: missing required field 'version' (the "
+                             "contract ABI version)",
+                             context))};
+    }
+    auto version{required_string(doc, version_path, context, "version")};
+    if (!version) {
+        return std::unexpected{version.error()};
+    }
+    auto parsed{core::semver::parse(*version)};
+    if (!parsed.has_value() || !is_contract_version(*parsed)) {
+        return std::unexpected{
+            fail(error_code::invalid_argument,
+                 fmt::format("{}: version '{}' is not a release SemVer with a "
+                             "non-zero major",
+                             context, *version))};
+    }
+    if (parsed->major == std::numeric_limits<std::uint32_t>::max()) {
+        return std::unexpected{
+            fail(error_code::invalid_argument,
+                 fmt::format("{}: version '{}' major cannot be incremented",
+                             context, *version))};
+    }
+    definition.version = std::move(*parsed);
+
+    const std::array<std::string_view, 3> size_path{"contracts", service,
+                                                    "vtable_size"};
+    if (!doc.contains_at(size_path)) {
+        return std::unexpected{
+            fail(error_code::parse_error,
+                 fmt::format("{}: missing required field 'vtable_size' (the "
+                             "generated vtable struct_size)",
+                             context))};
+    }
+    auto vtable_size{doc.get_int64_at(size_path)};
+    if (!vtable_size) {
+        return std::unexpected{
+            fail(error_code::parse_error,
+                 fmt::format("{}: vtable_size must be an integer in [{}, {}]",
+                             context, k_min_contract_vtable_size,
+                             k_max_contract_vtable_size))};
+    }
+    if (*vtable_size < static_cast<std::int64_t>(k_min_contract_vtable_size) ||
+        *vtable_size > static_cast<std::int64_t>(k_max_contract_vtable_size)) {
+        return std::unexpected{
+            fail(error_code::invalid_argument,
+                 fmt::format("{}: vtable_size {} is outside [{}, {}]", context,
+                             *vtable_size, k_min_contract_vtable_size,
+                             k_max_contract_vtable_size))};
+    }
+    definition.vtable_size = static_cast<std::uint32_t>(*vtable_size);
+
+    const std::array<std::string_view, 3> compatible_path{"contracts", service,
+                                                          "compatible"};
+    definition.compatible = default_contract_compatible(definition.version);
+    if (doc.contains_at(compatible_path)) {
+        auto compatible{
+            required_string(doc, compatible_path, context, "compatible")};
+        if (!compatible) {
+            return std::unexpected{compatible.error()};
+        }
+        auto range{core::parse_range(*compatible)};
+        if (!range) {
+            return std::unexpected{
+                fail(error_code::invalid_argument,
+                     fmt::format("{}: invalid compatible range '{}': {}",
+                                 context, *compatible, range.error().message))};
+        }
+        if (!is_release_range(*range)) {
+            return std::unexpected{
+                fail(error_code::invalid_argument,
+                     fmt::format("{}: compatible range '{}' must not name "
+                                 "prerelease versions",
+                                 context, *compatible))};
+        }
+        if (!core::satisfies(definition.version, *range)) {
+            return std::unexpected{fail(
+                error_code::invalid_argument,
+                fmt::format("{}: compatible range '{}' does not include the "
+                            "declared contract version {}",
+                            context, *compatible, definition.version.text()))};
+        }
+        definition.compatible = std::move(*compatible);
+    }
+
+    const std::array<std::string_view, 3> providers_path{"contracts", service,
+                                                         "trusted_providers"};
+    if (doc.contains_at(providers_path)) {
+        auto providers{doc.get_strings_at(providers_path)};
+        if (!providers) {
+            return std::unexpected{fail(
+                error_code::parse_error,
+                fmt::format("{}: trusted_providers must be an array of mod ids",
+                            context))};
+        }
+        for (const auto &provider : *providers) {
+            if (!is_valid_mod_id(provider)) {
+                return std::unexpected{
+                    fail(error_code::invalid_argument,
+                         fmt::format("{}: trusted provider '{}' is not a valid "
+                                     "mod id",
+                                     context, provider))};
+            }
+            if (std::find(definition.trusted_providers.begin(),
+                          definition.trusted_providers.end(),
+                          provider) != definition.trusted_providers.end()) {
+                return std::unexpected{fail(
+                    error_code::already_exists,
+                    fmt::format("{}: trusted provider '{}' is listed twice",
+                                context, provider))};
+            }
+            definition.trusted_providers.push_back(provider);
+        }
+        std::sort(definition.trusted_providers.begin(),
+                  definition.trusted_providers.end());
+    }
+    return definition;
+}
+
+[[nodiscard]] auto parse_contracts(const config::document &doc,
+                                   std::vector<contract_definition> &out)
+    -> status {
+    constexpr std::array<std::string_view, 1> table_path{"contracts"};
+    const auto kind{doc.kind_at(table_path)};
+    if (kind == config::value_kind::missing) {
+        return status_ok();
+    }
+    if (kind != config::value_kind::table) {
+        return std::unexpected{
+            fail(error_code::parse_error, "mod: [contracts] must be a table")};
+    }
+    for (const auto &service : doc.keys("contracts")) {
+        auto definition{parse_contract_definition(doc, service)};
+        if (!definition) {
+            return std::unexpected{definition.error()};
+        }
+        if (std::find_if(out.begin(), out.end(),
+                         [&service](const contract_definition &existing) {
+                             return existing.service == service;
+                         }) != out.end()) {
+            return std::unexpected{fail(
+                error_code::already_exists,
+                fmt::format("mod: contract '{}' is declared more than once",
+                            service))};
+        }
+        out.push_back(std::move(*definition));
+    }
+    std::sort(
+        out.begin(), out.end(),
+        [](const contract_definition &lhs, const contract_definition &rhs) {
+            return lhs.service < rhs.service;
+        });
+    return status_ok();
+}
+
+[[nodiscard]] auto
+parse_contract_requires(const config::document &doc,
+                        std::vector<contract_requirement> &out) -> status {
+    constexpr std::array<std::string_view, 1> table_path{"contract_requires"};
+    const auto kind{doc.kind_at(table_path)};
+    if (kind == config::value_kind::missing) {
+        return status_ok();
+    }
+    if (kind != config::value_kind::table) {
+        return std::unexpected{
+            fail(error_code::parse_error,
+                 "mod: [contract_requires] must be a table of service id = "
+                 "version range")};
+    }
+    for (const auto &service : doc.keys("contract_requires")) {
+        if (!is_custom_service_id(service)) {
+            return std::unexpected{fail(
+                error_code::invalid_argument,
+                fmt::format("mod: [contract_requires] has an invalid custom "
+                            "service id '{}' (expected namespace:name with a "
+                            "namespace other than 'refrain')",
+                            service))};
+        }
+        const std::array<std::string_view, 2> value_path{"contract_requires",
+                                                         service};
+        auto range_text{doc.get_string_at(value_path)};
+        if (!range_text) {
+            return std::unexpected{fail(
+                error_code::parse_error,
+                fmt::format("mod: [contract_requires] '{}' must be a SemVer "
+                            "range string",
+                            service))};
+        }
+        auto range{core::parse_range(*range_text)};
+        if (!range) {
+            return std::unexpected{
+                fail(error_code::invalid_argument,
+                     fmt::format("mod: [contract_requires] '{}': {}", service,
+                                 range.error().message))};
+        }
+        if (!is_release_range(*range)) {
+            return std::unexpected{
+                fail(error_code::invalid_argument,
+                     fmt::format("mod: [contract_requires] '{}' must not name "
+                                 "prerelease versions",
+                                 service))};
+        }
+        out.push_back(contract_requirement{.service = service,
+                                           .version = std::move(*range_text)});
+    }
+    std::sort(
+        out.begin(), out.end(),
+        [](const contract_requirement &lhs, const contract_requirement &rhs) {
+            return lhs.service < rhs.service;
+        });
+    return status_ok();
+}
+
 [[nodiscard]] auto parse_entry(const config::document &doc,
                                std::optional<manifest_entry_point> &out)
     -> status {
@@ -501,8 +800,9 @@ namespace config = core::config;
 [[nodiscard]] auto validate_mod_root_keys(const config::document &doc,
                                           const manifest_parse_options &options)
     -> status {
-    constexpr std::array<std::string_view, 6> source_tables{
-        "mod", "meta", "requires", "optional_requires", "provides", "entry"};
+    constexpr std::array<std::string_view, 8> source_tables{
+        "mod",      "meta",  "requires",  "optional_requires",
+        "provides", "entry", "contracts", "contract_requires"};
     // Package tables: only accepted when the caller (the `.rfmod`
     // container layer) opts in; their contents are that layer's business.
     constexpr std::array<std::string_view, 3> package_tables{
@@ -803,6 +1103,29 @@ auto parse_mod_manifest(const core::config::document &doc,
         !provides) {
         return std::unexpected{provides.error()};
     }
+    if (auto contracts{parse_contracts(doc, manifest.contracts)}; !contracts) {
+        return std::unexpected{contracts.error()};
+    }
+    if (auto contract_requires{
+            parse_contract_requires(doc, manifest.contract_requires)};
+        !contract_requires) {
+        return std::unexpected{contract_requires.error()};
+    }
+    for (const auto &definition : manifest.contracts) {
+        const auto required{std::find_if(
+            manifest.contract_requires.begin(),
+            manifest.contract_requires.end(),
+            [&definition](const contract_requirement &requirement) {
+                return requirement.service == definition.service;
+            })};
+        if (required != manifest.contract_requires.end()) {
+            return std::unexpected{fail(
+                error_code::invalid_argument,
+                fmt::format("mod: contract '{}' is both declared in "
+                            "[contracts] and required in [contract_requires]",
+                            definition.service))};
+        }
+    }
     if (auto entry{parse_entry(doc, manifest.entry)}; !entry) {
         return std::unexpected{entry.error()};
     }
@@ -946,6 +1269,29 @@ auto format_mod_manifest(const mod_manifest &manifest) -> std::string {
         out += "optional:";
         for (const auto &requirement : manifest.optional) {
             out += fmt::format(" {}", requirement.text());
+        }
+        out += '\n';
+    }
+    if (!manifest.contracts.empty()) {
+        out += "contracts:";
+        for (const auto &contract : manifest.contracts) {
+            out += fmt::format(" {}@{} vtable {} compatible {}",
+                               contract.service, contract.version.text(),
+                               contract.vtable_size, contract.compatible);
+            if (!contract.trusted_providers.empty()) {
+                out += " trusted";
+                for (const auto &provider : contract.trusted_providers) {
+                    out += fmt::format(" {}", provider);
+                }
+            }
+        }
+        out += '\n';
+    }
+    if (!manifest.contract_requires.empty()) {
+        out += "contract requires:";
+        for (const auto &requirement : manifest.contract_requires) {
+            out +=
+                fmt::format(" {}@{}", requirement.service, requirement.version);
         }
         out += '\n';
     }

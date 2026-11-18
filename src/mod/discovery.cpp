@@ -136,6 +136,8 @@ using detail::toml_string;
     mod.required = std::move(manifest->required);
     mod.optional = std::move(manifest->optional);
     mod.provides = std::move(manifest->provides);
+    mod.contracts = std::move(manifest->contracts);
+    mod.contract_requires = std::move(manifest->contract_requires);
     mod.entry = std::move(manifest->entry);
     return mod;
 }
@@ -591,6 +593,29 @@ auto format_candidate(const candidate &mod) -> std::string {
         }
         out += '\n';
     }
+    if (!mod.contracts.empty()) {
+        out += "contracts:";
+        for (const auto &contract : mod.contracts) {
+            out += fmt::format(" {}@{} vtable {} compatible {}",
+                               contract.service, contract.version.text(),
+                               contract.vtable_size, contract.compatible);
+            if (!contract.trusted_providers.empty()) {
+                out += " trusted";
+                for (const auto &provider : contract.trusted_providers) {
+                    out += fmt::format(" {}", provider);
+                }
+            }
+        }
+        out += '\n';
+    }
+    if (!mod.contract_requires.empty()) {
+        out += "contract requires:";
+        for (const auto &requirement : mod.contract_requires) {
+            out +=
+                fmt::format(" {}@{}", requirement.service, requirement.version);
+        }
+        out += '\n';
+    }
     if (mod.entry) {
         // Mirrors `format_mod_manifest()`: the loader id leads, followed by
         // the payload path this parser knows.
@@ -705,6 +730,9 @@ auto scan_builtin_image(std::span<const std::byte> image)
                                  .side = manifest->common.side,
                                  .meta = manifest->common.meta,
                                  .provides = std::move(manifest->provides),
+                                 .contracts = std::move(manifest->contracts),
+                                 .contract_requires =
+                                     std::move(manifest->contract_requires),
                                  .path = fmt::format("<builtin>/{}", path),
                                  .manifest_hash = data::blake3(*bytes),
                                  .required = std::move(manifest->required),
@@ -1073,6 +1101,8 @@ auto scan_installed(std::span<const std::string> store_roots,
                 .side = manifest->common.side,
                 .meta = manifest->common.meta,
                 .provides = std::move(manifest->provides),
+                .contracts = std::move(manifest->contracts),
+                .contract_requires = std::move(manifest->contract_requires),
                 .path = path,
                 .manifest_hash = receipt->manifest_blake3,
                 .required = std::move(manifest->required),

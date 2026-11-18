@@ -60,7 +60,10 @@ before any mod code runs. `[meta]` is display metadata and never
 affects composition. `[provides]` lists service keys. `[requires]` maps mod ids
 to version ranges; ranges support `=`, `>`, `>=`, `<`, `<=`, `^`, `~`, space for
 conjunction and `||` for alternation. `[optional_requires]` marks dependencies
-that may be absent.
+that may be absent. A service id with a namespace other than
+`refrain` is a custom contract: a mod that registers a provider for it must
+also declare it in `[contracts]`. The descriptor format and its evolution rules
+are under [Mod-defined contracts](#mod-defined-contracts).
 
 Static mods bundled with the server omit `[entry]`; their code is linked into
 the binary, paired with the manifest through the static registry and executed
@@ -332,7 +335,9 @@ composition mode of the service decides whether one provider is active
 (`exclusive`), one per instance name (`instanced`), a chain of wrappers
 (`chain`) or merged contributions (`registry`). The provider receives calls
 through a generated C++ wrapper; every struct carries its size and the ABI
-version is checked on load.
+version is checked on load. A mod can also define its own contract
+instead of implementing a RIDL contract; [Mod-defined
+contracts](#mod-defined-contracts) covers that path.
 
 Provider implementations live in `mods/<id>/src/` for first-party mods. Their
 code is compiled into the server and registered through the static registry (or
@@ -341,6 +346,150 @@ build profile decides which first-party providers exist; a provider the
 gamepack selects from outside that set fails before startup with the profile
 diagnostic described under [Build profiles](#build-profiles), not with a
 missing service key.
+
+### Mod-defined contracts
+
+A mod can publish a service contract of its own without a server patch. The
+contract is data in the package manifest: the defining mod declares the service
+id, its ABI version, the generated vtable layout and the range of contract
+versions it promises compatibility with. Other mods declare the range they
+consume, and every provider is reached through the same `query_service` and
+`query_service_handle` API as a first-party service.
+
+Custom service ids use the `namespace:name` form with a namespace other than
+`refrain`; `refrain` stays reserved for the host runtime and the first-party
+contracts generated from RIDL.
+
+#### Contract descriptor
+
+```toml
+[provides]
+services = ["example:shop"]
+
+[contracts."example:shop"]
+version = "1.0.0"
+vtable_size = 32
+compatible = ">=1.0.0 <2.0.0"
+trusted_providers = ["example.shop.extra"]
+```
+
+`version` is the contract ABI version, not the mod version. Its three
+components are copied into the generated vtable header (`abi_major`,
+`abi_minor`, `abi_patch`) and must be a release SemVer with a non-zero major.
+`vtable_size` is the generated vtable `struct_size`. The host records both,
+checks every provider table against them, and never reads the contract
+functions.
+
+`compatible` is the range of contract versions the declaration covers, as a
+SemVer range. It defaults to the whole major line
+(`>=<major>.0.0 <<major+1>.0.0`) and must include the declared version.
+Consumers must require a range inside it, so a package cannot depend on an
+evolution band the owner does not promise.
+
+`trusted_providers` is optional. The declaring mod is the contract owner and
+may register a provider for the service; another mod may do so only when the
+owner lists it here. Every other provider is refused.
+
+A consumer declares the range it uses:
+
+```toml
+[requires]
+"example.shop" = "^1.0.0"
+
+[contract_requires]
+"example:shop" = "^1.0.0"
+```
+
+`[contract_requires]` maps a custom service id to the range the consumer
+accepts. The hard dependency in `[requires]` is what orders the load: a
+consumer that calls the provider from its own `on_load` must require the
+provider mod, so the provider is loaded first. The host checks the requirement
+after the whole composition is assembled and fails closed when no declaring mod
+is present.
+
+#### Registration
+
+The gamepack binds the custom service by its full id; the value is the provider
+mod and its version range:
+
+```toml
+[providers]
+"example:shop" = "example.shop@^1.0.0"
+```
+
+A provider registers for a custom service through `register_provider` like any
+other provider. The request passes only when all of these hold:
+
+| Check | Failure |
+|---|---|
+| the manifest `[provides]` lists the service | `permission_denied` |
+| the gamepack plan binds the service to the mod | `permission_denied` |
+| a loaded mod declares the contract | `permission_denied` |
+| the registering mod is the owner or in `trusted_providers` | `permission_denied` |
+| the vtable header matches `version` and `vtable_size` | `version_mismatch` |
+| the service is neither sealed nor in the reserved namespace | `permission_denied` |
+
+A provider whose vtable header disagrees with the descriptor fails with
+`version_mismatch` naming the declared version, the header version and the two
+sizes. When the provider is not the declaring mod, the declaration owner must
+be loaded first; list it in the provider's `[requires]` so the load order
+guarantees it. A hot epoch re-checks every still-active custom provider table
+against the declaration it republishes, so reloading a declaration cannot leave
+an older trusted table serving the new contract. Reserved host ids cannot be shadowed by a custom declaration: a
+`[contracts]` entry in the `refrain` namespace is rejected when the manifest is
+parsed.
+
+#### Consumption
+
+`query_service` and `query_service_handle` address a custom service by id; the
+returned `provider_ref` is cast to the client wrapper generated from the
+contract RIDL. Nothing in the runtime path changes. A consumer caches the
+handle for one tick, calls `validate_handle` at the tick boundary and
+re-queries after a `stale` result. A replaced or unloaded provider reports
+`stale` for cached handles and `not_found` for new queries.
+
+Version conformance happens before activation. After assembling the whole
+composition the host requires the declared contract version to satisfy every
+consumer's required range, requires that range to lie inside the declaring
+mod's `compatible` band, and fails with `version_mismatch` naming both mods and
+both versions. Two mods declaring the same service id fail at load, naming both
+mods; a differing ABI is a `version_mismatch` and an identical declaration is an
+`already_exists` conflict.
+
+The requirement is checked when the composition is assembled, not on every
+query. Any mod that knows a custom service id can call `query_service` without
+declaring `[contract_requires]`, so the manifest declaration is a composition
+guarantee rather than a query-time authorization check; a deployment that needs
+that isolation must restrict the packages it installs.
+
+`refrain-tools mods check --mods <dir>` prints every descriptor it parsed
+(`contracts: example:shop@1.0.0 vtable 32 compatible ...`), so a malformed
+declaration fails the tool before a server ever loads the package.
+
+#### Version evolution
+
+Custom contracts follow the same SemVer 2.0.0 policy as RIDL contracts. A major
+bump is a breaking change and consumers must require the new major. A minor
+bump appends vtable slots, increases `vtable_size` and leaves the existing
+slots unchanged, so a consumer can keep requiring an older minor while the
+owner widens `compatible` to accept both. A patch bump changes no layout and no
+ABI field. A released version number is never reused for different content.
+
+Ship the contract RIDL source and its generated headers in the package and
+regenerate the headers whenever the contract changes; `version` and
+`vtable_size` in the manifest must be updated in the same step. A provider that
+forgets the bump fails registration instead of silently mismatching the
+declaration.
+
+#### Sandbox limit
+
+A sandboxed loader refuses provider registration on behalf of its guest. A
+scripted guest cannot publish a custom contract provider and never receives a
+raw provider table: the refusal is `permission_denied` and names the loader and
+the service, and the guest reaches the host only through its import layer. A
+custom contract package may still ship data for a sandboxed guest, but a
+provider table stays a native-host capability until a script host API defines
+the mapping.
 
 ### Session features
 

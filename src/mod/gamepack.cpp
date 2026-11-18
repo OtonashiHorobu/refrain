@@ -37,20 +37,26 @@ constexpr std::size_t k_max_service_key_length{64};
 constexpr std::size_t k_max_instance_name_length{64};
 constexpr std::size_t k_max_mod_count{4096};
 
-/// Provider service keys: manifest keys such as `world`, `worldgen`,
-/// `net_protocol`. Lowercase, 1..64 chars.
+/// Provider service keys. A first-party service is named by its short slot
+/// (`world`, `worldgen`, `net_protocol`): lowercase, 1..64 chars. A custom
+/// contract is named by its full service id (`example:shop`): a valid
+/// `namespace:name` id outside the reserved `refrain` namespace, because the
+/// first-party contracts are addressed by slot.
 [[nodiscard]] auto valid_service_key(std::string_view key) noexcept -> bool {
-    if (key.empty() || key.size() > k_max_service_key_length) {
-        return false;
-    }
-    const auto first = key.front();
-    if (first < 'a' || first > 'z') {
-        return false;
-    }
-    return std::all_of(key.begin() + 1, key.end(), [](char value) {
-        return (value >= 'a' && value <= 'z') ||
-               (value >= '0' && value <= '9') || value == '_';
-    });
+    const auto valid_slot = [](std::string_view text) {
+        if (text.empty() || text.size() > k_max_service_key_length) {
+            return false;
+        }
+        const auto first = text.front();
+        if (first < 'a' || first > 'z') {
+            return false;
+        }
+        return std::all_of(text.begin() + 1, text.end(), [](char value) {
+            return (value >= 'a' && value <= 'z') ||
+                   (value >= '0' && value <= '9') || value == '_';
+        });
+    };
+    return valid_slot(key) || is_custom_service_id(key);
 }
 
 /// Instance names used by instanced provider bindings: lowercase
@@ -669,7 +675,9 @@ constexpr std::size_t k_max_mod_count{4096};
             return std::unexpected{
                 fail(error_code::invalid_argument,
                      fmt::format("gamepack: invalid provider service key '{}' "
-                                 "(lowercase letters, digits and '_')",
+                                 "(expected a lowercase slot such as 'data', "
+                                 "or a custom service id such as "
+                                 "'example:shop')",
                                  service))};
         }
         provider_binding binding{};

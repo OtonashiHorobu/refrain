@@ -658,6 +658,191 @@ display_name = "Refrain vanilla"
             }
         }
     };
+
+    "manifest/custom contract descriptor and requirement"_test = [] {
+        auto definition{parse_mod(R"(
+[mod]
+id = "example.shop"
+version = "1.0.0"
+abi = "1"
+side = "server"
+
+[provides]
+services = ["example:shop"]
+
+[contracts."example:shop"]
+version = "1.0.0"
+vtable_size = 32
+compatible = ">=1.0.0 <1.4.0"
+trusted_providers = ["example.shop.extra"]
+)")};
+        expect(static_cast<bool>(definition))
+            << (definition ? std::string{"parsed"}
+                           : definition.error().message);
+        if (!definition) {
+            return;
+        }
+        expect(definition->contracts.size() == 1U);
+        const auto &contract{definition->contracts.front()};
+        expect(contract.service == "example:shop");
+        expect(contract.version.text() == "1.0.0");
+        expect(contract.vtable_size == 32U);
+        expect(contract.compatible == ">=1.0.0 <1.4.0");
+        expect(contract.trusted_providers.size() == 1U);
+        expect(contract.trusted_providers.front() == "example.shop.extra");
+        expect(definition->contract_requires.empty());
+        const auto formatted{mod::format_mod_manifest(*definition)};
+        expect(formatted.find("contracts: example:shop@1.0.0 vtable 32") !=
+               std::string::npos);
+        expect(formatted.find("compatible >=1.0.0 <1.4.0") !=
+               std::string::npos);
+
+        auto consumer{parse_mod(R"(
+[mod]
+id = "example.shop.client"
+version = "1.0.0"
+abi = "1"
+
+[requires]
+"example.shop" = "^1.0.0"
+
+[contract_requires]
+"example:shop" = "^1.0.0"
+)")};
+        expect(static_cast<bool>(consumer));
+        if (consumer) {
+            expect(consumer->contracts.empty());
+            expect(consumer->contract_requires.size() == 1U);
+            expect(consumer->contract_requires.front().service ==
+                   "example:shop");
+            expect(consumer->contract_requires.front().version == "^1.0.0");
+        }
+    };
+
+    "manifest/custom contract compatibility defaults to the major line"_test =
+        [] {
+            auto manifest{parse_mod(R"(
+[mod]
+id = "example.shop"
+version = "1.0.0"
+abi = "1"
+
+[contracts."example:shop"]
+version = "2.3.4"
+vtable_size = 24
+)")};
+            expect(static_cast<bool>(manifest));
+            if (manifest) {
+                const auto &contract{manifest->contracts.front()};
+                expect(contract.compatible == ">=2.0.0 <3.0.0");
+                expect(contract.trusted_providers.empty());
+            }
+        };
+
+    "manifest/custom contract rejects the reserved namespace"_test = [] {
+        expect_mod_error(R"(
+[mod]
+id = "example.shop"
+version = "1.0.0"
+abi = "1"
+
+[contracts."refrain:data.packs"]
+version = "1.0.0"
+vtable_size = 24
+)",
+                         error_code::invalid_argument);
+        expect_mod_error(R"(
+[mod]
+id = "example.shop"
+version = "1.0.0"
+abi = "1"
+
+[contract_requires]
+"refrain:data.packs" = "^1.0.0"
+)",
+                         error_code::invalid_argument);
+    };
+
+    "manifest/custom contract validates its descriptor"_test = [] {
+        // The vtable must at least hold the ABI header.
+        expect_mod_error(R"(
+[mod]
+id = "example.shop"
+version = "1.0.0"
+abi = "1"
+
+[contracts."example:shop"]
+version = "1.0.0"
+vtable_size = 8
+)",
+                         error_code::invalid_argument);
+        // The version maps to the vtable ABI header: major zero is invalid.
+        expect_mod_error(R"(
+[mod]
+id = "example.shop"
+version = "1.0.0"
+abi = "1"
+
+[contracts."example:shop"]
+version = "0.1.0"
+vtable_size = 24
+)",
+                         error_code::invalid_argument);
+        // A compatibility band must include the declared version.
+        expect_mod_error(R"(
+[mod]
+id = "example.shop"
+version = "1.0.0"
+abi = "1"
+
+[contracts."example:shop"]
+version = "1.0.0"
+vtable_size = 24
+compatible = "^2.0.0"
+)",
+                         error_code::invalid_argument);
+        // Unknown descriptor keys are manifest bugs.
+        expect_mod_error(R"(
+[mod]
+id = "example.shop"
+version = "1.0.0"
+abi = "1"
+
+[contracts."example:shop"]
+version = "1.0.0"
+vtable_size = 24
+owner = "example.shop"
+)",
+                         error_code::invalid_argument);
+        // One package cannot declare and require the same contract.
+        expect_mod_error(R"(
+[mod]
+id = "example.shop"
+version = "1.0.0"
+abi = "1"
+
+[contracts."example:shop"]
+version = "1.0.0"
+vtable_size = 24
+
+[contract_requires]
+"example:shop" = "^1.0.0"
+)",
+                         error_code::invalid_argument);
+    };
+
+    "manifest/custom contract requirement must be a range"_test = [] {
+        expect_mod_error(R"(
+[mod]
+id = "example.shop.client"
+version = "1.0.0"
+abi = "1"
+
+[contract_requires]
+"example:shop" = "not-a-range"
+)",
+                         error_code::invalid_argument);
+    };
 };
 
 } // namespace
