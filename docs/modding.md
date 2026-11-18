@@ -264,7 +264,7 @@ content store itself.
 |---|---|---|---|
 | `builtin` | host-owned: pairs the built-in image manifests with the statically linked code and calls the factory of every selected provider | `restart_required` | shipped |
 | `native` | host-owned: materialises the installed `[entry].native` member out of the content store, checks the entry ABI, opens the shared library and calls the entry point | `retire` | shipped |
-| `wasm` | host bootstrap: materialises the installed `[entry].wasm` member from the receipt-checked content store, validates the guest ABI, instantiates the module in a fresh store with size/memory/instruction budgets and calls its `on_load` hook | `clean` | shipped when built (`REFRAIN_WITH_WASM`) |
+| `wasm` | host bootstrap: materialises the installed `[entry].wasm` member from the receipt-checked content store, validates the guest ABI and its imports, instantiates the module in a fresh store with size/memory/instruction budgets, calls its `on_load` hook and dispatches bounded callbacks through the sealed `refrain:script.host` service | `clean` | shipped when built (`REFRAIN_WITH_WASM`) |
 | `lua` | fail-closed placeholder: no Lua runtime ships, so every package naming `lua` is refused with the missing runtime named | `clean` | fail-closed |
 | `com.example.loader` | package-provided: the declared provider mod registers a `refrain:mod.loader` instance and runs its guests itself | declared by the provider | via `[loaders]` |
 | `bukkit` | optional standalone mod that embeds a JVM and manages its own plugin directory | declared by that mod | via `[loaders]` |
@@ -303,37 +303,116 @@ wasm = "scripts/example.wasm"
 
 The wasm loader reads the member back from the content store through the
 install receipt, so the bytes it compiles are exactly the installed bytes; a
-missing, oversized or corrupt member fails the load before any guest code
-runs. The guest ABI is deliberately narrow:
+missing, oversized or corrupt member fails the load before any guest code runs.
 
-- the module has **no host imports**. A module that declares one is refused as
-  a sandbox violation, and there is no path from a guest to a loader table, the
-  service registry or a host provider. Host imports will be added only through
-  a restricted script API, never as a raw provider table;
-- it must export `on_load: () -> i32`, called before the mod becomes active,
-  and may export `on_unload: () -> i32`, called on unload. A return value of
-  zero reports success; a non-zero `on_load` return fails the load;
-- all guest state lives in the module's own linear memory, which is released
-  when the instance is destroyed.
+#### Guest ABI
 
-Each load gets a fresh store with explicit budgets: a maximum module member
-size, a linear-memory ceiling, an instruction budget for the load path and a
-wall-clock load deadline. A guest that exhausts a budget is stopped and the
-load fails closed instead of leaving a half-loaded mod behind. A `clean`
-unload destroys the store and releases the module, memory and instruction
-budget; a reload builds the replacement generation first and unloads the old
-instance after the composition epoch commits, so a staged change never frees
-code the running composition still calls. Module code only runs during
-instantiation, `on_load` and `on_unload` in this slice; per-call execution
-budgets arrive with the script host API and the call dispatch path it needs.
+The guest is a core WebAssembly module. The loader does not use the component
+model, WIT or a guest-language SDK: the binding is a narrow, documented module
+ABI that any wasm producer can target, and the generated host-side contract
+headers describe the host side of the same names. A component-model surface
+with generated guest bindings is the later path if this ABI outgrows direct
+module imports; it would replace the guest side without changing the host
+policy described here.
+
+A module must export `on_load: () -> i32`, called once before the mod becomes
+active. It may export `on_unload: () -> i32`, called on unload, and callbacks
+with the `(i32 argument_address, i32 argument_bytes) -> i32` signature that the
+host invokes after load. Zero reports success; a non-zero `on_load` return fails
+the load. A callback may use any export name of 1 to 64 characters from
+`[A-Za-z0-9_.-]` starting with a letter, digit or underscore.
+
+#### Host imports
+
+The only imports a guest may declare are the functions of the `refrain` module.
+Each is gated by a capability. A module that imports anything else, or an import
+whose capability the loader does not grant, is refused before instantiation;
+the error names the import and the active grant set.
+
+| Import | Signature | Capability | Behaviour |
+|---|---|---|---|
+| `refrain.log` | `(i32 level, i32 message_ptr, i32 message_bytes) -> i32` | `log` | queues one bounded log line for the host; `level` is 0 trace, 1 debug, 2 info, 3 warn, 4 error |
+| `refrain.config_get` | `(i32 key_ptr, i32 key_bytes, i32 value_ptr, i32 value_capacity) -> i32` | `config` | copies one sealed configuration value into the guest and returns its length |
+| `refrain.tick` | `() -> i64` | `clock` | returns the host tick index |
+
+Guest views are relative to the guest's own linear memory and are re-checked
+against its current size. The host reads and writes that memory through the
+module export literally named `memory`: a guest that exports its linear memory
+under another name is treated as having no linear memory, so its imports and
+call arguments are refused. A log message is at most 1024 bytes and must be
+UTF-8 without control characters; a configuration key is at most 128 printable
+ASCII bytes and a value at most 4096 bytes. One call emits at most 64 log
+lines. An import returns `0` on success and a negative status: `-1` malformed
+argument, `-2` unknown configuration key, `-3` output buffer too small, `-4`
+log quota exhausted and `-5` host-side failure such as running out of memory
+while recording a log line.
+
+The imports are functions over values and guest memory: there is no handle,
+vtable, provider table, registry, filesystem or network access, and a guest
+cannot register a provider, claim a service or receive a pointer to host state.
+A guest that imports nothing behaves exactly as it did before this surface
+existed.
+
+#### Call dispatch, budgets and failures
+
+The host dispatches a callback with the instance handle the loader returned for
+the mod, through the sealed `refrain:script.host` service. The request also
+names the loader that owns the handle: instance handles are allocated per
+loader, so the script host refuses a request naming a loader it does not serve
+instead of resolving the handle against another loader's guest table. The
+loader stages the argument bytes at address 0 of the guest's linear memory (at
+most 256 bytes) and calls the export with `(0, length)`. A guest that accepts
+arguments keeps that prefix of its memory free; a guest without an exported
+memory can only be called without arguments.
+
+Every load and every call has its own budgets. A load holds a module size limit,
+a linear-memory ceiling, an instruction budget for instantiation and `on_load`,
+and a wall-clock phase deadline. The default wasm loader budgets one load with
+an 8 MiB module limit, a 64 MiB memory ceiling, 5,000,000 instructions and a
+5 s phase deadline. A call provisions a fresh instruction budget and a fresh
+wall-clock deadline from the loader's call budgets, 2,000,000 instructions and
+100 ms by default; it never reuses
+the load path's remainder or the previous call's remainder. A guest that
+exhausts a call budget, outlives its deadline or traps is stopped and reported
+with a typed error (`budget_exceeded`, `deadline_exceeded` or `guest_trapped`),
+and the instance is quarantined: it stays registered but runs no further
+callbacks until the host unloads it. An unknown callback name, an oversized
+argument list or a callback that does not implement the call signature is
+refused without quarantining.
+
+Load-path budgets and clean unload are unchanged: budgets are charged per loaded
+instance and reported by the loader's accounting, and a `clean` unload destroys
+the store and returns every live counter to zero. A reload builds the
+replacement generation first and unloads the old instance after the composition
+epoch commits, so a staged change never frees code the running composition
+still calls.
+
+The default server composition grants only `log` to its guests: the least a
+guest needs to report anything, and the only import that reads no host state. A
+loader constructed with a sealed `refrain::script::host::environment` can also
+grant `config` and `clock`, which is what tests and embedders own. The guest
+import ABI is versioned independently of the host runtime ABI: its names,
+signatures and bounds are the stable part a guest compiles against, while the
+manifest `[mod].abi` major stays the loader ABI a package was built for.
+
+The limits of this surface are deliberate: there is no component model, no WIT
+world, no filesystem, no network and no WASI, and a guest cannot register a
+provider, claim a service or receive a host handle. The supported interaction is
+host imports in and bounded callbacks out. The `refrain:script.host` contract is
+separate from `refrain:mod.loader`: loading is a composition-time lifecycle
+operation the mod host drives through a loader instance, while calling a guest is
+a per-call execution path with its own budgets, error codes and quarantine
+state. A contract that grows content or listener registration later adds it to
+the script host service or to the guest imports, not to the loader lifecycle
+contract.
 
 The wasm loader ships with the server composition when the build links the
 WebAssembly runtime (`with_wasm=True`, the default). A build configured with
 `-o with_wasm=False` registers the loader as an explicit fail-closed provider:
-every manifest naming `wasm` is refused with `unsupported` and a message
-naming the disabled build. The `lua` loader is registered the same way as an
-explicit fail-closed provider: it names the missing Lua runtime, and no Lua
-runtime ships with the server.
+every manifest naming `wasm` is refused with `unsupported` and a message naming
+the disabled build. The `lua` loader is registered the same way as an explicit
+fail-closed provider: it names the missing Lua runtime, and no Lua runtime ships
+with the server.
 
 `refrain-tools mods load` prints the registered loaders and, for every loaded
 mod, the loader that executed it and the recorded unload semantics.
@@ -627,8 +706,9 @@ scripted guest cannot publish a custom contract provider and never receives a
 raw provider table: the refusal is `permission_denied` and names the loader and
 the service, and the guest reaches the host only through its import layer. A
 custom contract package may still ship data for a sandboxed guest, but a
-provider table stays a native-host capability until a script host API defines
-the mapping.
+provider table stays a native-host capability: the script host API of a
+sandboxed loader exposes bounded imports and callbacks, never provider
+registration.
 
 ### Session features
 
