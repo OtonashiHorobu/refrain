@@ -64,9 +64,13 @@ class chunk_service {
     /// Attach the streamer once the listener and the protocol tables exist.
     /// `backlog` bounds what the stream may queue before it starves a client or
     /// pauses entirely; the service uses the same aggregate limit to stop
-    /// admitting generation while the stream is paused.
+    /// admitting generation while the stream is paused. `budget_clock` is the
+    /// drain budget's time source: production leaves it empty so the streamer
+    /// reads the steady clock, and a test injects one so a forced expiry is a
+    /// function of its inputs instead of the host's scheduling.
     void attach(play_gateway &gateway, chunk_packet_source source,
-                chunk_streamer::backlog_limits backlog);
+                chunk_streamer::backlog_limits backlog,
+                chunk_streamer::budget_clock budget_clock = {});
 
     /// Same, with the default limits; delegating keeps the nested type out of a
     /// default argument.

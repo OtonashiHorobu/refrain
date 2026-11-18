@@ -221,6 +221,22 @@ struct encode_log {
     return out;
 }
 
+/// Logical time of the streamer's drain budget. A test that is not about the
+/// budget freezes it, so the observed stream is a function of the queued
+/// columns instead of how long the host took to run an encode.
+[[nodiscard]] auto frozen_time() -> server::chunk_streamer::budget_clock {
+    return [] { return std::int64_t{0}; };
+}
+
+/// Streamer of the stream tests, with the frozen drain clock.
+[[nodiscard]] auto make_streamer(recording_gateway &gateway,
+                                 server::chunk_packet_source source)
+    -> server::chunk_streamer {
+    return server::chunk_streamer{gateway, std::move(source),
+                                  server::chunk_streamer::backlog_limits{},
+                                  frozen_time()};
+}
+
 suite<"server/chunk-service"> chunk_service_tests = [] {
     "server/chunk stream serves a resident column without generating it"_test =
         [] {
@@ -246,8 +262,8 @@ suite<"server/chunk-service"> chunk_service_tests = [] {
             recording_gateway gateway;
             gateway.active = {1};
             auto log{std::make_shared<encode_log>()};
-            server::chunk_streamer streamer{gateway,
-                                            server::chunk_packet_source{}};
+            auto streamer{
+                make_streamer(gateway, server::chunk_packet_source{})};
             streamer.set_encoder(make_encoder(runtime, log));
             std::vector<coordinate> requested{};
             streamer.set_chunk_requester(
@@ -309,8 +325,8 @@ suite<"server/chunk-service"> chunk_service_tests = [] {
             recording_gateway gateway;
             gateway.active = {2};
             auto log{std::make_shared<encode_log>()};
-            server::chunk_streamer streamer{gateway,
-                                            server::chunk_packet_source{}};
+            auto streamer{
+                make_streamer(gateway, server::chunk_packet_source{})};
             streamer.set_encoder(make_encoder(runtime, log));
             std::vector<coordinate> requested{};
             streamer.set_chunk_requester(
@@ -358,8 +374,8 @@ suite<"server/chunk-service"> chunk_service_tests = [] {
             recording_gateway gateway;
             gateway.active = {3};
             auto log{std::make_shared<encode_log>()};
-            server::chunk_streamer streamer{gateway,
-                                            server::chunk_packet_source{}};
+            auto streamer{
+                make_streamer(gateway, server::chunk_packet_source{})};
             streamer.set_encoder(make_encoder(runtime, log));
             std::vector<coordinate> requested{};
             streamer.set_chunk_requester(
@@ -424,8 +440,9 @@ suite<"server/chunk-service"> chunk_service_tests = [] {
             recording_gateway gateway;
             gateway.active = {9};
             server::chunk_service service;
-            service.attach(gateway,
-                           server::chunk_packet_source{.world = port.get()});
+            service.attach(
+                gateway, server::chunk_packet_source{.world = port.get()},
+                server::chunk_streamer::backlog_limits{}, frozen_time());
             auto *streamer{service.streamer()};
             expect(streamer != nullptr);
             if (streamer == nullptr) {
@@ -527,8 +544,8 @@ suite<"server/chunk-service"> chunk_service_tests = [] {
             gateway.active = {5};
             auto log{std::make_shared<encode_log>()};
             bool serve{false};
-            server::chunk_streamer streamer{gateway,
-                                            server::chunk_packet_source{}};
+            auto streamer{
+                make_streamer(gateway, server::chunk_packet_source{})};
             streamer.set_encoder(
                 [log, &serve](const server::chunk_packet_source &,
                               sim::chunk_pos pos)
@@ -747,7 +764,8 @@ suite<"server/chunk-service"> chunk_service_tests = [] {
                                         server::chunk_streamer::backlog_limits{
                                             .max_connection_bytes = 4U,
                                             .max_total_bytes = 1'000U,
-                                        }};
+                                        },
+                                        frozen_time()};
         streamer.set_encoder(
             [](const server::chunk_packet_source &,
                sim::chunk_pos pos) -> refrain::result<std::vector<std::byte>> {
@@ -791,6 +809,154 @@ suite<"server/chunk-service"> chunk_service_tests = [] {
         expect(clamped.max_connection_bytes == 1U);
         expect(clamped.max_total_bytes == 1U);
     };
+
+    "server/chunk service defers the next column when the drain budget "
+    "expires"_test = [] {
+        test_support::scratch_directory scratch;
+        const auto path{(scratch.path() / "world").string()};
+        expect(static_cast<bool>(world::create_world(path, 7, "probe")));
+        auto opened{sim::world::open(path)};
+        expect(static_cast<bool>(opened));
+        if (!opened) {
+            return;
+        }
+        auto &runtime{*opened};
+        // The streamer queues the centre column first, then the ring around
+        // it. Only these two are resident, so the budget expires before the
+        // second one is reached.
+        for (const sim::chunk_pos position :
+             {sim::chunk_pos{0, 0}, sim::chunk_pos{-1, -1}}) {
+            auto inserted{runtime.insert_chunk(position, make_column())};
+            expect(static_cast<bool>(inserted));
+        }
+        const auto port{server::make_borrowed_world_port(runtime)};
+        recording_gateway gateway;
+        gateway.active = {15};
+        // The columns the encoder actually produced, in encode order. A
+        // lookup that fails for a missing column is not a produced body.
+        std::vector<coordinate> encoded{};
+        // A tick that stalls after computing its deadline sees the clock at
+        // zero for the deadline, zero for the first packet and past the budget
+        // for everything after it. The first column leaves, the second one
+        // must stay queued instead of being sent late or dropped.
+        auto reads{std::make_shared<std::size_t>(0)};
+        const auto budget_passed{static_cast<std::int64_t>(
+            server::chunk_streamer::tick_budget_ns + 1U)};
+        auto clock{[reads, budget_passed]() -> std::int64_t {
+            return (*reads)++ < 2U ? 0 : budget_passed;
+        }};
+        server::chunk_service service;
+        service.attach(gateway,
+                       server::chunk_packet_source{.world = port.get()},
+                       server::chunk_streamer::backlog_limits{}, clock);
+        auto *streamer{service.streamer()};
+        expect(streamer != nullptr);
+        if (streamer == nullptr) {
+            return;
+        }
+        streamer->set_encoder(
+            [&runtime, &encoded](
+                const server::chunk_packet_source &,
+                sim::chunk_pos pos) -> refrain::result<std::vector<std::byte>> {
+                if (runtime.find_chunk(pos) == nullptr) {
+                    return std::unexpected{
+                        refrain::make_error(refrain::error_code::not_found,
+                                            "column is not resident")};
+                }
+                encoded.push_back({pos.x, pos.z});
+                const coordinate value{pos.x, pos.z};
+                std::vector<std::byte> body(sizeof(value));
+                std::memcpy(body.data(), &value, sizeof(value));
+                return body;
+            });
+        session::play_session players{};
+        session::chunk_tracker views;
+        static_cast<void>(views.update(15, 0, 0, 1));
+        const auto tick_start{refrain::core::now_ns()};
+        service.tick(*port, players, views, tick_start);
+
+        // The budget expired after the first packet: that column was encoded
+        // and sent, the second one was not even encoded.
+        expect(encoded == std::vector<coordinate>{{0, 0}})
+            << "the expired drain encoded past its budget";
+        expect(streamed(gateway, 15) == std::vector<coordinate>{{0, 0}});
+
+        // The next tick has the whole budget again, so the deferred column is
+        // encoded and sent once, and the column that already went is not sent
+        // twice.
+        service.tick(*port, players, views, tick_start);
+        expect(encoded == (std::vector<coordinate>{{0, 0}, {-1, -1}}));
+        expect(streamed(gateway, 15) ==
+               (std::vector<coordinate>{{0, 0}, {-1, -1}}));
+    };
+
+    "server/chunk service defers a column when the drain budget expires before "
+    "its first packet"_test = [] {
+        test_support::scratch_directory scratch;
+        const auto path{(scratch.path() / "world").string()};
+        expect(static_cast<bool>(world::create_world(path, 7, "probe")));
+        auto opened{sim::world::open(path)};
+        expect(static_cast<bool>(opened));
+        if (!opened) {
+            return;
+        }
+        auto &runtime{*opened};
+        expect(static_cast<bool>(
+            runtime.insert_chunk(sim::chunk_pos{0, 0}, make_column())));
+        const auto port{server::make_borrowed_world_port(runtime)};
+        recording_gateway gateway;
+        gateway.active = {16};
+        // The clock reports zero for the deadline and a value past the budget
+        // for the check, which is what a tick that stalls after computing its
+        // deadline looks like to the streamer. The queued column must stay
+        // pending for the next tick, not be dropped.
+        auto reads{std::make_shared<std::size_t>(0)};
+        const auto budget_passed{static_cast<std::int64_t>(
+            server::chunk_streamer::tick_budget_ns + 1U)};
+        auto clock{[reads, budget_passed]() -> std::int64_t {
+            return (*reads)++ == 0U ? 0 : budget_passed;
+        }};
+        server::chunk_service service;
+        service.attach(gateway,
+                       server::chunk_packet_source{.world = port.get()},
+                       server::chunk_streamer::backlog_limits{}, clock);
+        auto *streamer{service.streamer()};
+        expect(streamer != nullptr);
+        if (streamer == nullptr) {
+            return;
+        }
+        std::vector<coordinate> encoded{};
+        streamer->set_encoder(
+            [&runtime, &encoded](
+                const server::chunk_packet_source &,
+                sim::chunk_pos pos) -> refrain::result<std::vector<std::byte>> {
+                if (runtime.find_chunk(pos) == nullptr) {
+                    return std::unexpected{
+                        refrain::make_error(refrain::error_code::not_found,
+                                            "column is not resident")};
+                }
+                encoded.push_back({pos.x, pos.z});
+                const coordinate value{pos.x, pos.z};
+                std::vector<std::byte> body(sizeof(value));
+                std::memcpy(body.data(), &value, sizeof(value));
+                return body;
+            });
+        session::play_session players{};
+        session::chunk_tracker views;
+        static_cast<void>(views.update(16, 0, 0, 0));
+        const auto tick_start{refrain::core::now_ns()};
+        service.tick(*port, players, views, tick_start);
+
+        expect(encoded.empty())
+            << "the expired drain encoded the column before its first packet";
+        expect(streamed(gateway, 16).empty());
+
+        // The next tick has the whole budget again and sends the column, so
+        // the expiry deferred the send instead of losing the column.
+        service.tick(*port, players, views, tick_start);
+        expect(encoded == std::vector<coordinate>{{0, 0}});
+        expect(streamed(gateway, 16) == std::vector<coordinate>{{0, 0}});
+    };
 };
 
 suite<"server/chunk-service-progressive"> chunk_service_progressive_tests = [] {
@@ -809,8 +975,9 @@ suite<"server/chunk-service-progressive"> chunk_service_progressive_tests = [] {
             recording_gateway gateway;
             gateway.active = {1};
             server::chunk_service service;
-            service.attach(gateway,
-                           server::chunk_packet_source{.world = port.get()});
+            service.attach(
+                gateway, server::chunk_packet_source{.world = port.get()},
+                server::chunk_streamer::backlog_limits{}, frozen_time());
             auto *streamer{service.streamer()};
             expect(streamer != nullptr);
             if (streamer == nullptr) {
@@ -960,8 +1127,9 @@ suite<"server/chunk-service-progressive"> chunk_service_progressive_tests = [] {
             recording_gateway gateway;
             gateway.active = {13};
             server::chunk_service service;
-            service.attach(gateway,
-                           server::chunk_packet_source{.world = port.get()});
+            service.attach(
+                gateway, server::chunk_packet_source{.world = port.get()},
+                server::chunk_streamer::backlog_limits{}, frozen_time());
             auto *streamer{service.streamer()};
             expect(streamer != nullptr);
             if (streamer == nullptr) {
