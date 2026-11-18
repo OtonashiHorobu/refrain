@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 29871d2bb99d3b05
+// Schema hash: 9d1646c7060b3e0f
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
@@ -3022,7 +3022,8 @@ template <> struct custom_traits<::refrain::services::script_host::script_call_r
     static constexpr std::string_view type_name = "refrain::services::script_host::script_call_request";
     static constexpr auto fields = std::make_tuple(
         refrain::reflect::custom_field{"callback", &::refrain::services::script_host::script_call_request::callback},
-        refrain::reflect::custom_field{"arguments", &::refrain::services::script_host::script_call_request::arguments});
+        refrain::reflect::custom_field{"arguments", &::refrain::services::script_host::script_call_request::arguments},
+        refrain::reflect::custom_field{"loader", &::refrain::services::script_host::script_call_request::loader});
 };
 
 /// Generated RIDL struct 'refrain::services::script_host::script_call_result'.

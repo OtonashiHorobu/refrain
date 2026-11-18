@@ -71,6 +71,8 @@ struct script_failure {
 
 template <typename T> using script_result = std::expected<T, script_failure>;
 
+#if REFRAIN_WITH_WASM
+
 /// Longest accepted callback export name; the same bound the script host
 /// contract documents.
 inline constexpr std::size_t max_callback_name_bytes{64};
@@ -94,6 +96,8 @@ inline constexpr std::size_t max_callback_name_bytes{64};
     }
     return std::ranges::all_of(name, allowed);
 }
+
+#endif // REFRAIN_WITH_WASM
 
 template <typename... Args>
 [[nodiscard]] auto fail(loader_abi::mod_loader_error code,
@@ -580,8 +584,14 @@ using detail::loader_state;
     auto &record{found->second};
     // A clean loader releases the guest even when the guest's own hook fails:
     // the hook is guest code, the store is host-owned state. Report the hook
-    // problem in the log and release the budget either way.
-    if (record.has_on_unload) {
+    // problem in the log and release the budget either way. A quarantined
+    // instance runs no further guest code at all, including its unload hook.
+    if (record.quarantined) {
+        log_loader.info("skipping guest {} on_unload hook during {}: the "
+                        "instance is quarantined and releases its store "
+                        "without running guest code",
+                        record.mod_id, unload_reason_name(reason));
+    } else if (record.has_on_unload) {
         auto called{record.guest->call_instance_i32("on_unload", {})};
         drain_guest_logs(*record.guest, record.mod_id);
         if (!called) {
@@ -613,6 +623,8 @@ using detail::loader_state;
 // Call dispatch
 // ---------------------------------------------------------------------------
 
+#if REFRAIN_WITH_WASM
+
 /// Quarantine `record` after a failed call. The store stays allocated so the
 /// declared clean unload can release it in order, but no further guest code
 /// runs on the instance.
@@ -627,6 +639,8 @@ void quarantine_instance(loader_state &state, instance_record &record,
                     "callbacks until unloaded",
                     record.mod_id, reason);
 }
+
+#endif // REFRAIN_WITH_WASM
 
 /// Invoke one exported guest callback under the per-call budgets. A caller
 /// mistake (unknown callback, wrong ABI, oversized arguments) fails without
@@ -656,7 +670,8 @@ void quarantine_instance(loader_state &state, instance_record &record,
             fmt::format("callback name '{}' is not a valid export name: 1 to "
                         "{} characters of [A-Za-z0-9_.-] starting with a "
                         "letter, digit or underscore",
-                        callback, max_callback_name_bytes)}};
+                        host::quote_guest_name(callback),
+                        max_callback_name_bytes)}};
     }
     if (arguments.size() > host::max_call_argument_bytes) {
         return std::unexpected{script_failure{
@@ -692,6 +707,7 @@ void quarantine_instance(loader_state &state, instance_record &record,
         callback, call_parameters,
         call_options{.fuel = state.budgets.call_fuel,
                      .timeout_ms = state.budgets.call_timeout_ms})};
+    state.stats.last_call_fuel_remaining = record.guest->fuel_remaining();
     drain_guest_logs(*record.guest, record.mod_id);
     if (called) {
         return *called;
@@ -776,6 +792,14 @@ auto bridge_script_call(void *self, contract_handle instance,
             contract_script_error::invalid_argument);
     }
     auto &state{*static_cast<loader_state *>(self)};
+    const auto loader_id{view(request->loader)};
+    if (loader_id != "wasm") {
+        refrain::mod::set_loader_diagnostic(fmt::format(
+            "script host for loader 'wasm' cannot dispatch instance {}: the "
+            "request names loader '{}', and instance handles are loader-local",
+            instance, host::quote_guest_name(loader_id)));
+        return static_cast<refrain_status>(contract_script_error::not_found);
+    }
     auto called{call_guest(state, static_cast<std::uint64_t>(instance),
                            view(request->callback),
                            contracts::as_bytes(request->arguments))};
@@ -1106,11 +1130,29 @@ auto dispatch_guest_call(const mod::host &host, std::uint64_t instance,
             "dispatch")};
     }
 
+    if (instance == 0) {
+        return std::unexpected{
+            make_error(error_code::invalid_argument,
+                       "cannot dispatch a guest callback without an instance "
+                       "handle; a data-only mod runs no guest code")};
+    }
+    const auto mods{host.mods()};
+    const auto owner{
+        std::ranges::find_if(mods, [instance](const mod::loaded_mod &loaded) {
+            return loaded.instance_handle == instance;
+        })};
+    if (owner == mods.end()) {
+        return std::unexpected{make_error(
+            error_code::not_found,
+            fmt::format("no loaded mod owns guest instance handle {}",
+                        instance))};
+    }
     auto request{script_host_abi::make_script_call_request()};
     request.callback = contracts::to_borrowed(callback);
     request.arguments = contracts::to_borrowed(std::span<const std::uint8_t>{
         reinterpret_cast<const std::uint8_t *>(arguments.data()),
         arguments.size()});
+    request.loader = contracts::to_borrowed(owner->loader);
     refrain::mod::clear_loader_diagnostic();
     const script_host_abi::provider provider{table, api->self};
     const auto called{provider.call(

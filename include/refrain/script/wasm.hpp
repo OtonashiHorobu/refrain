@@ -35,7 +35,7 @@ inline constexpr module_handle invalid_module{0xFFFF'FFFFU};
 
 struct engine_config {
     /// Count executed Wasm instructions and trap when `fuel` is exhausted
-    /// (mandatory for untrusted scripts later).
+    /// (required for untrusted scripts).
     bool consume_fuel{false};
     std::uint64_t fuel{1'000'000};
     bool wasm_threads{false};

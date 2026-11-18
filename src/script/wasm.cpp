@@ -4,6 +4,8 @@
 
 #include <refrain/script/wasm.hpp>
 
+#include <refrain/data/path.hpp>
+
 #if !defined(REFRAIN_WITH_WASM)
 #define REFRAIN_WITH_WASM 0
 #endif
@@ -174,52 +176,41 @@ checked_guest_range(std::int32_t pointer, std::int32_t length,
 
 /// True when `bytes` is well-formed UTF-8 without control characters. A guest
 /// log message that fails this is refused: a line break or escape sequence in
-/// a host log line would forge operator-facing output.
+/// a host log line would forge operator-facing output. Well-formedness reuses
+/// the repository's shared RFC 3629 predicate; the stricter output policy (no
+/// C0/C1 controls, line separators or byte-order mark) is layered on top.
 [[nodiscard]] auto
 is_safe_log_text(std::span<const std::uint8_t> bytes) noexcept -> bool {
+    const std::string_view text{reinterpret_cast<const char *>(bytes.data()),
+                                bytes.size()};
+    if (!refrain::data::is_valid_utf8(text)) {
+        return false;
+    }
     std::size_t index{0};
-    while (index < bytes.size()) {
-        const auto lead{bytes[index]};
-        if (lead < 0x80) {
-            if (lead < 0x20 || lead == 0x7F) {
+    while (index < text.size()) {
+        const auto lead{static_cast<unsigned char>(text[index])};
+        if (lead < 0x80U) {
+            if (lead < 0x20U || lead == 0x7FU) {
                 return false;
             }
             ++index;
             continue;
         }
-        std::size_t length{0};
-        std::uint32_t codepoint{0};
-        if ((lead & 0xE0U) == 0xC0U) {
-            length = 2;
-            codepoint = lead & 0x1FU;
-        } else if ((lead & 0xF0U) == 0xE0U) {
-            length = 3;
-            codepoint = lead & 0x0FU;
-        } else if ((lead & 0xF8U) == 0xF0U) {
-            length = 4;
-            codepoint = lead & 0x07U;
-        } else {
-            return false;
-        }
-        if (index + length > bytes.size()) {
-            return false;
-        }
+        const auto length{(lead & 0xE0U) == 0xC0U   ? 2U
+                          : (lead & 0xF0U) == 0xE0U ? 3U
+                                                    : 4U};
+        std::uint32_t codepoint{lead & (length == 2   ? 0x1FU
+                                        : length == 3 ? 0x0FU
+                                                      : 0x07U)};
         for (std::size_t offset = 1; offset < length; ++offset) {
-            const auto continuation{bytes[index + offset]};
-            if ((continuation & 0xC0U) != 0x80U) {
-                return false;
-            }
-            codepoint = (codepoint << 6U) | (continuation & 0x3FU);
+            codepoint =
+                (codepoint << 6U) |
+                (static_cast<unsigned char>(text[index + offset]) & 0x3FU);
         }
-        constexpr std::array<std::uint32_t, 4> minimum_codepoint{0, 0x80, 0x800,
-                                                                 0x10000};
-        if (codepoint < minimum_codepoint[length - 1] ||
-            codepoint > 0x10FFFFU ||
-            (codepoint >= 0xD800U && codepoint <= 0xDFFFU) ||
-            // C0 and C1 controls, the line separators and the byte-order mark
-            // are refused: a reader must not be able to reinterpret a guest
-            // log line as a terminal escape or as a second line.
-            codepoint < 0xA0U || codepoint == 0x2028U || codepoint == 0x2029U ||
+        // C0 and C1 controls, the line separators and the byte-order mark are
+        // refused: a reader must not be able to reinterpret a guest log line as
+        // a terminal escape or as a second line.
+        if (codepoint < 0xA0U || codepoint == 0x2028U || codepoint == 0x2029U ||
             codepoint == 0xFEFFU) {
             return false;
         }
@@ -358,6 +349,45 @@ auto import_tick(void *env, wasmtime_caller_t * /*caller*/,
     return nullptr;
 }
 
+/// Callbacks registered in the Wasmtime linker must not let an exception
+/// unwind across the C ABI. Each wrapper guards one import implementation and
+/// reports a host-side failure as a negative import status instead.
+[[nodiscard]] auto
+guarded_import_log(void *env, wasmtime_caller_t *caller,
+                   const wasmtime_val_t *args, std::size_t nargs,
+                   wasmtime_val_t *results, std::size_t nresults) noexcept
+    -> wasm_trap_t * {
+    try {
+        return import_log(env, caller, args, nargs, results, nresults);
+    } catch (...) {
+        return set_status(results, nresults, host::import_internal_failure);
+    }
+}
+
+[[nodiscard]] auto
+guarded_import_config_get(void *env, wasmtime_caller_t *caller,
+                          const wasmtime_val_t *args, std::size_t nargs,
+                          wasmtime_val_t *results,
+                          std::size_t nresults) noexcept -> wasm_trap_t * {
+    try {
+        return import_config_get(env, caller, args, nargs, results, nresults);
+    } catch (...) {
+        return set_status(results, nresults, host::import_internal_failure);
+    }
+}
+
+[[nodiscard]] auto
+guarded_import_tick(void *env, wasmtime_caller_t *caller,
+                    const wasmtime_val_t *args, std::size_t nargs,
+                    wasmtime_val_t *results, std::size_t nresults) noexcept
+    -> wasm_trap_t * {
+    try {
+        return import_tick(env, caller, args, nargs, results, nresults);
+    } catch (...) {
+        return set_status(results, nresults, host::import_internal_failure);
+    }
+}
+
 /// One import of the guest ABI: its name, the capability gating it and the
 /// function signature the runtime validates against a module's import section.
 struct import_shape {
@@ -376,20 +406,20 @@ constexpr std::array<import_shape, 3> import_shapes{{
                  .parameters = {WASM_I32, WASM_I32, WASM_I32},
                  .parameter_count = 3,
                  .returns_value = true,
-                 .callback = &import_log},
+                 .callback = &guarded_import_log},
     import_shape{.name = host::config_get_import,
                  .capability = host::capability::config,
                  .parameters = {WASM_I32, WASM_I32, WASM_I32, WASM_I32},
                  .parameter_count = 4,
                  .returns_value = true,
-                 .callback = &import_config_get},
+                 .callback = &guarded_import_config_get},
     import_shape{.name = host::tick_import,
                  .capability = host::capability::clock,
                  .parameters = {},
                  .parameter_count = 0,
                  .returns_value = true,
                  .result_kind = WASM_I64,
-                 .callback = &import_tick},
+                 .callback = &guarded_import_tick},
 }};
 
 [[nodiscard]] auto find_import(std::string_view module,
@@ -464,8 +494,8 @@ constexpr std::array<import_shape, 3> import_shapes{{
             import_name != nullptr && import_name->data != nullptr
                 ? std::string_view{import_name->data, import_name->size}
                 : std::string_view{}};
-        const auto qualified{std::string{module_text} + "." +
-                             std::string{name_text}};
+        const auto qualified{host::quote_guest_name(module_text) + "." +
+                             host::quote_guest_name(name_text)};
         const auto *shape{find_import(module_text, name_text)};
         if (shape == nullptr) {
             checked = std::unexpected{
@@ -620,6 +650,14 @@ struct runtime::impl {
 
     [[nodiscard]] auto arm_deadline(std::uint64_t timeout_ms) -> status {
         if (timeout_ms == 0) {
+            // A call without a deadline must not inherit the expired flag from
+            // an earlier timed-out call: without this reset a later call would
+            // report its own trap as a deadline expiry.
+            std::unique_lock lock{deadline_mutex};
+            deadline_fired = false;
+            deadline_point.reset();
+            lock.unlock();
+            deadline_ready.notify_all();
             return status_ok();
         }
         if (!config.epoch_interruption) {
@@ -720,15 +758,51 @@ struct runtime::impl {
                                           export_name.data(),
                                           export_name.size(), &item)) {
             return std::unexpected{
-                fail(error_code::not_found, "wasmtime: export '" +
-                                                std::string{export_name} +
-                                                "' not found")};
+                fail(error_code::not_found,
+                     "wasmtime: export '" +
+                         host::quote_guest_name(export_name) + "' not found")};
         }
         if (item.kind != WASMTIME_EXTERN_FUNC) {
-            return std::unexpected{fail(error_code::invalid_argument,
-                                        "wasmtime: export '" +
-                                            std::string{export_name} +
-                                            "' is not a function")};
+            return std::unexpected{fail(
+                error_code::invalid_argument,
+                "wasmtime: export '" + host::quote_guest_name(export_name) +
+                    "' is not a function")};
+        }
+
+        // Check the export's signature before calling it: a callback with the
+        // wrong arity or a non-i32 result is a caller mistake, not guest
+        // misbehaviour, and must be reported as `invalid_argument` before any
+        // guest code runs instead of surfacing as a Wasmtime call error.
+        wasm_functype_t *function_type{
+            wasmtime_func_type(context, &item.of.func)};
+        if (function_type == nullptr) {
+            return std::unexpected{
+                fail(error_code::mod_error,
+                     "wasmtime: cannot read the signature of export '" +
+                         host::quote_guest_name(export_name) + "'")};
+        }
+        const auto *parameters{wasm_functype_params(function_type)};
+        const auto *results{wasm_functype_results(function_type)};
+        auto signature_matches{parameters != nullptr && results != nullptr &&
+                               parameters->size == args.size() &&
+                               results->size == 1};
+        if (signature_matches) {
+            for (std::size_t index = 0; index < parameters->size; ++index) {
+                if (wasm_valtype_kind(parameters->data[index]) != WASM_I32) {
+                    signature_matches = false;
+                    break;
+                }
+            }
+            signature_matches = signature_matches &&
+                                wasm_valtype_kind(results->data[0]) == WASM_I32;
+        }
+        wasm_functype_delete(function_type);
+        if (!signature_matches) {
+            return std::unexpected{fail(
+                error_code::invalid_argument,
+                "wasmtime: export '" + host::quote_guest_name(export_name) +
+                    "' does not implement the (" + std::to_string(args.size()) +
+                    " x i32) -> i32 call ABI")};
         }
 
         if (options.fuel != 0) {

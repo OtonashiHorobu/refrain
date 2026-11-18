@@ -280,9 +280,10 @@ struct entry_fields {
 
 // --- guest fixtures (WAT, assembled at test time) -------------------------
 //
-// The guest ABI of this slice has no host imports: a module exports
-// `on_load: () -> i32` (required) and may export `on_unload: () -> i32`. A zero
-// return reports success.
+// The guest ABI has three capability-gated host imports (`refrain.log`,
+// `refrain.config_get`, `refrain.tick`), a required `on_load: () -> i32`, an
+// optional `on_unload: () -> i32` and optional `(i32, i32) -> i32` callbacks.
+// A zero `on_load`/`on_unload` return reports success.
 
 constexpr std::string_view minimal_wat{R"((module
   (memory (export "memory") 1)
@@ -430,6 +431,34 @@ constexpr std::string_view no_memory_wat{R"((module
   (func (export "on_load") (result i32) i32.const 0)
   (func (export "on_event") (param i32 i32) (result i32) i32.const 0)))"};
 
+/// A guest whose callback does not implement the `(i32, i32) -> i32` call ABI:
+/// dispatching it must be a caller mistake, not a guest trap.
+constexpr std::string_view bad_abi_wat{R"((module
+  (memory (export "memory") 1)
+  (func (export "on_load") (result i32) i32.const 0)
+  (func (export "on_unload") (result i32) i32.const 0)
+  (func (export "bad_abi") (param i32) (result i32) i32.const 0)))"};
+
+/// A guest whose unload hook never returns: a clean unload of a quarantined
+/// instance must not run it, or the host would hang in guest code.
+constexpr std::string_view looping_unload_wat{R"((module
+  (memory (export "memory") 1)
+  (func (export "on_load") (result i32) i32.const 0)
+  (func (export "on_unload") (result i32)
+    (loop $loop
+      br $loop)
+    i32.const 0)
+  (func (export "spin") (param i32 i32) (result i32)
+    (loop $loop
+      br $loop)
+    i32.const 0)))"};
+
+/// A guest that imports an unknown host function whose name contains a forged
+/// log line: a refusal must escape the name instead of printing it raw.
+constexpr std::string_view forged_import_wat{R"((module
+  (import "refrain" "fake\0a[INFO] forged line\1b]0;title\07" (func $forged (result i32)))
+  (func (export "on_load") (result i32) call $forged)))"};
+
 /// A guest that imports a capability-gated host import; a loader that does not
 /// grant it must refuse the package before any guest code runs.
 constexpr std::string_view config_import_wat{R"((module
@@ -477,7 +506,8 @@ struct direct_call {
 /// Dispatch one callback through the loader's sealed script host vtable.
 [[nodiscard]] auto call_guest_direct(wasm::loader &loader, std::uint64_t handle,
                                      std::string_view callback,
-                                     std::span<const std::byte> arguments)
+                                     std::span<const std::byte> arguments,
+                                     std::string_view loader_id = "wasm")
     -> direct_call {
     const auto provider_value{loader.script_host_provider()};
     const auto &table{*static_cast<const refrain_services_script_host_vtable *>(
@@ -488,6 +518,7 @@ struct direct_call {
         refrain::contracts::to_borrowed(std::span<const std::uint8_t>{
             reinterpret_cast<const std::uint8_t *>(arguments.data()),
             arguments.size()});
+    request.loader = refrain::contracts::to_borrowed(loader_id);
     refrain_services_script_host_script_call_result result{};
     result.struct_size = REFRAIN_SERVICES_SCRIPT_HOST_SCRIPT_CALL_RESULT_SIZE;
     refrain::mod::clear_loader_diagnostic();
@@ -1408,6 +1439,19 @@ const suite wasm_loader_call_tests = [] {
             expect(loader.stats().total_calls == 2U);
             expect(loader.stats().failed_calls == 0U);
             expect(loader.stats().quarantined_instances == 0U);
+
+            // A handle no loaded mod owns is refused before the script host
+            // sees it: handles are loader-local and only valid for a live mod.
+            auto bogus{script::dispatch_guest_call(host, handle + 777U,
+                                                   "on_event", arguments)};
+            expect(!bogus);
+            if (!bogus) {
+                expect(bogus.error().code == error_code::not_found);
+                expect(bogus.error().message.find(
+                           "no loaded mod owns guest instance handle") !=
+                       std::string::npos)
+                    << bogus.error().message;
+            }
         };
 
     "wasm_loader/an unknown callback is refused by name without quarantining"_test =
@@ -1658,10 +1702,32 @@ const suite wasm_loader_call_tests = [] {
         if (!store_root) {
             return;
         }
-        auto loader{
-            granted_loader(wasm::loader_budgets{.load_fuel = 70'000,
-                                                .call_fuel = 1'000'000,
-                                                .call_timeout_ms = 5'000})};
+        // Measure one burn call's consumption with a generous budget.
+        auto measuring{granted_loader(wasm::loader_budgets{
+            .call_fuel = 1'000'000, .call_timeout_ms = 5'000})};
+        auto measured_handle{
+            load_guest_direct(measuring, guest_package_root(*store_root))};
+        expect(measured_handle.has_value());
+        if (!measured_handle) {
+            return;
+        }
+        auto measured{
+            call_guest_direct(measuring, *measured_handle, "burn", {})};
+        expect(measured.status == REFRAIN_STATUS_OK);
+        expect(measured.value == 3000);
+        const auto remaining{measuring.stats().last_call_fuel_remaining};
+        expect(remaining > 0U);
+        expect(remaining < 1'000'000U);
+        const auto consumed{1'000'000U - remaining};
+
+        // A second loader starts with a load-path budget too small to run the
+        // callback and provisions 1.5x one call per dispatch. Each call leaves
+        // half a call of fuel behind, so the second success proves the budget
+        // is re-provisioned rather than inherited from the first call.
+        auto loader{granted_loader(
+            wasm::loader_budgets{.load_fuel = 1'000,
+                                 .call_fuel = consumed + consumed / 2,
+                                 .call_timeout_ms = 5'000})};
         auto handle{load_guest_direct(loader, guest_package_root(*store_root))};
         expect(handle.has_value());
         if (!handle) {
@@ -1675,6 +1741,123 @@ const suite wasm_loader_call_tests = [] {
         expect(second.value == 3000);
         expect(loader.stats().total_calls == 2U);
         expect(loader.stats().failed_calls == 0U);
+    };
+
+    "wasm_loader/a callback with the wrong ABI is refused without quarantine"_test =
+        [] {
+            refrain::test_support::scratch_directory scratch;
+            auto store_root{install_guest(scratch, bad_abi_wat)};
+            expect(store_root.has_value());
+            if (!store_root) {
+                return;
+            }
+            auto loader{granted_loader()};
+            auto handle{
+                load_guest_direct(loader, guest_package_root(*store_root))};
+            expect(handle.has_value());
+            if (!handle) {
+                return;
+            }
+            const std::array<std::byte, 4> arguments{
+                std::byte{1}, std::byte{2}, std::byte{3}, std::byte{4}};
+            auto called{
+                call_guest_direct(loader, *handle, "bad_abi", arguments)};
+            expect(called.status ==
+                   static_cast<refrain_status>(
+                       script_host_abi::script_error::invalid_argument));
+            expect(called.diagnostic.find("does not implement the (2 x i32) -> "
+                                          "i32 call ABI") != std::string::npos)
+                << called.diagnostic;
+            expect(loader.stats().quarantined_instances == 0U);
+            expect(loader.stats().failed_calls == 1U);
+        };
+
+    "wasm_loader/a forged import name is escaped in the refusal"_test = [] {
+        refrain::test_support::scratch_directory scratch;
+        auto store_root{install_guest(scratch, forged_import_wat)};
+        expect(store_root.has_value());
+        if (!store_root) {
+            return;
+        }
+        auto plan{installed_plan(wasm_mod_id, *store_root)};
+        expect(static_cast<bool>(plan));
+        if (!plan) {
+            return;
+        }
+        wasm::loader loader{};
+        mod::host host{};
+        expect(register_wasm_loader(host, loader));
+        auto loaded{host.load(*plan, std::span<const std::byte>{})};
+        expect(!loaded);
+        if (!loaded) {
+            expect(loaded.error().code == error_code::permission_denied);
+            const auto &message{loaded.error().message};
+            // The guest name bytes never reach the operator-facing message raw.
+            expect(message.find('\n') == std::string::npos) << message;
+            expect(message.find('\x1b') == std::string::npos) << message;
+            expect(message.find("\\x0a") != std::string::npos) << message;
+            expect(message.find("\\x1b") != std::string::npos) << message;
+            expect(message.find("refrain.") != std::string::npos);
+        }
+        expect(loader.stats().live_instances == 0U);
+    };
+
+    "wasm_loader/a quarantined instance does not run its unload hook"_test =
+        [] {
+            refrain::test_support::scratch_directory scratch;
+            auto store_root{install_guest(scratch, looping_unload_wat)};
+            expect(store_root.has_value());
+            if (!store_root) {
+                return;
+            }
+            auto loader{granted_loader(wasm::loader_budgets{
+                .call_fuel = 1'000'000'000, .call_timeout_ms = 10})};
+            auto handle{
+                load_guest_direct(loader, guest_package_root(*store_root))};
+            expect(handle.has_value());
+            if (!handle) {
+                return;
+            }
+            auto spin{call_guest_direct(loader, *handle, "spin", {})};
+            expect(spin.status ==
+                   static_cast<refrain_status>(
+                       script_host_abi::script_error::deadline_exceeded));
+            expect(loader.stats().quarantined_instances == 1U);
+
+            // The guest's `on_unload` loops forever; the clean unload must skip
+            // it and release the store instead of entering guest code.
+            const auto started{std::chrono::steady_clock::now()};
+            expect(unload_guest_direct(loader, *handle));
+            const auto elapsed{std::chrono::steady_clock::now() - started};
+            expect(elapsed < std::chrono::seconds{5});
+            expect(loader.stats().live_instances == 0U);
+            expect(loader.stats().quarantined_instances == 0U);
+        };
+
+    "wasm_loader/a request naming another loader is refused"_test = [] {
+        refrain::test_support::scratch_directory scratch;
+        auto store_root{install_guest(scratch, import_guest_wat)};
+        expect(store_root.has_value());
+        if (!store_root) {
+            return;
+        }
+        auto loader{granted_loader()};
+        auto handle{load_guest_direct(loader, guest_package_root(*store_root))};
+        expect(handle.has_value());
+        if (!handle) {
+            return;
+        }
+        const std::array<std::byte, 2> arguments{std::byte{1}, std::byte{2}};
+        auto wrong_loader{call_guest_direct(loader, *handle, "on_event",
+                                            arguments, "native")};
+        expect(wrong_loader.status ==
+               static_cast<refrain_status>(
+                   script_host_abi::script_error::not_found));
+        expect(wrong_loader.diagnostic.find("loader-local") !=
+               std::string::npos)
+            << wrong_loader.diagnostic;
+        expect(loader.stats().failed_calls == 0U);
+        expect(loader.stats().quarantined_instances == 0U);
     };
 
     "wasm_loader/call after unload reports a missing instance"_test = [] {

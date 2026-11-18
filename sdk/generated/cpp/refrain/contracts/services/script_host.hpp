@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 29871d2bb99d3b05
+// Schema hash: 9d1646c7060b3e0f
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_CONTRACTS_SERVICES_SCRIPT_HOST_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_CONTRACTS_SERVICES_SCRIPT_HOST_HPP
@@ -65,11 +65,12 @@ using script_call_result = ::refrain_services_script_host_script_call_result;
     return value;
 }
 
-static_assert(sizeof(script_call_request) == 40);
+static_assert(sizeof(script_call_request) == 56);
 static_assert(alignof(script_call_request) == 8);
 static_assert(offsetof(script_call_request, struct_size) == 0);
 static_assert(offsetof(script_call_request, callback) == 8);
 static_assert(offsetof(script_call_request, arguments) == 24);
+static_assert(offsetof(script_call_request, loader) == 40);
 static_assert(sizeof(script_call_result) == 8);
 static_assert(alignof(script_call_result) == 4);
 static_assert(offsetof(script_call_result, struct_size) == 0);
@@ -77,7 +78,7 @@ static_assert(offsetof(script_call_result, value) == 4);
 
 inline constexpr std::string_view service_id = "refrain:script.host";
 inline constexpr std::uint32_t abi_major = 1;
-inline constexpr std::uint32_t abi_minor = 0;
+inline constexpr std::uint32_t abi_minor = 1;
 inline constexpr std::uint32_t abi_patch = 0;
 inline constexpr ::refrain::contracts::side_kind side = ::refrain::contracts::side_kind::server;
 inline constexpr ::refrain::contracts::thread_kind thread = ::refrain::contracts::thread_kind::main;
@@ -107,8 +108,11 @@ class provider final {
     /// Invoke one exported guest callback. The call runs under the loader's
     /// per-call instruction budget and wall-clock deadline and is refused for
     /// a quarantined instance. A guest that traps is quarantined: the instance
-    /// stays registered but executes no further guest code until it is
-    /// unloaded, and `unload` releases the whole store either way.
+    /// stays registered but executes no further guest code, including its
+    /// unload hook, until the loader releases the whole store. A request names
+    /// the loader that owns the instance handle; a host that does not serve
+    /// that loader reports `not_found` rather than resolving the handle
+    /// against another loader's table.
     [[nodiscard]] auto call(::refrain::services::mod_loader::mod_instance instance, const ::refrain::services::script_host::script_call_request &request) const -> std::expected<::refrain::services::script_host::script_call_result, ::refrain::services::script_host::script_error> {
         const auto abi_request = ::refrain::contracts::with_struct_size(request);
         ::refrain_services_script_host_script_call_result value{};

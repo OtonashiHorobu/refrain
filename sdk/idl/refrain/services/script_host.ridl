@@ -2,7 +2,7 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 //
-// `refrain:script.host` service contract v1.0.
+// `refrain:script.host` service contract v1.1.
 //
 // The host bootstrap owns one sealed script host: the process-wide dispatch
 // path into the sandboxed guests of the first-party script runtimes. It is a
@@ -21,7 +21,7 @@
 // apply to is documented in the modding guide.
 
 module refrain::services::script_host;
-version 1.0.0;
+version 1.1.0;
 
 import refrain::core;
 import refrain::services::mod_loader;
@@ -58,6 +58,10 @@ struct script_call_request {
     /// the call. At most 256 bytes; a guest that accepts arguments keeps that
     /// prefix of its memory reserved.
     bytes arguments;
+    /// Loader id that owns `instance`. Instance handles are allocated per
+    /// loader, so the script host refuses a request naming a loader it does not
+    /// serve instead of resolving the handle against its own guest table.
+    string loader;
 }
 
 /// Result of one callback invocation.
@@ -66,7 +70,7 @@ struct script_call_result {
     i32 value;
 }
 
-service script_host : 1.0.0 {
+service script_host : 1.1.0 {
     side = server;
     thread = main;
     composition = sealed;
@@ -77,8 +81,11 @@ service script_host : 1.0.0 {
     /// Invoke one exported guest callback. The call runs under the loader's
     /// per-call instruction budget and wall-clock deadline and is refused for
     /// a quarantined instance. A guest that traps is quarantined: the instance
-    /// stays registered but executes no further guest code until it is
-    /// unloaded, and `unload` releases the whole store either way.
+    /// stays registered but executes no further guest code, including its
+    /// unload hook, until the loader releases the whole store. A request names
+    /// the loader that owns the instance handle; a host that does not serve
+    /// that loader reports `not_found` rather than resolving the handle
+    /// against another loader's table.
     #[thread(main)] #[can_fail]
     fn call(mod_instance instance, in script_call_request request)
         -> result<script_call_result, script_error>;

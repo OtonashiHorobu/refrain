@@ -120,6 +120,11 @@ struct loader_stats {
     /// Live instances quarantined after a failed call. A quarantined guest
     /// runs no further callbacks and is released by unload.
     std::uint64_t quarantined_instances{0};
+    /// Fuel left in the store after the most recent call dispatch. Zero when
+    /// fuel accounting is disabled or the call exhausted its budget. Every
+    /// dispatch provisions its own budget, so this value is not carried into
+    /// the next call.
+    std::uint64_t last_call_fuel_remaining{0};
 };
 
 /// Read-only host state and the grant set one loader's guests receive.
@@ -158,9 +163,9 @@ class loader {
         -> script_host_provider;
 
     /// Update the tick index `refrain.tick` reports to this loader's guests.
-    /// The simulation thread calls it between tiers; while no guest is running
-    /// the value is a plain snapshot, so the call is not synchronised and must
-    /// stay on the contract's main thread.
+    /// The value is a plain snapshot read by guest imports, so the caller must
+    /// marshal a live simulation tick onto the loader contract's main thread
+    /// and call it between dispatches; the setter is not synchronised.
     void set_tick_index(std::int64_t tick_index) noexcept;
 
     [[nodiscard]] auto stats() const noexcept -> const loader_stats &;

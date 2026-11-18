@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 29871d2bb99d3b05
+// Schema hash: 9d1646c7060b3e0f
 
 #ifndef REFRAIN_GENERATED_C_REFRAIN_CONTRACTS_SERVICES_SCRIPT_HOST_ABI_H
 #define REFRAIN_GENERATED_C_REFRAIN_CONTRACTS_SERVICES_SCRIPT_HOST_ABI_H
@@ -48,7 +48,11 @@ struct refrain_services_script_host_script_call_request {
     // the call. At most 256 bytes; a guest that accepts arguments keeps that
     // prefix of its memory reserved.
     refrain_bytes arguments;
-}; // refrain_services_script_host_script_call_request size = 40
+    // Loader id that owns `instance`. Instance handles are allocated per
+    // loader, so the script host refuses a request naming a loader it does not
+    // serve instead of resolving the handle against its own guest table.
+    refrain_str loader;
+}; // refrain_services_script_host_script_call_request size = 56
 #define REFRAIN_SERVICES_SCRIPT_HOST_SCRIPT_CALL_REQUEST_SIZE ((uint32_t)sizeof(refrain_services_script_host_script_call_request))
 
 // Result of one callback invocation.
@@ -61,7 +65,7 @@ struct refrain_services_script_host_script_call_result {
 
 #define REFRAIN_SERVICES_SCRIPT_HOST_SERVICE_ID "refrain:script.host"
 #define REFRAIN_SERVICES_SCRIPT_HOST_ABI_MAJOR 1u
-#define REFRAIN_SERVICES_SCRIPT_HOST_ABI_MINOR 0u
+#define REFRAIN_SERVICES_SCRIPT_HOST_ABI_MINOR 1u
 #define REFRAIN_SERVICES_SCRIPT_HOST_ABI_PATCH 0u
 #define REFRAIN_SERVICES_SCRIPT_HOST_SIDE REFRAIN_SIDE_SERVER
 #define REFRAIN_SERVICES_SCRIPT_HOST_THREAD REFRAIN_THREAD_MAIN
@@ -78,8 +82,11 @@ typedef struct refrain_services_script_host_vtable {
     // Invoke one exported guest callback. The call runs under the loader's
     // per-call instruction budget and wall-clock deadline and is refused for
     // a quarantined instance. A guest that traps is quarantined: the instance
-    // stays registered but executes no further guest code until it is
-    // unloaded, and `unload` releases the whole store either way.
+    // stays registered but executes no further guest code, including its
+    // unload hook, until the loader releases the whole store. A request names
+    // the loader that owns the instance handle; a host that does not serve
+    // that loader reports `not_found` rather than resolving the handle
+    // against another loader's table.
     // attributes: #[thread(main)] #[can_fail]
     refrain_status (*call)(void *self, refrain_services_mod_loader_handle_mod_instance instance, const refrain_services_script_host_script_call_request *request, refrain_services_script_host_script_call_result *out_value);
 } refrain_services_script_host_vtable; // service refrain:script.host

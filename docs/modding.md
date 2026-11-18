@@ -336,12 +336,16 @@ the error names the import and the active grant set.
 | `refrain.tick` | `() -> i64` | `clock` | returns the host tick index |
 
 Guest views are relative to the guest's own linear memory and are re-checked
-against its current size. A log message is at most 1024 bytes and must be UTF-8
-without control characters; a configuration key is at most 128 printable ASCII
-bytes and a value at most 4096 bytes. One call emits at most 64 log lines. An
-import returns `0` on success and a negative status: `-1` malformed argument,
-`-2` unknown configuration key, `-3` output buffer too small and `-4` log quota
-exhausted.
+against its current size. The host reads and writes that memory through the
+module export literally named `memory`: a guest that exports its linear memory
+under another name is treated as having no linear memory, so its imports and
+call arguments are refused. A log message is at most 1024 bytes and must be
+UTF-8 without control characters; a configuration key is at most 128 printable
+ASCII bytes and a value at most 4096 bytes. One call emits at most 64 log
+lines. An import returns `0` on success and a negative status: `-1` malformed
+argument, `-2` unknown configuration key, `-3` output buffer too small, `-4`
+log quota exhausted and `-5` host-side failure such as running out of memory
+while recording a log line.
 
 The imports are functions over values and guest memory: there is no handle,
 vtable, provider table, registry, filesystem or network access, and a guest
@@ -352,11 +356,14 @@ existed.
 #### Call dispatch, budgets and failures
 
 The host dispatches a callback with the instance handle the loader returned for
-the mod, through the sealed `refrain:script.host` service. The loader stages the
-argument bytes at address 0 of the guest's linear memory (at most 256 bytes) and
-calls the export with `(0, length)`. A guest that accepts arguments keeps that
-prefix of its memory free; a guest without an exported memory can only be called
-without arguments.
+the mod, through the sealed `refrain:script.host` service. The request also
+names the loader that owns the handle: instance handles are allocated per
+loader, so the script host refuses a request naming a loader it does not serve
+instead of resolving the handle against another loader's guest table. The
+loader stages the argument bytes at address 0 of the guest's linear memory (at
+most 256 bytes) and calls the export with `(0, length)`. A guest that accepts
+arguments keeps that prefix of its memory free; a guest without an exported
+memory can only be called without arguments.
 
 Every load and every call has its own budgets. A load holds a module size limit,
 a linear-memory ceiling, an instruction budget for instantiation and `on_load`,

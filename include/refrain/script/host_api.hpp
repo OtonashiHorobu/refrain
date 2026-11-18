@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <map>
 #include <optional>
@@ -80,6 +82,43 @@ inline constexpr std::int32_t import_not_found{-2};
 inline constexpr std::int32_t import_buffer_too_small{-3};
 /// The guest emitted its per-call log line quota.
 inline constexpr std::int32_t import_quota_exceeded{-4};
+/// The host could not complete the import, for example it ran out of memory
+/// while recording a log line. Guest code sees the status and keeps running.
+inline constexpr std::int32_t import_internal_failure{-5};
+
+/// Upper bound of `quote_guest_name()`'s output, excluding the trailing
+/// `...` appended when the input is longer.
+inline constexpr std::size_t max_quoted_guest_name_bytes{96};
+
+/// Render an untrusted guest-supplied name (an import, export or loader id) for
+/// an operator-facing message. Guest names are arbitrary bytes and may contain
+/// newlines, terminal escapes or control characters, so a refusal never
+/// interpolates them raw: printable ASCII passes through, every other byte
+/// becomes `\xNN`, and the result is capped near
+/// `max_quoted_guest_name_bytes` with `...`.
+[[nodiscard]] inline auto quote_guest_name(std::string_view name)
+    -> std::string {
+    constexpr std::string_view hex_digits{"0123456789abcdef"};
+    auto quoted{std::string{}};
+    quoted.reserve(
+        std::min<std::size_t>(name.size(), max_quoted_guest_name_bytes));
+    for (const char character : name) {
+        if (quoted.size() + 4 > max_quoted_guest_name_bytes) {
+            quoted += "...";
+            break;
+        }
+        const auto byte{static_cast<unsigned char>(character)};
+        if (byte >= 0x20U && byte < 0x7FU && byte != '\\' && byte != '"' &&
+            byte != '\'') {
+            quoted += character;
+            continue;
+        }
+        quoted += "\\x";
+        quoted += hex_digits[byte >> 4U];
+        quoted += hex_digits[byte & 0x0FU];
+    }
+    return quoted;
+}
 
 /// Guest callback signature: `(i32 argument_address, i32 argument_bytes) ->
 /// i32`. The host invokes an exported callback by name after load; the return

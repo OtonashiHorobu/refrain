@@ -240,11 +240,17 @@ const suite wasm_tests = [] {
         expect(!bad_handle);
         expect(bad_handle.error().code == refrain::error_code::not_found);
 
-        // Calling the wrong number of arguments fails inside Wasmtime.
+        // The export's signature is checked before the call: passing the wrong
+        // number of arguments is a caller mistake, not a guest trap.
         const std::array<std::int32_t, 1> one_arg{1};
         auto wrong_args{runtime->call_i32(*module, "add", one_arg)};
         expect(!wrong_args);
-        expect(wrong_args.error().code == refrain::error_code::mod_error);
+        if (!wrong_args) {
+            expect(wrong_args.error().code ==
+                   refrain::error_code::invalid_argument);
+            expect(wrong_args.error().message.find("does not implement") !=
+                   std::string::npos);
+        }
     };
 
     "wasm/grant sets format and parse deterministically"_test = [] {
@@ -480,11 +486,33 @@ const suite wasm_tests = [] {
     };
 
     "wasm/each call provisions its own instruction budget"_test = [] {
-        // The store starts with a load-path budget far too small for the
-        // fixture; a call still runs on the budget it provisions itself.
         wasm::engine_config config{};
         config.consume_fuel = true;
-        config.fuel = 64;
+        // A load-path budget far too small to run any callback: neither test
+        // call may fall back to it.
+        config.fuel = 1;
+        // Measure one burn call's consumption on a dedicated runtime.
+        auto measuring{runtime::create(config)};
+        expect(static_cast<bool>(measuring));
+        if (!measuring) {
+            return;
+        }
+        auto measuring_module{measuring->compile_wat(burn_wat)};
+        expect(static_cast<bool>(measuring_module));
+        if (!measuring_module) {
+            return;
+        }
+        auto measured{
+            measuring->call_i32(*measuring_module, "burn", {},
+                                wasm::call_options{.fuel = 1'000'000})};
+        expect(measured && *measured == 3000);
+        const auto consumed{1'000'000U - measuring->fuel_remaining()};
+        expect(consumed > 0U);
+
+        // Two calls on a fresh runtime, each budgeted at 1.5x one measured
+        // call: the first leaves only half a call of fuel, so the second
+        // success proves a fresh budget is provisioned instead of reusing the
+        // previous call's remainder.
         auto runtime{runtime::create(config)};
         expect(static_cast<bool>(runtime));
         if (!runtime) {
@@ -495,22 +523,51 @@ const suite wasm_tests = [] {
         if (!module) {
             return;
         }
-        auto first{runtime->call_i32(*module, "burn", {},
-                                     wasm::call_options{.fuel = 1'000'000})};
-        expect(first && *first == 3000);
-        const auto consumed{1'000'000U - runtime->fuel_remaining()};
-        expect(consumed > 0U);
-        // One call needs `consumed`; the budget below covers one call but not
-        // two, so the second success proves the budget is replenished, not
-        // shared with the previous call.
         const auto per_call{consumed + consumed / 2};
+        auto first{runtime->call_i32(*module, "burn", {},
+                                     wasm::call_options{.fuel = per_call})};
+        expect(first && *first == 3000);
         auto second{runtime->call_i32(*module, "burn", {},
                                       wasm::call_options{.fuel = per_call})};
         expect(second && *second == 3000);
-        auto third{runtime->call_i32(*module, "burn", {},
-                                     wasm::call_options{.fuel = per_call})};
-        expect(third && *third == 3000);
     };
+
+    "wasm/a call without a deadline does not inherit an expired deadline"_test =
+        [] {
+            wasm::engine_config config{};
+            config.consume_fuel = true;
+            config.fuel = 1'000'000;
+            config.epoch_interruption = true;
+            auto runtime{runtime::create(config)};
+            expect(static_cast<bool>(runtime));
+            if (!runtime) {
+                return;
+            }
+            auto forever{runtime->compile_wat(forever_wat)};
+            auto boom{runtime->compile_wat(
+                "(module (func (export \"boom\") (result i32) unreachable))")};
+            expect(static_cast<bool>(forever));
+            expect(static_cast<bool>(boom));
+            if (!forever || !boom) {
+                return;
+            }
+            auto timed_out{runtime->call_i32(
+                *forever, "forever", {},
+                wasm::call_options{.fuel = 1'000'000'000, .timeout_ms = 10})};
+            expect(!timed_out);
+            if (!timed_out) {
+                expect(timed_out.error().code == refrain::error_code::timeout);
+            }
+            // The later call has no deadline and traps for its own reason: it
+            // must not be reported as the earlier deadline expiry.
+            auto trapped{runtime->call_i32(*boom, "boom", {})};
+            expect(!trapped);
+            if (!trapped) {
+                expect(trapped.error().code == refrain::error_code::mod_error);
+                expect(trapped.error().message.find("deadline") ==
+                       std::string::npos);
+            }
+        };
 
     "wasm/a call that exhausts its instruction budget traps"_test = [] {
         wasm::engine_config config{};

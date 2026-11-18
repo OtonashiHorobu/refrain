@@ -312,7 +312,7 @@ versions named. The schema hash identifies the build; it is not a version.
 |---|---|---|
 | `refrain:data.packs` | 1.0.0 | exclusive |
 | `refrain:mod.loader` | 1.2.0 | instanced |
-| `refrain:script.host` | 1.0.0 | sealed |
+| `refrain:script.host` | 1.1.0 | sealed |
 | `refrain:net.protocol` | 2.1.0 | instanced |
 | `refrain:net.session` | 1.0.0 | exclusive |
 | `refrain:net.translator` | 1.0.0 | exclusive |
@@ -355,7 +355,10 @@ the fixed capabilities struct.
 `refrain:script.host` is the execution counterpart of the loader contract: the
 host bootstrap registers one sealed instance that invokes an exported guest
 callback by its instance handle, under per-call instruction and wall-clock
-budgets, and quarantines an instance whose call traps. It is a separate service
+budgets, and quarantines an instance whose call traps. The call request names
+the loader that owns the handle, because instance handles are loader-local;
+version 1.1.0 appended that field to `script_call_request` and a script host
+refuses a request naming a loader it does not serve. It is a separate service
 because loading and calling evolve independently: the loader contract describes
 composition-time lifecycle (`validate`, `load`, `unload`, `reload`) that every
 loader implements, while guest execution exists only for sandboxed script
