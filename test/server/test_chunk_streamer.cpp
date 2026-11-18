@@ -203,10 +203,36 @@ class recording_gateway final : public server::play_gateway {
     return out;
 }
 
+/// Logical time of the streamer's drain budget. A test owns one and the
+/// encoder advances it, so the budget is spent by the test's inputs instead of
+/// by how long the host took to run the encode.
+struct logical_clock {
+    std::int64_t now_ns{0};
+};
+
+/// The drain clock of a test that is not about the budget: it never advances,
+/// so no tick can run out of budget and the queue drains completely on the
+/// tick that built it. This keeps the observed drain from depending on the
+/// host's scheduling while the dedicated budget test controls its own clock.
+[[nodiscard]] auto frozen_time() -> server::chunk_streamer::budget_clock {
+    return [] { return std::int64_t{0}; };
+}
+
+/// Default streamer of these tests, with the frozen drain clock.
+[[nodiscard]] auto make_streamer(recording_gateway &gateway,
+                                 server::chunk_packet_source source)
+    -> server::chunk_streamer {
+    return server::chunk_streamer{gateway, std::move(source),
+                                  server::chunk_streamer::backlog_limits{},
+                                  frozen_time()};
+}
+
 /// State shared with the encoder so a test can change one encode's cost
-/// between ticks and count the encodes the streamer asked for.
+/// between ticks and count the encodes the streamer asked for. `cost` is
+/// logical time spent against `clock`; with no clock the encode takes none.
 struct fake_encoder {
     std::chrono::nanoseconds cost{};
+    std::shared_ptr<logical_clock> clock{};
     std::size_t calls{0};
 };
 
@@ -216,8 +242,8 @@ struct fake_encoder {
         [state](const server::chunk_packet_source &,
                 sim::chunk_pos pos) -> refrain::result<std::vector<std::byte>> {
             ++state->calls;
-            if (state->cost.count() > 0) {
-                std::this_thread::sleep_for(state->cost);
+            if (state->clock != nullptr) {
+                state->clock->now_ns += state->cost.count();
             }
             const coordinate value{pos.x, pos.z};
             std::vector<std::byte> body(sizeof(value));
@@ -594,12 +620,18 @@ suite<"server/chunk-streamer"> chunk_streamer_tests = [] {
             recording_gateway gateway;
             gateway.active = {7};
             auto state{std::make_shared<fake_encoder>()};
+            auto clock{std::make_shared<logical_clock>()};
+            state->clock = clock;
             // One encode spends the whole budget, so every pass sends exactly
-            // one chunk and leaves the rest at the front of the queue.
+            // one chunk and leaves the rest at the front of the queue. The
+            // clock is the test's, so the cadence does not depend on how long
+            // a wall-clock encode would have taken.
             state->cost = std::chrono::nanoseconds{
                 server::chunk_streamer::tick_budget_ns};
-            server::chunk_streamer streamer{gateway,
-                                            server::chunk_packet_source{}};
+            server::chunk_streamer streamer{
+                gateway, server::chunk_packet_source{},
+                server::chunk_streamer::backlog_limits{},
+                [clock] { return clock->now_ns; }};
             streamer.set_encoder(make_encoder(state));
             session::chunk_tracker views;
             static_cast<void>(views.update(7, 0, 0, 2));
@@ -614,7 +646,9 @@ suite<"server/chunk-streamer"> chunk_streamer_tests = [] {
             }
 
             // A free encode is not a tick of work either: the rest drains in
-            // one or two passes, not one chunk per tick.
+            // one pass, not one chunk per tick. The injected clock did not
+            // advance, so the budget cannot expire and the drain is a function
+            // of the queued work only.
             state->cost = std::chrono::nanoseconds{0};
             streamer.tick(views);
             streamer.tick(views);
@@ -622,11 +656,48 @@ suite<"server/chunk-streamer"> chunk_streamer_tests = [] {
             expect(state->calls == expected.size());
         };
 
+    "server/chunk stream keeps a column pending when the budget expires before "
+    "it is sent"_test = [] {
+        recording_gateway gateway;
+        gateway.active = {7};
+        auto state{std::make_shared<fake_encoder>()};
+        // A loaded machine can stall a tick after it computed its deadline and
+        // before the first packet left. The clock reports zero for the
+        // deadline and a value past the budget for the check, which is what
+        // that stall looks like to the streamer. The queued column must stay
+        // pending for the next tick instead of being dropped or served stale.
+        auto reads{std::make_shared<std::size_t>(0)};
+        const auto budget_passed{static_cast<std::int64_t>(
+            server::chunk_streamer::tick_budget_ns + 1U)};
+        auto clock{[reads, budget_passed]() -> std::int64_t {
+            if ((*reads)++ == 0U) {
+                return 0;
+            }
+            return budget_passed;
+        }};
+        server::chunk_streamer streamer{
+            gateway, server::chunk_packet_source{},
+            server::chunk_streamer::backlog_limits{}, clock};
+        streamer.set_encoder(make_encoder(state));
+        session::chunk_tracker views;
+        static_cast<void>(views.update(7, 0, 0, 0));
+
+        streamer.tick(views);
+        expect(state->calls == 0U);
+        expect(streamed(gateway, 7).empty());
+
+        // The next tick has the whole budget again and sends the column.
+        streamer.tick(views);
+        expect(state->calls == 1U);
+        const std::vector<coordinate> expected{{0, 0}};
+        expect(streamed(gateway, 7) == expected);
+    };
+
     "server/chunk cache keeps one full viewport resident"_test = [] {
         recording_gateway gateway;
         gateway.active = {1, 2};
         auto state{std::make_shared<fake_encoder>()};
-        server::chunk_streamer streamer{gateway, server::chunk_packet_source{}};
+        auto streamer{make_streamer(gateway, server::chunk_packet_source{})};
         streamer.set_encoder(make_encoder(state));
         session::chunk_tracker views;
         static_cast<void>(views.update(1, 0, 0, 10));
@@ -665,7 +736,7 @@ suite<"server/chunk-streamer"> chunk_streamer_tests = [] {
         recording_gateway gateway;
         gateway.active = {3};
         auto state{std::make_shared<fake_encoder>()};
-        server::chunk_streamer streamer{gateway, server::chunk_packet_source{}};
+        auto streamer{make_streamer(gateway, server::chunk_packet_source{})};
         streamer.set_encoder(make_encoder(state));
         session::chunk_tracker views;
         static_cast<void>(views.update(3, 0, 0, 2));
@@ -690,7 +761,7 @@ suite<"server/chunk-streamer"> chunk_streamer_tests = [] {
         recording_gateway gateway;
         gateway.active = {4};
         auto state{std::make_shared<fake_encoder>()};
-        server::chunk_streamer streamer{gateway, server::chunk_packet_source{}};
+        auto streamer{make_streamer(gateway, server::chunk_packet_source{})};
         streamer.set_encoder(make_encoder(state));
         session::chunk_tracker views;
         // A radius-zero viewport reuses one body at most: walking far past it
@@ -716,8 +787,8 @@ suite<"server/chunk-streamer"> chunk_streamer_tests = [] {
             recording_gateway gateway;
             gateway.active = {4};
             auto state{std::make_shared<fake_encoder>()};
-            server::chunk_streamer streamer{gateway,
-                                            server::chunk_packet_source{}};
+            auto streamer{
+                make_streamer(gateway, server::chunk_packet_source{})};
             streamer.set_encoder(make_encoder(state));
             session::chunk_tracker views;
             static_cast<void>(views.update(4, 0, 0, 0));
@@ -746,7 +817,7 @@ suite<"server/chunk-streamer"> chunk_streamer_tests = [] {
         auto state{std::make_shared<fake_encoder>()};
         server::chunk_packet_source source{};
         source.tables = &*tables.tables;
-        server::chunk_streamer streamer{gateway, source};
+        auto streamer{make_streamer(gateway, source)};
         streamer.set_encoder(make_encoder(state));
         streamer.set_entity_source(
             [](sim::chunk_pos pos) -> std::vector<sim::chunk_entity> {
@@ -842,7 +913,7 @@ suite<"server/chunk-streamer"> chunk_streamer_tests = [] {
         auto state{std::make_shared<fake_encoder>()};
         server::chunk_packet_source source{};
         source.tables = &*tables.tables;
-        server::chunk_streamer streamer{gateway, source};
+        auto streamer{make_streamer(gateway, source)};
         streamer.set_encoder(make_encoder(state));
         streamer.set_entity_source(
             [](sim::chunk_pos pos) -> std::vector<sim::chunk_entity> {
@@ -879,7 +950,7 @@ suite<"server/chunk-streamer"> chunk_streamer_tests = [] {
         auto state{std::make_shared<fake_encoder>()};
         server::chunk_packet_source source{};
         source.tables = &*tables.tables;
-        server::chunk_streamer streamer{gateway, source};
+        auto streamer{make_streamer(gateway, source)};
         streamer.set_encoder(make_encoder(state));
         streamer.set_entity_source(
             [](sim::chunk_pos pos) -> std::vector<sim::chunk_entity> {
@@ -908,7 +979,7 @@ suite<"server/chunk-streamer"> chunk_streamer_tests = [] {
         auto state{std::make_shared<fake_encoder>()};
         server::chunk_packet_source source{};
         source.tables = &*tables.tables;
-        server::chunk_streamer streamer{gateway, source};
+        auto streamer{make_streamer(gateway, source)};
         streamer.set_encoder(make_encoder(state));
         // The simulation hands the column's entities over in ascending logical
         // id order; the streamer must keep that order on the wire.
@@ -952,8 +1023,8 @@ suite<"server/chunk-streamer-prefetch"> chunk_streamer_prefetch_tests = [] {
             recording_gateway gateway;
             gateway.active = {7};
             auto state{std::make_shared<fake_encoder>()};
-            server::chunk_streamer streamer{gateway,
-                                            server::chunk_packet_source{}};
+            auto streamer{
+                make_streamer(gateway, server::chunk_packet_source{})};
             streamer.set_encoder(make_encoder(state));
             std::vector<coordinate> requested{};
             streamer.set_chunk_requester(
@@ -1035,7 +1106,7 @@ suite<"server/chunk-streamer-prefetch"> chunk_streamer_prefetch_tests = [] {
         recording_gateway gateway;
         gateway.active = {8};
         auto state{std::make_shared<fake_encoder>()};
-        server::chunk_streamer streamer{gateway, server::chunk_packet_source{}};
+        auto streamer{make_streamer(gateway, server::chunk_packet_source{})};
         streamer.set_encoder(make_encoder(state));
         std::vector<coordinate> requested{};
         streamer.set_chunk_requester(
@@ -1071,7 +1142,7 @@ suite<"server/chunk-streamer-prefetch"> chunk_streamer_prefetch_tests = [] {
         recording_gateway gateway;
         gateway.active = {9};
         auto state{std::make_shared<fake_encoder>()};
-        server::chunk_streamer streamer{gateway, server::chunk_packet_source{}};
+        auto streamer{make_streamer(gateway, server::chunk_packet_source{})};
         streamer.set_encoder(make_encoder(state));
         std::vector<coordinate> requested{};
         streamer.set_chunk_requester(
@@ -1115,7 +1186,7 @@ suite<"server/chunk-streamer-cache-revision"> chunk_cache_revision_tests = [] {
         };
         recording_gateway gateway;
         gateway.active = {1};
-        server::chunk_streamer streamer{gateway, source};
+        auto streamer{make_streamer(gateway, source)};
         session::chunk_tracker views;
         static_cast<void>(views.update(1, 0, 0, 0));
         streamer.tick(views);
@@ -1177,7 +1248,7 @@ suite<"server/chunk-streamer-cache-revision"> chunk_cache_revision_tests = [] {
         };
         recording_gateway gateway;
         gateway.active = {1};
-        server::chunk_streamer streamer{gateway, source};
+        auto streamer{make_streamer(gateway, source)};
         session::chunk_tracker views;
         static_cast<void>(views.update(1, 0, 0, 0));
         streamer.tick(views);

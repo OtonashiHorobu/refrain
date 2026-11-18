@@ -99,6 +99,12 @@ class chunk_streamer {
     /// stays pending, in order, for the next tick.
     static constexpr std::uint64_t tick_budget_ns{4'000'000};
 
+    /// Monotonic nanosecond time source for the per-tick drain budget. Empty
+    /// uses `refrain::core::now_ns()`. Production leaves it empty; a test
+    /// injects a controlled source so the drain cadence is a function of the
+    /// test's inputs instead of the time an encode took on the host.
+    using budget_clock = std::function<std::int64_t()>;
+
     /// Encode one column. Production always reads the world through
     /// `encode_full_chunk`; a test installs its own encoder to control the
     /// cost of one encode and observe the drain.
@@ -148,7 +154,7 @@ class chunk_streamer {
     };
 
     chunk_streamer(play_gateway &gateway, chunk_packet_source source,
-                   backlog_limits limits);
+                   backlog_limits limits, budget_clock now = {});
 
     /// Same, with the default limits. This is a delegating constructor rather
     /// than a default argument because the nested type cannot be aggregate-
@@ -386,9 +392,14 @@ class chunk_streamer {
     void remove_column_entities(std::uint64_t connection, stream_state &stream,
                                 std::int32_t x, std::int32_t z);
 
+    /// Current time of the drain budget. The injected source wins over the
+    /// steady clock; production always uses the steady clock.
+    [[nodiscard]] auto budget_now_ns() const -> std::int64_t;
+
     play_gateway &gateway_;
     chunk_packet_source source_{};
     chunk_encoder encoder_{};
+    budget_clock now_{};
     std::unordered_map<std::uint64_t, stream_state> streams_{};
     cache_map cache_{};
     cache_order cache_recent_{};
