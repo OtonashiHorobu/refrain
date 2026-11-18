@@ -2653,6 +2653,9 @@ void place_jigsaw_piece(const structure_place_context &context,
 void place_structure_piece(const structure_place_context &context,
                            const structure_piece_record &piece,
                            worldgen_random &random) {
+    if (context.bind_feature_chunk != nullptr && context.chunk != nullptr) {
+        context.bind_feature_chunk(*context.chunk);
+    }
     if (piece.jigsaw.has_value()) {
         place_jigsaw_piece(context, piece, random);
     } else if (piece.type == "minecraft:btp") {

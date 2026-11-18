@@ -46,6 +46,14 @@ class structure_feature_placer {
     /// configured reference is reported as `not_found`.
     [[nodiscard]] auto load(std::span<const std::string> ids) -> status;
 
+    /// Binds the chunk whose features step places the piece. A feature pool
+    /// element runs against the chunk that receives its piece, so the feature
+    /// reads that chunk's generation bounds and heightmaps; the context the
+    /// placer was constructed from names the region, the state table and the
+    /// level-wide seed only. Every placement of a piece that can contain a
+    /// feature element needs a bound chunk.
+    void bind_chunk(proto_chunk &chunk);
+
     /// Runs one placed feature with the caller's random stream at `position`.
     /// Returns false when the id was not loaded or the feature placed nothing.
     [[nodiscard]] auto place(std::string_view id, worldgen_random &random,

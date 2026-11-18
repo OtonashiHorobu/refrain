@@ -517,6 +517,178 @@ auto make_terrain_generator(generation_target target,
     return created ? std::move(*created) : nullptr;
 }
 
+/// Resolves the datapack root and the template root a tiled generation case
+/// needs. The templates are extracted beside the datapack by
+/// `scripts/fetch-content.sh`; a checkout that never staged them reports the
+/// skip with the variable that points at them.
+auto tiled_content_roots(std::string &data_root, std::string &templates_root)
+    -> bool {
+    if (const char *override = environment("REFRAIN_VANILLA_WORLDGEN")) {
+        data_root = override;
+    } else {
+        const auto snapshot = refrain::test_support::vanilla_data();
+        if (!snapshot.available) {
+            return false;
+        }
+        data_root = snapshot.path;
+    }
+    const char *templates = environment("REFRAIN_VANILLA_STRUCTURES");
+    if (templates == nullptr) {
+        std::clog << "worldgen: tiled feature-pool regression skipped; set "
+                     "REFRAIN_VANILLA_STRUCTURES to the extracted template "
+                     "root\n";
+        return false;
+    }
+    templates_root = templates;
+    return true;
+}
+
+/// Hashes block states, biome cells and the four final heightmaps of one
+/// generated column.
+auto tiled_chunk_digest(const proto_chunk &chunk,
+                        const std::vector<std::string> &biome_names)
+    -> std::uint64_t {
+    const auto mix = [](std::uint64_t hash, std::uint64_t value) {
+        constexpr std::uint64_t multiplier = 1099511628211ULL;
+        for (unsigned shift = 0; shift < 64; shift += 8) {
+            hash ^= (value >> shift) & 0xFFU;
+            hash *= multiplier;
+        }
+        return hash;
+    };
+    const auto mix_bytes = [](std::uint64_t hash, std::string_view text) {
+        constexpr std::uint64_t multiplier = 1099511628211ULL;
+        for (const char character : text) {
+            hash ^= static_cast<unsigned char>(character);
+            hash *= multiplier;
+        }
+        return hash;
+    };
+    auto hash = std::uint64_t{0xcbf29ce484222325ULL};
+    hash = mix(hash, static_cast<std::uint64_t>(chunk.chunk_x()));
+    hash = mix(hash, static_cast<std::uint64_t>(chunk.chunk_z()));
+    for (jint y = chunk.min_y(); y < chunk.min_y() + chunk.height(); ++y) {
+        for (jint z = 0; z < 16; ++z) {
+            for (jint x = 0; x < 16; ++x) {
+                hash = mix_bytes(hash,
+                                 chunk.table().name(chunk.state_at(x, y, z)));
+            }
+        }
+    }
+    for (jint y = chunk.min_y(); y < chunk.min_y() + chunk.height(); y += 4) {
+        for (jint z = 0; z < 16; z += 4) {
+            for (jint x = 0; x < 16; x += 4) {
+                const auto id = chunk.biome_at(x, y, z);
+                if (static_cast<std::size_t>(id) < biome_names.size()) {
+                    hash = mix_bytes(hash, biome_names[id]);
+                } else {
+                    hash = mix(hash, id);
+                }
+            }
+        }
+    }
+    for (const auto kind :
+         {heightmap_kind::world_surface, heightmap_kind::ocean_floor,
+          heightmap_kind::motion_blocking,
+          heightmap_kind::motion_blocking_no_leaves}) {
+        for (jint z = 0; z < 16; ++z) {
+            for (jint x = 0; x < 16; ++x) {
+                hash = mix(hash, static_cast<std::uint64_t>(
+                                     chunk.first_available(kind, x, z)));
+            }
+        }
+    }
+    return hash;
+}
+
+/// The tiled generator places structure pieces for the decorated chunks of a
+/// tile. A snowy village in chunk (2, 0) of seed 368560065 has
+/// `feature_pool_element` pieces that place `minecraft:block_pile` features;
+/// a feature placer that runs an element without binding the receiving chunk
+/// dereferences the missing chunk instead of placing. One tile of edge 1 keeps
+/// the case bounded while covering the placement.
+void run_tile_feature_pool_case() {
+    std::string data_root{};
+    std::string templates_root{};
+    if (!tiled_content_roots(data_root, templates_root)) {
+        return;
+    }
+    auto created = chunk_generator::create(chunk_generator_config{
+        .data_root = data_root,
+        .templates_root = templates_root,
+        .seed = 368560065,
+        .kind = dimension_kind::overworld,
+        .target = generation_target::full,
+        .tile_size = 1,
+    });
+    expect(created.has_value()) << (created ? "" : created.error().message);
+    if (!created) {
+        return;
+    }
+    const auto generated =
+        (*created)->generate_area_tiled(chunk_pos{.x = 2, .z = 0}, 1, 1, 1);
+    expect(generated.has_value())
+        << (generated ? "" : generated.error().message);
+    if (!generated) {
+        return;
+    }
+    expect(generated->size() == 1);
+    if (generated->size() != 1) {
+        return;
+    }
+    expect((*generated)[0] != nullptr);
+    if ((*generated)[0] == nullptr) {
+        return;
+    }
+    // Frozen with the village placement bound to its receiving chunk; the
+    // digest moves only when the generated tile changes on purpose.
+    constexpr std::uint64_t expected_digest = 0xafc7690fd97349c2ULL;
+    const auto digest =
+        tiled_chunk_digest(*(*generated)[0], (*created)->biome_names());
+    if (digest != expected_digest) {
+        std::fprintf(stderr,
+                     "tile regression: chunk (2, 0) digest %016llx, expected "
+                     "%016llx\n",
+                     static_cast<unsigned long long>(digest),
+                     static_cast<unsigned long long>(expected_digest));
+    }
+    expect(digest == expected_digest);
+}
+
+/// A bounded no-crash sweep over seeds through the same tiled structure-piece
+/// path. Only the village structure set runs so each case stays a couple of
+/// seconds. The pinned case above covers the feature-pool element that made
+/// this path crash; the sweep guards the path against a regression that does
+/// not depend on a village reaching the tested tile.
+void run_tile_structure_sweep() {
+    std::string data_root{};
+    std::string templates_root{};
+    if (!tiled_content_roots(data_root, templates_root)) {
+        return;
+    }
+    for (const jlong seed : {jlong{368560065}, jlong{1}, jlong{12345}}) {
+        auto created = chunk_generator::create(chunk_generator_config{
+            .data_root = data_root,
+            .templates_root = templates_root,
+            .seed = seed,
+            .kind = dimension_kind::overworld,
+            .target = generation_target::full,
+            .structure_sets = {"minecraft:villages"},
+            .tile_size = 1,
+        });
+        expect(created.has_value()) << (created ? "" : created.error().message);
+        if (!created) {
+            return;
+        }
+        const auto generated =
+            (*created)->generate_area_tiled(chunk_pos{.x = 2, .z = 0}, 1, 1, 1);
+        expect(generated.has_value())
+            << (generated ? "" : generated.error().message);
+        expect(generated.has_value() && generated->size() == 1 &&
+               (*generated)[0] != nullptr);
+    }
+}
+
 } // namespace
 
 suite<"worldgen/chunk-generator"> chunk_generator_tests = [] {
@@ -1149,4 +1321,10 @@ suite<"worldgen/chunk-generator"> chunk_generator_tests = [] {
         expect((*full)->status() == chunk_status::full);
         expect(same_chunk(**features, **full, false));
     };
+
+    "a tiled chunk with village feature pool elements generates and keeps its "
+    "digest"_test = [] { run_tile_feature_pool_case(); };
+
+    "a bounded seed sweep generates tiled structure pieces without crashing"_test =
+        [] { run_tile_structure_sweep(); };
 };

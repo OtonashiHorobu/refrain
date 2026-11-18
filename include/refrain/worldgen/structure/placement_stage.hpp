@@ -50,6 +50,14 @@ struct structure_place_context {
     /// feature piece.
     std::function<bool(std::string_view, worldgen_random &, const block_pos &)>
         place_feature{};
+    /// Binds `place_feature` to the chunk that receives the piece.
+    /// `place_structure_piece` calls it with `chunk` before placing anything,
+    /// so a feature element reads the receiving chunk's generation bounds and
+    /// heightmaps. The placer behind `place_feature` is built once per
+    /// generation region, from a context that does not name a single chunk, so
+    /// the chunk has to be bound per piece; a context without feature elements
+    /// leaves this null.
+    std::function<void(proto_chunk &)> bind_feature_chunk{};
     /// Biome and temperature probes for a feature pool element. The reference
     /// places the element against the same level the chunk generator runs on,
     /// so its snow, freeze and biome filters read the generation biome and the

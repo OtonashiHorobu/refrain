@@ -44,15 +44,9 @@ structure_feature_placer::structure_feature_placer(
     const feature::feature_data_set &data)
     : context_{&context}, data_{&data}, registry_{*context.registry} {
     feature_context_.placement.region = context.region;
-    feature_context_.placement.chunk = context.chunk;
     feature_context_.placement.states = context.states;
     if (context.chunk != nullptr) {
-        feature_context_.placement.generation = provider::generation_context{
-            .min_y = context.chunk->min_y(),
-            .height = context.chunk->height(),
-            .sea_level = context.sea_level,
-            .world_seed = context.seed,
-        };
+        bind_chunk(*context.chunk);
     }
     feature_context_.placement.height = [this](heightmap_kind kind, jint x,
                                                jint z) -> jint {
@@ -100,6 +94,16 @@ auto structure_feature_placer::load(std::span<const std::string> ids)
                        "feature placement needs a block state registry")};
     }
     return registry_.load_placed(*data_, ids);
+}
+
+void structure_feature_placer::bind_chunk(proto_chunk &chunk) {
+    feature_context_.placement.chunk = &chunk;
+    feature_context_.placement.generation = provider::generation_context{
+        .min_y = chunk.min_y(),
+        .height = chunk.height(),
+        .sea_level = context_->sea_level,
+        .world_seed = context_->seed,
+    };
 }
 
 auto structure_feature_placer::place(std::string_view id,
