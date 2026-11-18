@@ -1349,10 +1349,15 @@ void light_engine::attach(world &owner) {
         state.section_count =
             static_cast<std::uint16_t>(column->sections.size());
         impl_->refresh_floors(state);
-        // The same completeness proof the load path uses: a claim that does not
-        // verify is cleared so the second pass below relights the column.
-        if (column->storage.light_correct && !impl_->adopt_layers(state)) {
-            column->storage.light_correct = false;
+        // The same proof the load path uses: the arrays must be complete and
+        // must have been lit under the current light table. A claim that fails
+        // either check is cleared so the second pass below relights the column.
+        if (column->storage.light_correct) {
+            const auto table_matches{column->storage.light_table ==
+                                     impl_->light_table_fingerprint_};
+            if (!table_matches || !impl_->adopt_layers(state)) {
+                column->storage.light_correct = false;
+            }
         }
         impl_->columns_.emplace(pos, std::move(state));
     }
@@ -1516,7 +1521,14 @@ auto block_light_table::fingerprint() const noexcept -> std::uint64_t {
             state *= prime;
         }
     };
-    std::uint64_t combined{0};
+    // The table is a hash map, so its iteration order must not decide the
+    // value: accumulate the per-state hashes in commutative accumulators and
+    // combine them once after the loop. The sum and the rotated xor each sort
+    // out every permutation of the entries; adding or rotating them together
+    // inside the loop would make the carry of one step depend on the previous
+    // order.
+    std::uint64_t sum{0};
+    std::uint64_t xored{0};
     for (const auto &[key, property] : properties_) {
         std::uint64_t entry{offset};
         for (const char character : key) {
@@ -1535,12 +1547,10 @@ auto block_light_table::fingerprint() const noexcept -> std::uint64_t {
                 }
             }
         }
-        // Order-independent combine: the table is a hash map, so its iteration
-        // order must not decide the value. A sum and a rotated xor of the
-        // per-state hashes sort out every permutation.
-        combined += entry;
-        combined ^= std::rotl(entry, 17);
+        sum += entry;
+        xored ^= std::rotl(entry, 17);
     }
+    std::uint64_t combined{sum ^ std::rotl(xored, 29)};
     combined ^= static_cast<std::uint64_t>(properties_.size()) * prime;
     // Zero is the conservative "unknown table" value, so a real table never
     // folds onto it.

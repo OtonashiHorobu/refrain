@@ -1495,45 +1495,109 @@ suite<"sim/light"> light_tests = [] {
 
     "moving a world relights a column whose stored light does not verify"_test =
         [] {
-            world_fixture fixture{};
-            auto created{
-                world::world_store::create(fixture.directory.string())};
-            expect(created.has_value());
-            if (!created) {
-                return;
+            const auto check = [](auto corrupt) {
+                world_fixture fixture{};
+                auto created{
+                    world::world_store::create(fixture.directory.string())};
+                expect(created.has_value());
+                if (!created) {
+                    return;
+                }
+                fixture.store.emplace(std::move(*created));
+                const auto pos{world::chunk_pos{0, 0}};
+                auto world{open_world(fixture)};
+                expect(world.has_value());
+                if (!world) {
+                    return;
+                }
+                const std::array<block_override, 0> overrides{};
+                expect(world->insert_chunk(pos, make_column(overrides))
+                           .has_value());
+                expect(world->flush().has_value());
+                expect(world->unload_chunk(pos).has_value());
+                expect(world->ensure_chunk(pos).has_value());
+                const auto complete{light_bytes_of(*world, pos)};
+                auto *column{world->find_chunk(pos)};
+                expect(column != nullptr);
+                if (column == nullptr) {
+                    return;
+                }
+                expect(column->storage.light_correct);
+                // Break one part of the claim without clearing the flag: the
+                // moved engine must run the same proof as the load path.
+                corrupt(column->storage);
+                sim::world moved{std::move(*world)};
+                expect(eq(moved.light().stats().columns_lit, std::uint64_t{1}));
+                expect(light_bytes_of(moved, pos) == complete);
+                const auto *reloaded{moved.find_chunk(pos)};
+                expect(reloaded != nullptr);
+                if (reloaded == nullptr) {
+                    return;
+                }
+                expect(reloaded->storage.light_correct);
+            };
+            // A claim whose layer set is incomplete.
+            check([](storage::chunk &column) {
+                column.light_sections.pop_back();
+            });
+            // A complete layer set that was lit under another light table.
+            check([](storage::chunk &column) {
+                column.light_table ^= 0x9E3779B97F4A7C15ULL;
+            });
+        };
+
+    "the light-table fingerprint does not depend on map iteration order"_test =
+        [] {
+            constexpr std::size_t entry_count{64};
+            std::vector<std::string> keys{};
+            keys.reserve(entry_count);
+            for (std::size_t index{0}; index < entry_count; ++index) {
+                keys.push_back("minecraft:probe_" + std::to_string(index));
             }
-            fixture.store.emplace(std::move(*created));
-            const auto pos{world::chunk_pos{0, 0}};
-            std::vector<std::byte> complete{};
-            auto world{open_world(fixture)};
-            expect(world.has_value());
-            if (!world) {
-                return;
-            }
-            const std::array<block_override, 0> overrides{};
-            expect(
-                world->insert_chunk(pos, make_column(overrides)).has_value());
-            expect(world->flush().has_value());
-            expect(world->unload_chunk(pos).has_value());
-            expect(world->ensure_chunk(pos).has_value());
-            complete = light_bytes_of(*world, pos);
-            auto *column{world->find_chunk(pos)};
-            expect(column != nullptr);
-            if (column == nullptr) {
-                return;
-            }
-            expect(column->storage.light_correct);
-            // Break the claim without clearing the flag: the moved engine must
-            // run the same completeness proof as the load path.
-            column->storage.light_sections.pop_back();
-            sim::world moved{std::move(*world)};
-            expect(eq(moved.light().stats().columns_lit, std::uint64_t{1}));
-            expect(light_bytes_of(moved, pos) == complete);
-            const auto *reloaded{moved.find_chunk(pos)};
-            expect(reloaded != nullptr);
-            if (reloaded == nullptr) {
-                return;
-            }
-            expect(reloaded->storage.light_correct);
+            const auto build = [&keys](bool reverse) {
+                sim::block_light_table table{};
+                sim::block_light_shape shape{};
+                sim::block_light_box box{};
+                box.bounds = {0.0, 0.25, 0.0, 1.0, 0.75, 1.0};
+                shape.faces[static_cast<std::size_t>(sim::light_face::up)]
+                    .push_back(box);
+                const auto *shape_ptr = table.append_shape(std::move(shape));
+                for (std::size_t step{0}; step < keys.size(); ++step) {
+                    const auto index{reverse ? keys.size() - 1 - step : step};
+                    table.insert(
+                        keys[index],
+                        sim::block_light_property{
+                            .emission = static_cast<std::uint8_t>(index % 16),
+                            .dampening =
+                                static_cast<std::uint8_t>(index % 14 + 1),
+                            .shape = index % 7 == 0 ? shape_ptr : nullptr});
+                }
+                return table;
+            };
+            auto ordered{build(false)};
+            auto reversed{build(true)};
+            expect(ordered.fingerprint() != 0U);
+            expect(ordered.fingerprint() == reversed.fingerprint());
+
+            // Equal properties under distinct keys still combine commutatively,
+            // and different content still changes the value.
+            const auto build_equal = [](bool reverse) {
+                sim::block_light_table table{};
+                for (std::size_t step{0}; step < 16; ++step) {
+                    const auto index{reverse ? 15 - step : step};
+                    table.insert("minecraft:equal_" + std::to_string(index),
+                                 sim::block_light_property{.emission = 3,
+                                                           .dampening = 2});
+                }
+                return table;
+            };
+            auto first{build_equal(false)};
+            auto second{build_equal(true)};
+            expect(first.fingerprint() == second.fingerprint());
+            auto changed{build_equal(false)};
+            changed.insert(
+                "minecraft:equal_extra",
+                sim::block_light_property{.emission = 3, .dampening = 2});
+            expect(changed.fingerprint() != first.fingerprint());
         };
 };
