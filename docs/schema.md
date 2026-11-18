@@ -306,6 +306,14 @@ On-disk formats keep a monotonic integer format version. A breaking layout
 change bumps it and either migrates older data or refuses it with the supported
 versions named. The schema hash identifies the build; it is not a version.
 
+The RWF chunk record evolves by appending fields at the end of its field set.
+An absent field decodes to a conservative default, so a record written before
+the field existed stays readable without a version bump; the field-set version
+moves only when an older record cannot be read as the current layout. The
+light-correct flag was added that way: a record without it reads as "light not
+correct", and the loader relights the column instead of trusting arrays the
+record does not describe.
+
 ### Version record
 
 | Contract | Version | Composition |

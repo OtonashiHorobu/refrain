@@ -277,6 +277,10 @@ class world {
     /// Load the chunk if needed. Fails with `not_found` when the imported
     /// world has no such chunk.
     ///
+    /// A stored record whose light is marked correct and whose nibble arrays
+    /// are complete loads with that light; any other record is relit from its
+    /// blocks when the column joins the loaded set.
+    ///
     /// TODO: a chunk that is absent from the store is never generated, so the
     /// server cannot serve a world it did not import; the runtime generator
     /// needs an insertion path here.
@@ -284,10 +288,11 @@ class world {
 
     /// Adopt a generated column into the runtime world.
     ///
-    /// The column is validated and decoded like a stored chunk, marked dirty so
-    /// the snapshot writer persists it, and returned so the caller can add a
-    /// ticket. Fails with `already_exists` when the chunk is already loaded
-    /// and with `parse_error` when the record is invalid.
+    /// The column is validated and decoded like a stored chunk, always lit from
+    /// its blocks (generation carries no light), marked dirty so the snapshot
+    /// writer persists it, and returned so the caller can add a ticket. Fails
+    /// with `already_exists` when the chunk is already loaded and with
+    /// `parse_error` when the record is invalid.
     [[nodiscard]] auto insert_chunk(const chunk_pos &pos,
                                     storage_chunk generated) -> result<chunk *>;
 

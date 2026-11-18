@@ -626,6 +626,32 @@ surface position and compare a single chunk. Set
 `REFRAIN_VANILLA_FEATURE_REGION` and `REFRAIN_VANILLA_FEATURE_DATA` at the
 generated world.
 
+## Persisted light
+
+Generation produces blocks, not light. A column is lit when the runtime adopts
+it into the loaded set, after feature placement, and the chunk record is saved
+with the computed arrays. The record also carries a light-correct flag, set only
+when the stored arrays are the complete layer set the column's block sections
+require: one layer per block section plus the padding layers below `yPos` and
+above the top section, with both nibble arrays at full length. A record written
+before the field existed, an imported Anvil column and a column whose light a
+block edit changed all carry the conservative value.
+
+A load reuses the saved arrays when the flag is set and the layer set verifies.
+The initial light pass does not run; the engine only rebuilds the sky-source
+index that later edits need. Any other record is relit from its blocks, which
+is what a user of an older world or a freshly imported one sees. A block edit
+clears the flag, and only a drain that leaves no queued update sets it again, so
+a record saved in the middle of a light update never claims its arrays are
+complete. Trusting the flag assumes the save wrote arrays that were consistent
+with the neighbours it recorded: a column whose neighbour is edited while the
+column itself is not resident keeps the light it was saved with, exactly like
+the reference, until an edit or a relight recomputes it.
+
+The flag is an appended field of the RWF chunk record. A reader that predates it
+skips the unknown field and relights the column, so the chunk field-set version
+stays 1.
+
 ## Verification status
 
 The reference-backed suites currently cover:

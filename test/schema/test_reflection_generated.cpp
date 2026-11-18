@@ -46,11 +46,12 @@ static_assert(reflect::name<ridl_struct> ==
               "refrain::services::storage::chunk_key");
 
 static_assert(reflect::reflected<chunk_record>);
-static_assert(reflect::field_count<chunk_record> == 17U);
+static_assert(reflect::field_count<chunk_record> == 18U);
 static_assert(reflect::field_name<chunk_record, 0>() == "format_version");
 static_assert(reflect::field_name<chunk_record, 1>() == "status");
 static_assert(reflect::field_name<chunk_record, 15>() == "light_sections");
 static_assert(reflect::field_name<chunk_record, 16>() == "entities");
+static_assert(reflect::field_name<chunk_record, 17>() == "light_correct");
 static_assert(reflect::name<chunk_record> == "refrain::storage::chunk");
 
 // Member pointers keep the exact declared type, including container fields: a
@@ -77,7 +78,7 @@ const suite reflection_generated_tests = [] {
                std::string_view::npos);
         expect(reflect::name<chunk_record>.find("chunk") !=
                std::string_view::npos);
-        expect(reflect::field_count<chunk_record> == std::size_t{17});
+        expect(reflect::field_count<chunk_record> == std::size_t{18});
     };
 
     "schema/generated reflection walks fields in declaration order"_test = [] {

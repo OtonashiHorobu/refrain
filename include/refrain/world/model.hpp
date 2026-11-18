@@ -70,9 +70,13 @@ inline constexpr std::size_t heightmap_columns = 256;
 /// versions named. It never resets or decreases; the schema hash identifies
 /// the build independently.
 ///
-/// The entity list was appended as a new RWF field, so a record written before
-/// it existed still decodes with an empty list and this build keeps reading
-/// every older record: the change is additive and does not bump the version.
+/// The entity list and the light-correct flag were appended as new RWF fields,
+/// so a record written before they existed still decodes (with an empty entity
+/// list and with the conservative "light not correct" value) and this build
+/// keeps reading every older record: the changes are additive and do not bump
+/// the version. The flag is only trusted after the loader verifies that the
+/// stored nibble arrays are complete; a false or absent value means the
+/// lighting engine relights the column.
 inline constexpr std::uint16_t chunk_format_version = 1;
 
 /// Section Y bounds accepted by the model. Vanilla 26.3 overworld uses

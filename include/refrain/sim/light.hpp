@@ -7,8 +7,10 @@
 // The engine keeps the authoritative light arrays in each column's storage
 // record (`light_sections`), so the chunk codec, the world writer and the
 // `level_chunk_with_light` encoder all read the same bytes without a copy. It
-// initialises a column when it joins the loaded set, propagates across column
-// and section borders, and updates light incrementally after a block edit.
+// initialises a column when it joins the loaded set - reusing the persisted
+// arrays when the record marks them correct, relighting from the blocks
+// otherwise - propagates across column and section borders, and updates light
+// incrementally after a block edit.
 //
 // Model:
 //  * light levels are 0..15; a block's `dampening` decides how much a path
@@ -188,9 +190,12 @@ class block_light_table {
 /// rather than atomics. A snapshot covers the window since the last
 /// `reset_stats()`.
 struct light_stats {
-    /// Columns whose initial light pass ran: a column joined the loaded set,
-    /// or an edit forced a full relight.
+    /// Columns whose initial light pass ran: a column joined the loaded set
+    /// without correct persisted light, or an edit forced a full relight.
     std::uint64_t columns_lit{0};
+    /// Columns that joined the loaded set with persisted light reused as-is:
+    /// the stored arrays were complete and the initial light pass did not run.
+    std::uint64_t columns_trusted{0};
     /// The subset of the drains below that a column's initial light pass ran:
     /// calls, queue entries processed and wall time. A column load drains once,
     /// so this is one call per `columns_lit` in the common case.
@@ -231,8 +236,11 @@ class light_engine {
     /// arrays travel with the storage records, so nothing is recomputed.
     void attach(world &owner);
 
-    /// A column joined the loaded set: allocate its light layers, compute sky
-    /// and block light and propagate into the loaded neighbours.
+    /// A column joined the loaded set. When the storage record marks its light
+    /// correct and the stored layer set is complete, the persisted nibble
+    /// arrays are adopted and no light is propagated; any other record is
+    /// zeroed and lit from its blocks, and the column's light-correct marker is
+    /// set once that pass has completed.
     void column_loaded(chunk &column);
 
     /// The world's light table changed: drop the cached per-state properties.

@@ -253,6 +253,26 @@ append_face_rects(const block_light_shape *shape, light_face face,
     return covers_unit_square(rects.data(), count);
 }
 
+/// Section Ys of the light layers a column requires: one layer per block
+/// section plus the padding layer below `y_pos` and above the top section.
+/// Sections the column does not have - a vertical gap of a sparse record - keep
+/// no layer, because they are air and carry no stored light.
+[[nodiscard]] auto required_light_layers(const chunk &column)
+    -> std::vector<std::int32_t> {
+    std::vector<std::int32_t> layer_ys{};
+    if (column.sections.empty()) {
+        return layer_ys;
+    }
+    const auto top_section{static_cast<std::int32_t>(column.sections.back().y)};
+    layer_ys.reserve(column.sections.size() + 2);
+    layer_ys.push_back(column.y_pos - 1);
+    for (const auto &section : column.sections) {
+        layer_ys.push_back(section.y);
+    }
+    layer_ys.push_back(top_section + 1);
+    return layer_ys;
+}
+
 /// One loaded column as the engine sees it.
 struct column_state {
     chunk *record{nullptr};
@@ -350,6 +370,11 @@ struct light_engine::impl {
     std::deque<node_pos> check_queue_{};
     std::array<layer_queues, layer_count> queues_{};
     std::set<light_section_change> changes_{};
+    /// Columns an edit made stale, in position order. A column leaves the set
+    /// - and its storage record is marked correct again - only when a drain
+    /// processed every queued update, so a partially drained edit keeps the
+    /// saved flag conservative.
+    std::set<chunk_pos> dirty_columns_{};
     std::optional<chunk_pos> suppressed_origin_{};
     std::unordered_map<block_state_id, block_light_property> properties_{};
 
@@ -358,6 +383,7 @@ struct light_engine::impl {
     /// `pending_peak_` is mutable because a queue observation updates it
     /// through the const `pending_nodes()` accessor.
     std::uint64_t columns_lit_{0};
+    std::uint64_t columns_trusted_{0};
     std::uint64_t initial_drain_calls_{0};
     std::uint64_t initial_nodes_{0};
     std::uint64_t initial_ns_{0};
@@ -481,6 +507,31 @@ struct light_engine::impl {
             .pos = pos, .section_y = static_cast<std::int8_t>(section_y)});
     }
 
+    /// Record that an edit made `pos`'s light stale: the storage record must
+    /// not claim correctness until a drain finishes the incremental relight.
+    void mark_light_dirty(const chunk_pos &pos) {
+        if (auto *column{find_column(pos.x, pos.z)}; column != nullptr) {
+            column->record->storage.light_correct = false;
+        }
+        dirty_columns_.insert(pos);
+    }
+
+    /// A drain that leaves nothing queued has applied every light change, so
+    /// the columns an edit marked stale hold consistent arrays again and the
+    /// storage records may claim correctness once more.
+    void finish_drain() {
+        if (queue_size() != 0) {
+            return;
+        }
+        for (const auto &pos : dirty_columns_) {
+            const auto found{columns_.find(pos)};
+            if (found != columns_.end() && found->second.record != nullptr) {
+                found->second.record->storage.light_correct = true;
+            }
+        }
+        dirty_columns_.clear();
+    }
+
     [[nodiscard]] auto level_at(const node_pos &node, light_layer which)
         -> std::uint8_t {
         auto *column{find_column(section_coord(node.x), section_coord(node.z))};
@@ -577,7 +628,8 @@ struct light_engine::impl {
     /// carries no stored light.
     [[nodiscard]] auto reset_layers(column_state &column) -> bool {
         auto &chunk{*column.record};
-        if (chunk.sections.empty()) {
+        const auto layer_ys{required_light_layers(chunk)};
+        if (layer_ys.empty()) {
             chunk.storage.light_sections.clear();
             column.layers.clear();
             column.top_layer_y = chunk.y_pos;
@@ -585,17 +637,6 @@ struct light_engine::impl {
         }
         const auto top_section{
             static_cast<std::int32_t>(chunk.sections.back().y)};
-        std::vector<std::int32_t> layer_ys{};
-        layer_ys.reserve(chunk.sections.size() + 2);
-        for (const auto &section : chunk.sections) {
-            layer_ys.push_back(static_cast<std::int32_t>(section.y));
-        }
-        if (layer_ys.front() > chunk.y_pos - 1) {
-            layer_ys.insert(layer_ys.begin(), chunk.y_pos - 1);
-        }
-        if (layer_ys.back() < top_section + 1) {
-            layer_ys.push_back(top_section + 1);
-        }
         chunk.storage.light_sections.clear();
         chunk.storage.light_sections.reserve(layer_ys.size());
         for (const auto y : layer_ys) {
@@ -612,6 +653,38 @@ struct light_engine::impl {
             column.layers.push_back(
                 column_state::layer_ref{.y = layer.y, .layer = &layer});
         }
+        return true;
+    }
+
+    /// Rebuild the layer index from the persisted light arrays and report
+    /// whether the record can be trusted: exactly the required layer set, both
+    /// nibble arrays at full length. A false answer means the stored light is
+    /// incomplete or stale, so the caller relights the column from its blocks
+    /// instead of reusing the arrays.
+    [[nodiscard]] auto adopt_layers(column_state &column) -> bool {
+        auto &chunk{*column.record};
+        const auto required{required_light_layers(chunk)};
+        const auto &stored{chunk.storage.light_sections};
+        if (stored.size() != required.size()) {
+            return false;
+        }
+        for (std::size_t index{0}; index < required.size(); ++index) {
+            if (static_cast<std::int32_t>(stored[index].y) != required[index] ||
+                stored[index].sky_light.size() != light_bytes ||
+                stored[index].block_light.size() != light_bytes) {
+                return false;
+            }
+        }
+        column.layers.clear();
+        column.layers.reserve(stored.size());
+        for (auto &layer : chunk.storage.light_sections) {
+            column.layers.push_back(
+                column_state::layer_ref{.y = layer.y, .layer = &layer});
+        }
+        column.top_layer_y =
+            chunk.sections.empty()
+                ? chunk.y_pos
+                : static_cast<std::int32_t>(chunk.sections.back().y) + 1;
         return true;
     }
 
@@ -1170,6 +1243,7 @@ struct light_engine::impl {
         ++drain_calls_;
         drain_nodes_ += processed;
         drain_ns_ += elapsed_ns;
+        finish_drain();
         return processed;
     }
 
@@ -1177,6 +1251,7 @@ struct light_engine::impl {
         const auto waiting{pending_nodes()};
         return light_stats{
             .columns_lit = columns_lit_,
+            .columns_trusted = columns_trusted_,
             .initial_drain_calls = initial_drain_calls_,
             .initial_nodes = initial_nodes_,
             .initial_ns = initial_ns_,
@@ -1191,6 +1266,7 @@ struct light_engine::impl {
 
     void reset_stats() noexcept {
         columns_lit_ = 0;
+        columns_trusted_ = 0;
         initial_drain_calls_ = 0;
         initial_nodes_ = 0;
         initial_ns_ = 0;
@@ -1212,7 +1288,20 @@ auto light_engine::operator=(light_engine &&other) noexcept
 
 light_engine::~light_engine() = default;
 
-void light_engine::reload_properties() { impl_->properties_.clear(); }
+void light_engine::reload_properties() {
+    impl_->properties_.clear();
+    // Every stored array was computed with the previous table, so no loaded
+    // column is correct under the new one; `world` relights them right after
+    // installing the table, and this keeps a later `column_loaded` from
+    // adopting arrays the new table did not produce.
+    for (auto &[pos, column] : impl_->columns_) {
+        static_cast<void>(pos);
+        if (column.record != nullptr) {
+            column.record->storage.light_correct = false;
+        }
+    }
+    impl_->dirty_columns_.clear();
+}
 
 void light_engine::attach(world &owner) {
     impl_->owner_ = &owner;
@@ -1239,14 +1328,39 @@ void light_engine::attach(world &owner) {
         impl_->refresh_floors(state);
         impl_->columns_.emplace(pos, std::move(state));
     }
+    // A column that does not claim correct light was mid-relight when the
+    // engine took over. The queue that carried the pending update does not
+    // survive the move, so relight the column instead of keeping arrays the
+    // engine cannot prove.
+    for (const auto &pos : owner.chunk_positions()) {
+        auto *column{owner.find_chunk(pos)};
+        if (column != nullptr && !column->storage.light_correct) {
+            column_loaded(*column);
+        }
+    }
 }
 
 void light_engine::column_loaded(chunk &column) {
     impl_->clear_cache();
     auto &state{impl_->columns_[column.pos]};
     state.record = &column;
-    if (!impl_->reset_layers(state)) {
+    // A record that claims correct light is only reused when the stored arrays
+    // are exactly the complete layer set the blocks require. Everything else -
+    // old data without the marker, an imported or edited column, a record whose
+    // arrays were compacted away - cannot be proven correct and is relit.
+    if (column.storage.light_correct && impl_->adopt_layers(state)) {
+        impl_->dirty_columns_.erase(column.pos);
         impl_->rebuild_section_lookup(state);
+        // The stored light already covers the column; the sky-source index is
+        // derived from the blocks and later edits need it.
+        impl_->refresh_floors(state);
+        ++impl_->columns_trusted_;
+        return;
+    }
+    if (!impl_->reset_layers(state)) {
+        impl_->dirty_columns_.erase(column.pos);
+        impl_->rebuild_section_lookup(state);
+        column.storage.light_correct = true;
         return;
     }
     impl_->rebuild_section_lookup(state);
@@ -1258,15 +1372,26 @@ void light_engine::column_loaded(chunk &column) {
     // reached a neighbour column needs a separate update.
     static_cast<void>(impl_->drain(std::numeric_limits<std::size_t>::max(),
                                    drain_origin::initial));
+    // The initial pass has completed: the stored arrays are complete and the
+    // same bytes the chunk packet carries. The drain above also cleared the
+    // column's stale marker, so a later save writes the correct value.
+    column.storage.light_correct = true;
 }
 
 void light_engine::column_unloaded(const chunk_pos &pos) {
     impl_->columns_.erase(pos);
+    impl_->dirty_columns_.erase(pos);
     impl_->clear_cache();
 }
 
 void light_engine::block_changed(const block_pos &pos) {
     ++impl_->block_edits_;
+    // The edit changes the light the blocks imply. Until the update this call
+    // queues has been fully drained, the stored arrays are stale and the
+    // column must not claim correctness; `finish_drain()` clears the marker
+    // once the incremental relight completed.
+    const chunk_pos changed_column{section_coord(pos.x), section_coord(pos.z)};
+    impl_->mark_light_dirty(changed_column);
     // A block edit can add a section the column did not have: above the current
     // top, or inside a vertical gap of a sparse imported column. The light
     // layer set follows the block section set, and a layer that does not exist
@@ -1274,8 +1399,7 @@ void light_engine::block_changed(const block_pos &pos) {
     // is rebuilt instead of extending the index in place. Comparing the section
     // count catches an insertion anywhere; the top comparison is the same
     // answer for an appended section and documents the common case.
-    auto *column{
-        impl_->find_column(section_coord(pos.x), section_coord(pos.z))};
+    auto *column{impl_->find_column(changed_column.x, changed_column.z)};
     if (column != nullptr) {
         const auto &sections{column->record->sections};
         const auto top_changed{!sections.empty() &&

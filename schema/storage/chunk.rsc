@@ -214,4 +214,16 @@ record chunk {
     /// RWF record omits the TLV field in that case so an entity-free column
     /// keeps its canonical hash.
     entities: array<entity_record>;
+
+    /// True when `light_sections` holds the column's complete light: the full
+    /// layer set its block sections require, with both nibble arrays at
+    /// `light_nibble_bytes`. The lighting engine sets it only after it has lit
+    /// the column, and clears it when an edit makes the arrays stale until the
+    /// incremental relight completes. False is the conservative value: a
+    /// record written before this field existed, an imported column and a
+    /// column with pending light work all read false, and the loader relights
+    /// such a column instead of trusting its arrays. Appended after the field
+    /// set was defined, so the chunk field-set version stays 1: an older
+    /// reader skips the unknown TLV field and relights like it always did.
+    light_correct: bool = false;
 }

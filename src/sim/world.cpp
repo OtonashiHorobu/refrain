@@ -437,6 +437,11 @@ auto world::insert_chunk(const chunk_pos &pos, storage_chunk generated)
         return std::unexpected{std::move(decoded.error())};
     }
     decoded->dirty = true;
+    // Generation produces blocks, not light. The column is lit by
+    // `column_loaded()` below and marks itself correct only after that pass
+    // completed, so an adopted record never carries a trusted flag it did not
+    // earn.
+    decoded->storage.light_correct = false;
     auto [position, inserted]{chunks_.emplace(pos, std::move(*decoded))};
     static_cast<void>(inserted);
     if (auto spawned{spawn_column_entities(position->second)}; !spawned) {

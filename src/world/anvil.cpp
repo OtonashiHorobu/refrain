@@ -824,6 +824,12 @@ struct staged_section {
     if (auto status{read_chunk_extras(root, out)}; !status) {
         return std::unexpected{status.error()};
     }
+    // The source `isLightOn` claim describes the reference engine's arrays, not
+    // this engine's: the import kept every layer it could represent, but a
+    // column is only marked correct after this engine lit it itself. Importing
+    // a world therefore never produces a record that claims its light is
+    // correct, and the first load relights it.
+    out.light_correct = false;
     if (auto valid{validate(out)}; !valid) {
         return std::unexpected{valid.error()};
     }
@@ -1011,8 +1017,12 @@ void append_light(value &target, const light_section &light) {
                                            chunk_status_name(state.status))));
     set_child(root, "LastUpdate", nbt::make_long(state.last_update));
     set_child(root, "InhabitedTime", nbt::make_long(state.inhabited_time));
-    set_child(root, "isLightOn",
-              nbt::make_byte(state.light_sections.empty() ? 0 : 1));
+    // The reference trusts saved light only when the chunk says it is on; write
+    // the same claim this engine makes about the stored arrays. A record whose
+    // light was never lit by this engine - an unmodified import - exports as
+    // off, so the reference relights it instead of trusting arrays this engine
+    // did not verify.
+    set_child(root, "isLightOn", nbt::make_byte(state.light_correct ? 1 : 0));
 
     value sections{nbt::make_list(tag_type::compound)};
     std::size_t light_index{0};

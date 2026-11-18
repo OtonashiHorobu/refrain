@@ -780,6 +780,10 @@ suite world_storage = [] {
         if (light != nullptr) {
             expect(light->sky_light.size() == world::light_nibble_bytes);
         }
+        // The source fixture claims `isLightOn`, but its arrays were written by
+        // the reference engine: the import keeps them and never marks them
+        // correct, so the first runtime load relights the column.
+        expect(!chunk->light_correct);
         const auto baseline{world::semantic_hash(*chunk)};
         expect(static_cast<bool>(baseline));
 
@@ -836,6 +840,7 @@ suite world_storage = [] {
         if (!copy) {
             return;
         }
+        expect(!copy->light_correct);
         expect(world::semantic_hash(*copy).value_or("") == *baseline);
         const auto second_level{second->level()};
         expect(static_cast<bool>(second_level));

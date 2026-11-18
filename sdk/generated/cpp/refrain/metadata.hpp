@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: a4cbf5b67e2cecb5
+// Schema hash: 53e461f034ccb281
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_METADATA_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_METADATA_HPP
@@ -791,29 +791,29 @@ inline constexpr std::array<type_entry, 94> types{
 };
 
 inline constexpr std::array<contract_entry, 20> contracts{
-    contract_entry{"refrain:host.core", 1, 1, 0, "a4cbf5b67e2cecb5", 14},
-    contract_entry{"refrain:host.kernel", 1, 0, 0, "a4cbf5b67e2cecb5", 6},
-    contract_entry{"refrain:host.metadata", 1, 0, 0, "a4cbf5b67e2cecb5", 8},
-    contract_entry{"refrain:host.platform", 1, 0, 0, "a4cbf5b67e2cecb5", 12},
-    contract_entry{"refrain:data.packs", 1, 0, 0, "a4cbf5b67e2cecb5", 4},
-    contract_entry{"refrain:mod.loader", 1, 2, 0, "a4cbf5b67e2cecb5", 5},
-    contract_entry{"refrain:net.protocol", 2, 1, 0, "a4cbf5b67e2cecb5", 14},
-    contract_entry{"refrain:net.session", 1, 0, 0, "a4cbf5b67e2cecb5", 6},
-    contract_entry{"refrain:net.translator", 1, 0, 0, "a4cbf5b67e2cecb5", 2},
-    contract_entry{"refrain:permissions", 1, 0, 0, "a4cbf5b67e2cecb5", 5},
-    contract_entry{"refrain:runtime", 2, 1, 0, "a4cbf5b67e2cecb5", 1},
-    contract_entry{"refrain:session.lifecycle", 1, 0, 0, "a4cbf5b67e2cecb5", 3},
-    contract_entry{"refrain:session.status", 1, 0, 0, "a4cbf5b67e2cecb5", 1},
-    contract_entry{"refrain:session.tab", 1, 0, 0, "a4cbf5b67e2cecb5", 1},
-    contract_entry{"refrain:sim", 1, 1, 0, "a4cbf5b67e2cecb5", 18},
-    contract_entry{"refrain:storage", 1, 0, 0, "a4cbf5b67e2cecb5", 6},
-    contract_entry{"refrain:transport", 1, 0, 0, "a4cbf5b67e2cecb5", 9},
-    contract_entry{"refrain:world", 1, 2, 0, "a4cbf5b67e2cecb5", 12},
-    contract_entry{"refrain:world.migration", 1, 0, 0, "a4cbf5b67e2cecb5", 3},
-    contract_entry{"refrain:worldgen", 1, 0, 0, "a4cbf5b67e2cecb5", 4},
+    contract_entry{"refrain:host.core", 1, 1, 0, "53e461f034ccb281", 14},
+    contract_entry{"refrain:host.kernel", 1, 0, 0, "53e461f034ccb281", 6},
+    contract_entry{"refrain:host.metadata", 1, 0, 0, "53e461f034ccb281", 8},
+    contract_entry{"refrain:host.platform", 1, 0, 0, "53e461f034ccb281", 12},
+    contract_entry{"refrain:data.packs", 1, 0, 0, "53e461f034ccb281", 4},
+    contract_entry{"refrain:mod.loader", 1, 2, 0, "53e461f034ccb281", 5},
+    contract_entry{"refrain:net.protocol", 2, 1, 0, "53e461f034ccb281", 14},
+    contract_entry{"refrain:net.session", 1, 0, 0, "53e461f034ccb281", 6},
+    contract_entry{"refrain:net.translator", 1, 0, 0, "53e461f034ccb281", 2},
+    contract_entry{"refrain:permissions", 1, 0, 0, "53e461f034ccb281", 5},
+    contract_entry{"refrain:runtime", 2, 1, 0, "53e461f034ccb281", 1},
+    contract_entry{"refrain:session.lifecycle", 1, 0, 0, "53e461f034ccb281", 3},
+    contract_entry{"refrain:session.status", 1, 0, 0, "53e461f034ccb281", 1},
+    contract_entry{"refrain:session.tab", 1, 0, 0, "53e461f034ccb281", 1},
+    contract_entry{"refrain:sim", 1, 1, 0, "53e461f034ccb281", 18},
+    contract_entry{"refrain:storage", 1, 0, 0, "53e461f034ccb281", 6},
+    contract_entry{"refrain:transport", 1, 0, 0, "53e461f034ccb281", 9},
+    contract_entry{"refrain:world", 1, 2, 0, "53e461f034ccb281", 12},
+    contract_entry{"refrain:world.migration", 1, 0, 0, "53e461f034ccb281", 3},
+    contract_entry{"refrain:worldgen", 1, 0, 0, "53e461f034ccb281", 4},
 };
 
-inline constexpr std::string_view schema_hash = "a4cbf5b67e2cecb5";
+inline constexpr std::string_view schema_hash = "53e461f034ccb281";
 
 } // namespace refrain::metadata
 

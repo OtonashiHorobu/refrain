@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: a4cbf5b67e2cecb5
+// Schema hash: 53e461f034ccb281
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_STORAGE_CHUNK_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_STORAGE_CHUNK_HPP
@@ -196,6 +196,17 @@ struct chunk {
     /// RWF record omits the TLV field in that case so an entity-free column
     /// keeps its canonical hash.
     std::vector<::refrain::storage::entity_record> entities;
+    /// True when `light_sections` holds the column's complete light: the full
+    /// layer set its block sections require, with both nibble arrays at
+    /// `light_nibble_bytes`. The lighting engine sets it only after it has lit
+    /// the column, and clears it when an edit makes the arrays stale until the
+    /// incremental relight completes. False is the conservative value: a
+    /// record written before this field existed, an imported column and a
+    /// column with pending light work all read false, and the loader relights
+    /// such a column instead of trusting its arrays. Appended after the field
+    /// set was defined, so the chunk field-set version stays 1: an older
+    /// reader skips the unknown TLV field and relights like it always did.
+    bool light_correct; // default: false
 };
 [[nodiscard]] inline auto encode_block_pos(::refrain::net::writer &out, const block_pos &value) -> ::refrain::status {
   static_cast<void>(out);
@@ -737,6 +748,9 @@ struct chunk {
       }
     }
   }
+  {
+    out.write_bool(value.light_correct);
+  }
   return ::refrain::status_ok();
 }
 
@@ -907,6 +921,11 @@ struct chunk {
       }
       value.entities.push_back(std::move(value_0));
     }
+  }
+  {
+    auto value_0 = in.read_bool();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.light_correct = *value_0;
   }
   return ::refrain::status_ok();
 }
