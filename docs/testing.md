@@ -109,6 +109,16 @@ Tests that cover the simulation compare the state hash across two runs, or
 across an encode and a decode. A change that alters the hash must come with a
 format or behavior change that explains it.
 
+A test does not derive its expected result from wall-clock time. A subsystem
+whose behavior is governed by a time budget exposes that budget's clock to
+tests: the chunk streamer accepts an injected drain clock, a test that is not
+about the budget freezes it so the observed drain depends on the queued work,
+and the dedicated budget test drives a logical clock advanced by its encoder
+instead of sleeping. Where a worker pool produces the results, a test looks a
+result up by its key (a chunk position, an entity id) instead of assuming the
+order the workers finished in, and synchronizes on an observable state
+transition rather than sleeping for the operation to complete.
+
 ## Fuzz smoke
 
 `test/net/test_fuzz_smoke.cpp` feeds deterministic pseudo-random bytes to the

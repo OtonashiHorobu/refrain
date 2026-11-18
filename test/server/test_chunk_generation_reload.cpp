@@ -208,20 +208,30 @@ generate_column(server::chunk_generation &service, world::chunk_pos position,
     return std::nullopt;
 }
 
+/// One generated column together with the tile position it came from.
+struct collected_column {
+    world::chunk_pos position{};
+    world::chunk column{};
+};
+
 /// Dispatch and poll until `expected` columns were served. Returns the columns
-/// in the order they were taken, or an empty vector on a failure or timeout.
+/// with their positions in the order they were taken, or an empty vector on a
+/// failure or timeout. The order is the order the workers finished and the
+/// caller drained, not the position order, so a caller that needs one
+/// particular column looks it up by position instead of assuming it arrives
+/// first.
 [[nodiscard]] auto collect_columns(server::chunk_generation &service,
                                    std::size_t expected)
-    -> std::vector<world::chunk> {
-    std::vector<world::chunk> columns{};
+    -> std::vector<collected_column> {
+    std::vector<collected_column> columns{};
     const auto deadline{std::chrono::steady_clock::now() +
                         std::chrono::seconds{180}};
     while (std::chrono::steady_clock::now() < deadline) {
         static_cast<void>(service.dispatch(0));
         auto results{service.take_results()};
         for (auto &[pos, column] : results) {
-            static_cast<void>(pos);
-            columns.push_back(std::move(column));
+            columns.push_back(
+                collected_column{.position = pos, .column = std::move(column)});
         }
         if (!service.take_failures().empty()) {
             return {};
@@ -232,6 +242,19 @@ generate_column(server::chunk_generation &service, world::chunk_pos position,
         std::this_thread::sleep_for(std::chrono::milliseconds{5});
     }
     return {};
+}
+
+/// The collected column of one tile position, or null when the batch did not
+/// carry it.
+[[nodiscard]] auto find_column(std::span<const collected_column> columns,
+                               world::chunk_pos position)
+    -> const collected_column * {
+    for (const auto &entry : columns) {
+        if (entry.position == position) {
+            return &entry;
+        }
+    }
+    return nullptr;
 }
 
 /// The datapack root for the content-backed case. Prints one line and returns
@@ -572,15 +595,21 @@ const suite chunk_generation_reload_tests = [] {
         }
         expect((*service)->request(world::chunk_pos{.x = 0, .z = 0}));
         const auto boot_columns{collect_columns(**service, 1U)};
-        expect(!boot_columns.empty());
-        if (boot_columns.empty()) {
+        const auto *boot_column{
+            find_column(boot_columns, world::chunk_pos{.x = 0, .z = 0})};
+        expect(boot_column != nullptr);
+        if (boot_column == nullptr) {
             return;
         }
-        expect(chunk_fingerprint(boot_columns.front()) != data::digest32{});
+        expect(chunk_fingerprint(boot_column->column) != data::digest32{});
         expect((*service)->generation_compose_attempts() == 1U);
-        // Publish the next two generations back to back while the first
-        // published composition is likely still running: an older composer
-        // must not clear a newer in-flight slot and recompose an epoch.
+        // Publish generation 2 and dispatch a tile: a worker starts composing
+        // the published epoch. The composition counter is bumped before the
+        // composition work, so waiting for it is the synchronization point;
+        // generation 3 is published while that composition is in flight, and
+        // the test asserts the invariant instead of the timing. An older
+        // composer must not clear a newer in-flight slot and no epoch may be
+        // composed twice.
         const auto changed_pack{scratch.path() / "changed-pack"};
         expect(write_changed_settings(changed_pack, base));
         auto changed_view{build_view({directory_source(changed_pack)})};
@@ -590,25 +619,46 @@ const suite chunk_generation_reload_tests = [] {
         }
         server::publish_content_view(snapshot_of(2, 1, changed_view));
         expect((*service)->request(world::chunk_pos{.x = 1, .z = 0}));
-        std::this_thread::sleep_for(std::chrono::milliseconds{10});
+        expect((*service)->dispatch(0) == 1U);
+        const auto compose_deadline{std::chrono::steady_clock::now() +
+                                    std::chrono::seconds{30}};
+        while ((*service)->generation_compose_attempts() < 2U &&
+               std::chrono::steady_clock::now() < compose_deadline) {
+            std::this_thread::yield();
+        }
+        expect((*service)->generation_compose_attempts() >= 2U);
         server::publish_content_view(snapshot_of(3, 1, changed_view));
         expect((*service)->request(world::chunk_pos{.x = 2, .z = 0}));
         const auto columns{collect_columns(**service, 2U)};
         expect(columns.size() == 2U);
+        const auto *first_tile{
+            find_column(columns, world::chunk_pos{.x = 1, .z = 0})};
+        const auto *second_tile{
+            find_column(columns, world::chunk_pos{.x = 2, .z = 0})};
+        expect(first_tile != nullptr);
+        expect(second_tile != nullptr);
         // Three published epochs (1, 2, 3) plus at most one redundant
         // composition: an overlapping publish never composes an epoch twice.
         expect((*service)->generation_compose_attempts() <= 4U);
+        expect((*service)->generation_rebuild_failures() == 0U);
         expect((*service)->bound_generation() == 3U);
-        if (columns.size() == 2U) {
-            // Generations 2 and 3 publish the same view content, so the first
-            // tile generated under generation 3 matches the column served for
-            // the generation-2 publish.
+        if (first_tile != nullptr && second_tile != nullptr) {
+            // Generations 2 and 3 publish the same view content, so the tile
+            // generated while the older composition was in flight and the tile
+            // generated under generation 3 carry the same content. Requesting
+            // the first tile again has to produce exactly that column. The
+            // columns arrive in completion order, so the comparison looks the
+            // tile up by position instead of assuming which one the batch
+            // served first.
             expect((*service)->request(world::chunk_pos{.x = 1, .z = 0}));
             const auto again{collect_columns(**service, 1U)};
             expect(again.size() == 1U);
-            if (again.size() == 1U) {
-                expect(chunk_fingerprint(again.front()) ==
-                       chunk_fingerprint(columns.front()));
+            const auto *again_tile{
+                find_column(again, world::chunk_pos{.x = 1, .z = 0})};
+            expect(again_tile != nullptr);
+            if (again_tile != nullptr) {
+                expect(chunk_fingerprint(again_tile->column) ==
+                       chunk_fingerprint(first_tile->column));
             }
         }
         (*service)->stop();

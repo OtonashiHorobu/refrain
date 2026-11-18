@@ -144,8 +144,13 @@ namespace refrain::server {
 
 chunk_streamer::chunk_streamer(play_gateway &gateway,
                                chunk_packet_source source,
-                               backlog_limits limits)
-    : gateway_(gateway), source_(source), limits_(limits.clamped()) {}
+                               backlog_limits limits, budget_clock now)
+    : gateway_(gateway), source_(source), now_(std::move(now)),
+      limits_(limits.clamped()) {}
+
+auto chunk_streamer::budget_now_ns() const -> std::int64_t {
+    return now_ ? now_() : refrain::core::now_ns();
+}
 
 chunk_streamer::~chunk_streamer() {
     if (cache_hits_ == 0 && cache_misses_ == 0) {
@@ -568,7 +573,7 @@ auto chunk_streamer::drain(std::uint64_t connection, stream_state &stream,
         if (stream.pending.empty()) {
             break;
         }
-        if (refrain::core::now_ns() >= deadline_ns) {
+        if (budget_now_ns() >= deadline_ns) {
             // Leave the coordinate pending: the next tick picks it up again
             // instead of dropping it from the viewport.
             expired = true;
@@ -790,7 +795,7 @@ void chunk_streamer::tick(refrain::session::chunk_tracker &views) {
         }
         drainable.push_back(id);
     }
-    const auto deadline_ns{refrain::core::now_ns() +
+    const auto deadline_ns{budget_now_ns() +
                            static_cast<std::int64_t>(tick_budget_ns)};
     // Round-robin: one batch per connection per pass, so a connection with a
     // long queue cannot spend the whole budget before the others run.
