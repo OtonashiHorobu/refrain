@@ -27,4 +27,5 @@ providers: 12
   world           -> refrain.world.vanilla@1.0.0
   world_migration -> refrain.world.datafix@1.0.0
   worldgen        -> refrain.worldgen.vanilla@1.0.0
+loaders: 0
 mods_dir: mods

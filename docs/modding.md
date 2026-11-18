@@ -85,35 +85,48 @@ loaders](#mod-loaders) describes the contract and the dispatch rules.
 
 ## Mod loaders
 
-A loader is the execution environment a mod package is loaded through. It is
-not a mod itself: the host bootstraps one provider instance of the instanced
-`refrain:mod.loader` service per loader id it trusts, and every package is
-dispatched through the instance named by its manifest.
+A loader is the execution environment a mod package is loaded through. Every
+package is dispatched through one active instance of the instanced
+`refrain:mod.loader` service. The host bootstraps its own `builtin` and
+`native` loaders (plus the script loaders a build enables), and a trusted mod
+that the gamepack declares as a loader provider can add a namespaced instance
+during the same startup load. A package never chooses its loader by itself: the
+manifest names the loader and the gamepack plan decides whether a
+package-provided one exists.
 
 ### Declaring a loader
 
 `[entry].loader` names the loader. A reserved first-party id (`native`,
-`wasm`, `lua`, `bukkit`) is unqualified; a third-party loader uses a namespaced
-id such as `com.example.loader`. `builtin` is reserved for the host itself and
-cannot be declared: a package without an `[entry]` table is internal and is
-loaded by the builtin loader.
+`wasm`, `lua`, `bukkit`) is unqualified; a package-provided loader uses a
+namespaced id such as `com.example.loader`. `builtin` is reserved for the host
+itself and cannot be declared: a package without an `[entry]` table is internal
+and is loaded by the builtin loader.
 
 The loader id must match the payload shape of a first-party loader: `native`
-requires `[entry].native`, `wasm` requires `[entry].wasm`. A third-party loader
-defines its own payload keys; this parser only knows the shared ones and the
-loader validates the rest.
+requires `[entry].native`, `wasm` requires `[entry].wasm`. A package-provided
+loader defines its own payload keys; this parser only knows the shared ones and
+the loader validates the rest.
 
 An external manifest must declare `[entry].loader`; a manifest with an
 `[entry]` table but no loader is rejected and the error names the missing
 field. There is no second way to express an entry point.
+
+A gamepack that declares loader providers must also declare every namespaced
+loader its packages name (`[loaders]`, see
+[Package-provided loaders](#package-provided-loaders)); naming a namespaced
+loader id that the plan does not declare fails composition resolution and the
+error lists the declared ids. A gamepack without `[loaders]` keeps accepting
+the host bootstrap's own namespaced loaders, which is what embedders and tests
+register before `load()`.
 
 ### Dispatch and fail-closed rules
 
 The host resolves a manifest's loader id to the active `refrain:mod.loader`
 provider instance with that name before any mod code runs. The provider
 declares its capabilities first; the host validates the loader id, the loader
-ABI major, the unload semantics and the sandbox flag, re-checks them before
-every dispatch and records the declared unload semantics on the loaded mod.
+ABI major, the unload semantics, the sandbox flag and the declared provider,
+re-checks them before every dispatch and records the declared unload semantics
+on the loaded mod.
 
 The dispatch refuses to guess:
 
@@ -124,11 +137,126 @@ The dispatch refuses to guess:
   manifest naming `lua` in every build, are refused by the registered provider
   with `unsupported` and a message naming the disabled or missing runtime;
 - a loader whose capabilities change after registration fails the next load
-  instead of silently reconfiguring;
+  instead of silently reconfiguring, and the diagnostic names the provider mod;
 - a sandboxed loader cannot register providers on behalf of its guest: the
   registration is refused and the load fails with the sandbox diagnostic;
-- a loader cannot be selected or replaced by a gamepack, and a mod cannot
-  provide `refrain:mod.loader`.
+- a declared loader can only be registered by the mod package the gamepack
+  names as its provider, and every other registration attempt is refused;
+- a mod cannot provide, replace or shadow `builtin`, `native`, `wasm`, `lua`,
+  `bukkit` or a `refrain.` loader id.
+
+### Package-provided loaders
+
+A trusted mod can be the execution environment other packages run in. Two
+declarations are required and both are validated before any guest code runs:
+
+1. the gamepack plan selects the launcher with a `[loaders]` entry keyed by
+   the loader id, for example
+
+   ```toml
+   [loaders]
+   "com.example.loader" = "com.example.scripts@^1.0.0"
+   ```
+
+   Loader ids contain dots, so every key is a quoted literal key. The value is
+   the providing mod and the version range its installed version must satisfy.
+   `builtin`, `native`, `wasm`, `lua`, `bukkit` and any `refrain.` id are
+   refused here, so a gamepack can never make a package the environment for
+   host-owned loaders.
+
+2. the provider mod declares the service in its own manifest and registers
+   the instance from its factory while the host is loading:
+
+   ```toml
+   [provides]
+   services = ["refrain:mod.loader"]
+   ```
+
+   ```cpp
+   // statically linked mod factory; the table is the provider's own generated
+   // `refrain_services_mod_loader_vtable` and its state pointer
+   auto on_load(refrain::mod::host &host) -> refrain::status {
+       const refrain::mod::provider_api api{
+           .vtable = &loader_vtable,
+           .self = &loader_state,
+           .abi_major = REFRAIN_SERVICES_MOD_LOADER_ABI_MAJOR,
+       };
+       return host.register_provider("refrain:mod.loader", "com.example.loader",
+                                     api);
+   }
+   ```
+
+   An installed native package has no C++ host symbol: its entry point
+   (`include/refrain/mod/entry.h`) receives the sealed `refrain:host.core`
+   table and registers through the stable C surface of that contract.
+
+   ```c
+   refrain_host_core_provider_ref api = {
+       .struct_size = REFRAIN_HOST_CORE_PROVIDER_REF_SIZE,
+       .vtable = &loader_vtable,   /* the loader's own generated vtable */
+       .self = &loader_state,
+       .abi_major = REFRAIN_SERVICES_MOD_LOADER_ABI_MAJOR,
+   };
+   const refrain_str service = {(const uint8_t *)"refrain:mod.loader",
+                                sizeof("refrain:mod.loader") - 1};
+   const refrain_str instance = {(const uint8_t *)"com.example.loader",
+                                 sizeof("com.example.loader") - 1};
+   host_core->register_provider(host_core_self, service, instance, &api);
+   ```
+
+The host loads loader providers in a bootstrap phase before the rest of the
+composition: the declared providers and their transitive hard dependencies are
+loaded first, in plan load order. The set is derived from the plan and the
+manifests and does not depend on discovery or hash-map order. A loader provider
+itself must run through the host-owned `builtin` or `native` loader: a
+sandboxed guest (`wasm`, `lua`) can never become a loader, and a
+package-provided loader cannot host another package-provided loader. The host
+refuses a provider mod whose package source is neither the built-in image nor
+an installed, receipt-checked package: a directory tree is not an install, so
+the signature and install policy has already decided the package is trusted
+before it is loaded.
+
+The registration is gated by the same checks first-party loaders get: the
+capability table must name the instance it is registered on, report the loader
+ABI major the host implements, declare a known unload guarantee and name the
+providing mod in the `provider` field of the capability struct. The loader
+service is sealed after the first composition epoch, so a loader instance is
+registered once per process: a second registration of the same id is
+`already_exists` and the plan cannot add, remove or repoint a loader at
+runtime. One provider mod may register several loader ids; each registration
+carries its own capability table and names its own instance.
+
+A package naming a declared loader loads after the provider: resolution adds a
+dependency edge from the provider to every package that names its loader, so
+the load order is the same as if the package declared the dependency itself.
+A cycle between loader providers and the packages they order is rejected at
+composition resolution with the cycle members named. A `[loaders]` entry whose
+provider is missing, out of range or does not declare `refrain:mod.loader`
+fails resolution before any package is loaded.
+
+The lifecycle guarantee is a refusal: a loader provider is part of the
+bootstrap composition, so it cannot be hot-unloaded or reloaded while the
+process runs, whether or not it currently has live guests. A staging request
+that removes a declared provider, changes the loader plan or reloads the
+provider fails with `unsupported` and names the loader and provider mod; the
+running epoch is untouched. A loader that changes its capabilities after
+registration is detected on the next dispatch and the load fails with
+`version_mismatch`, naming the loader and the provider mod.
+
+The loader contract hands the provider the guest manifest subset and a package
+root; it does not forward a package's custom `[entry]` payload keys, because
+the parser keeps only the shared entry fields and the loader validates its own
+layout. A loader therefore defines a fixed member layout for its guests, for
+example a `data/payload.bin` member that the package walker records.
+
+`package_root` is empty for a manifest read from the built-in image. For an
+installed package it is the directory that holds the install receipt, so
+`<package_root>/<version>.json` is the receipt and the guest members are the
+receipt-checked content-store blobs. Host-linked code reads them through the
+package API (`make_receipt_package_source()` in `refrain/mod/package.hpp`,
+which verifies the receipt and the member hashes); an external native loader
+receives the path only and implements the read against the receipt and the
+content store itself.
 
 ### Loader boundaries
 
@@ -138,13 +266,15 @@ The dispatch refuses to guess:
 | `native` | host-owned: materialises the installed `[entry].native` member out of the content store, checks the entry ABI, opens the shared library and calls the entry point | `retire` | shipped |
 | `wasm` | host bootstrap: materialises the installed `[entry].wasm` member from the receipt-checked content store, validates the guest ABI, instantiates the module in a fresh store with size/memory/instruction budgets and calls its `on_load` hook | `clean` | shipped when built (`REFRAIN_WITH_WASM`) |
 | `lua` | fail-closed placeholder: no Lua runtime ships, so every package naming `lua` is refused with the missing runtime named | `clean` | fail-closed |
-| `bukkit` | optional standalone mod that embeds a JVM and manages its own plugin directory | declared by that mod | future ecosystem |
+| `com.example.loader` | package-provided: the declared provider mod registers a `refrain:mod.loader` instance and runs its guests itself | declared by the provider | via `[loaders]` |
+| `bukkit` | optional standalone mod that embeds a JVM and manages its own plugin directory | declared by that mod | via `[loaders]` |
 
 The `builtin` and `native` loaders are host bootstrap code: they wrap the
 static mod registry and the dynamic-library entry ABI the host already owns, so
 they are registered by the host itself instead of shipping as a mod. A
-third-party loader ships as a mod that provides its own instance; until that
-mechanism lands, a manifest naming one fails closed.
+package-provided loader ships as a mod that declares `refrain:mod.loader` in
+`[provides]` and is selected by the gamepack `[loaders]` table; the same table
+can select a standalone implementation such as a future Bukkit bridge.
 
 The native loader copies the entry library into a private host-owned directory
 before opening it: an installed package keeps its members in the content store,
@@ -297,6 +427,7 @@ auto_scan = false
 list = [
     "refrain.data.vanilla@1.0.0",
     "refrain.world.vanilla@1.0.0",
+    "com.example.scripts@1.0.0",
 ]
 
 [mods."refrain.data.vanilla"]
@@ -305,11 +436,19 @@ requires = ["refrain.content.vanilla@^1.0.0"]
 [providers]
 world = "refrain.world.vanilla@^1.0.0"
 data = "refrain.data.vanilla@^1.0.0"
+
+[loaders]
+"com.example.loader" = "com.example.scripts@^1.0.0"
 ```
 
 `[mods].list` pins the composition. `[providers]` maps a service name to the mod
-that provides it, using a version range. With `auto_scan = true` the resolved
-composition also includes every mod installed in the server's content store
+that provides it, using a version range; it cannot bind the loader service
+(`refrain:mod.loader`), because package-provided loaders are declared in
+`[loaders]` and the host-owned ones come from the host bootstrap. `[loaders]`
+declares the package-provided loader instances a composition trusts, keyed by
+loader id and pointing at the providing mod. Both are optional. With
+`auto_scan = true` the resolved composition also includes every mod installed
+in the server's content store
 (`--content-store`, plus any `--mods` store roots); with `auto_scan = false` the
 gamepack is the only source of truth and every required version must be listed.
 
@@ -789,7 +928,10 @@ reason when the mod
   `restart_required`), or
 - provides a core service the running process owns: `refrain:sim`,
   `refrain:world`, `refrain:storage`, `refrain:net.protocol` or
-  `refrain:runtime`.
+  `refrain:runtime`, or
+- provides a package-provided loader declared in `[loaders]`: the loader
+  provider is part of the bootstrap composition and cannot be unloaded or
+  reloaded while the process runs, whether or not it has live guests.
 
 Leaf services, data-only mods and providers behind a `clean` or `retire` loader
 are hot-swappable. A mod that other active mods still require cannot be

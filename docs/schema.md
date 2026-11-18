@@ -274,6 +274,11 @@ A configuration struct grows the same way: `refrain:runtime` 2.1.0 appends the
 host configuration directory to `runtime_config` so the provider can read the
 mod management policy and its hot lifecycle gates, and the struct-size prologue
 rejects a provider built against the older layout before its `run` is called.
+`refrain:mod.loader` moved from `1.1.0` to `1.2.0` when
+`mod_loader_capabilities` appended `provider`, the mod package that provides
+the loader. A host-owned loader built against the older layout keeps working
+because the table records its struct size and the field defaults to empty,
+while a package-provided loader must report the mod that registered it.
 
 An appended slot may be optional: a provider that does not implement the
 operation leaves the slot empty (a null function pointer), which declares that
@@ -306,7 +311,7 @@ versions named. The schema hash identifies the build; it is not a version.
 | Contract | Version | Composition |
 |---|---|---|
 | `refrain:data.packs` | 1.0.0 | exclusive |
-| `refrain:mod.loader` | 1.1.0 | instanced |
+| `refrain:mod.loader` | 1.2.0 | instanced |
 | `refrain:net.protocol` | 2.1.0 | instanced |
 | `refrain:net.session` | 1.0.0 | exclusive |
 | `refrain:net.translator` | 1.0.0 | exclusive |

@@ -609,21 +609,25 @@ to_interval(const std::vector<core::version_comparator> &group)
     return out;
 }
 
+/// First contract layout of `mod_loader_capabilities` (v1.1): the struct ended
+/// after `supports_hot_install`. A provider built against it reports that
+/// struct_size and has no `provider` field; the host keeps accepting it so an
+/// older host-owned or embedder loader table stays usable.
+constexpr std::uint32_t loader_capabilities_v1_1_size =
+    offsetof(loader_abi::mod_loader_capabilities, provider);
+
 /// Loader capabilities as the C++ host records them, decoded from the contract
 /// struct. The struct size and the unload semantics are validated here so an
 /// undersized or future-unknown declaration never reaches the dispatch.
 [[nodiscard]] auto
 capabilities_from_abi(const loader_abi::mod_loader_capabilities &abi)
     -> result<mod_loader_capabilities> {
-    if (abi.struct_size <
-        REFRAIN_SERVICES_MOD_LOADER_MOD_LOADER_CAPABILITIES_SIZE) {
-        return std::unexpected{fail(
-            error_code::invalid_argument,
-            fmt::format(
-                "capability struct_size {} is smaller than the "
-                "contract's {}",
-                abi.struct_size,
-                REFRAIN_SERVICES_MOD_LOADER_MOD_LOADER_CAPABILITIES_SIZE))};
+    if (abi.struct_size < loader_capabilities_v1_1_size) {
+        return std::unexpected{
+            fail(error_code::invalid_argument,
+                 fmt::format("capability struct_size {} is smaller than the "
+                             "contract's {}",
+                             abi.struct_size, loader_capabilities_v1_1_size))};
     }
     mod_unload_semantics unload{};
     switch (abi.unload) {
@@ -642,6 +646,12 @@ capabilities_from_abi(const loader_abi::mod_loader_capabilities &abi)
                  fmt::format("unknown unload semantics value {}",
                              static_cast<unsigned>(abi.unload)))};
     }
+    std::string provider{};
+    if (abi.struct_size >=
+        REFRAIN_SERVICES_MOD_LOADER_MOD_LOADER_CAPABILITIES_SIZE) {
+        provider =
+            std::string{refrain::contracts::as_string_view(abi.provider)};
+    }
     return mod_loader_capabilities{
         .loader_id =
             std::string{refrain::contracts::as_string_view(abi.loader_id)},
@@ -649,13 +659,17 @@ capabilities_from_abi(const loader_abi::mod_loader_capabilities &abi)
         .unload = unload,
         .sandboxed = abi.sandboxed != 0,
         .supports_hot_install = abi.supports_hot_install != 0,
+        .provider = std::move(provider),
     };
 }
 
 /// Cross-check a loader's declared capabilities against the id it is active
-/// under and the loader ABI this host implements.
+/// under, the mod that registered it and the loader ABI this host implements.
+/// A host-owned loader reports no provider; a package-provided loader must name
+/// the mod that registers the instance.
 [[nodiscard]] auto
 validate_loader_capabilities(std::string_view expected_id,
+                             std::string_view expected_provider,
                              const mod_loader_capabilities &caps) -> status {
     if (caps.loader_id != expected_id) {
         return std::unexpected{fail(
@@ -671,6 +685,30 @@ validate_loader_capabilities(std::string_view expected_id,
                         "provides {}",
                         expected_id, caps.abi_major,
                         REFRAIN_SERVICES_MOD_LOADER_ABI_MAJOR))};
+    }
+    if (caps.provider != expected_provider) {
+        if (expected_provider.empty()) {
+            return std::unexpected{fail(
+                error_code::version_mismatch,
+                fmt::format("mod loader '{}' reports provider mod '{}' but is "
+                            "registered by the host bootstrap",
+                            expected_id, caps.provider))};
+        }
+        if (caps.provider.empty()) {
+            return std::unexpected{fail(
+                error_code::version_mismatch,
+                fmt::format("mod loader '{}' is registered by mod '{}' but "
+                            "its capability struct does not report a provider; "
+                            "the loader contract v1.2 requires a "
+                            "package-provided loader to name the mod that "
+                            "provides it",
+                            expected_id, expected_provider))};
+        }
+        return std::unexpected{fail(
+            error_code::version_mismatch,
+            fmt::format("mod loader '{}' reports provider mod '{}' but was "
+                        "registered by mod '{}'",
+                        expected_id, caps.provider, expected_provider))};
     }
     return status_ok();
 }
@@ -807,6 +845,9 @@ auto bridge::capabilities(void *self, loader_abi::mod_loader_capabilities *out)
     out->unload = static_cast<std::uint8_t>(state->unload);
     out->sandboxed = state->sandboxed ? 1 : 0;
     out->supports_hot_install = state->supports_hot_install ? 1 : 0;
+    // The host bootstrap owns these instances; a package-provided loader
+    // reports its provider mod instead.
+    out->provider = refrain_str{};
 }
 
 auto bridge::validate(void *self, const loader_abi::mod_entry_manifest *entry)
@@ -1326,6 +1367,10 @@ auto host::register_mod_loader(std::string_view loader_id,
             "register_mod_loader() is only legal from the host bootstrap, not "
             "from a mod factory")};
     }
+    // The bootstrap path owns its loader ids: a reserved unqualified id or a
+    // namespaced embedder/test loader. A package-provided loader goes through
+    // `register_provider("refrain:mod.loader", ...)` so it can never claim a
+    // host-owned id.
     if (!is_valid_loader_id(loader_id)) {
         return std::unexpected{
             fail(error_code::invalid_argument,
@@ -1334,12 +1379,20 @@ auto host::register_mod_loader(std::string_view loader_id,
     }
     if (!is_reserved_loader_id(loader_id) &&
         loader_id.find('.') == std::string_view::npos) {
-        return std::unexpected{fail(
-            error_code::invalid_argument,
-            fmt::format("mod loader id '{}' is not namespaced; a third-party "
-                        "loader uses an id such as com.example.loader",
-                        loader_id))};
+        return std::unexpected{
+            fail(error_code::invalid_argument,
+                 fmt::format("mod loader id '{}' is not namespaced; a loader "
+                             "provider uses an id such as com.example.loader",
+                             loader_id))};
     }
+    return add_loader_instance(loader_id, api, version, {}, true);
+}
+
+auto host::add_loader_instance(std::string_view loader_id,
+                               const provider_api &api,
+                               std::string_view version,
+                               std::string_view provider, bool host_owned,
+                               std::uint64_t *out_serial) -> status {
     if (find_loader(loader_id) != nullptr) {
         return std::unexpected{fail(
             error_code::already_exists,
@@ -1360,14 +1413,15 @@ auto host::register_mod_loader(std::string_view loader_id,
     }
 
     // Query the loader's declared capabilities now: a loader that cannot
-    // answer, names another id or implements another ABI is not usable, and
-    // the host records the unload/sandbox contract before dispatching to it.
+    // answer, names another id, implements another ABI or misattributes its
+    // provider is not usable, and the host records the unload/sandbox contract
+    // before dispatching to it.
     mod_loader_capabilities capabilities{};
     try {
-        const loader_abi::provider provider{
+        const loader_abi::provider provider_table{
             *static_cast<const loader_vtable *>(copy.vtable), copy.self};
         loader_abi::mod_loader_capabilities abi_capabilities{};
-        provider.capabilities(abi_capabilities);
+        provider_table.capabilities(abi_capabilities);
         auto decoded{capabilities_from_abi(abi_capabilities)};
         if (!decoded) {
             return std::unexpected{
@@ -1381,27 +1435,34 @@ auto host::register_mod_loader(std::string_view loader_id,
                  fmt::format("mod loader '{}' capabilities threw an exception",
                              loader_id))};
     }
-    if (auto checked{validate_loader_capabilities(loader_id, capabilities)};
+    if (auto checked{
+            validate_loader_capabilities(loader_id, provider, capabilities)};
         !checked) {
         return checked;
     }
 
     const auto effective_version{version.empty() ? std::string{"1.0.0"}
                                                  : std::string{version}};
+    // The registry candidate key is (service, provider id, version), so the
+    // candidate identity is the loader instance id: it is unique per process
+    // and lets one provider mod register several loader ids. The providing mod
+    // is recorded on the loader record and in the candidate source instead.
+    const std::string provider_id{loader_id};
     provider_apis_.push_back(std::make_unique<provider_api>(copy));
     provider_info info{};
     info.service = std::string{loader_abi::service_id};
-    info.id = std::string{loader_id};
+    info.id = provider_id;
     info.version = effective_version;
     info.instance = provider_apis_.back().get();
-    info.source = "host";
-    auto added{services_.add_provider(std::move(info))};
-    if (!added) {
-        return added;
+    info.source = host_owned ? std::string{"host"} : std::string{provider};
+    auto serial{services_.add_provider_serial(std::move(info))};
+    if (!serial) {
+        return std::unexpected{std::move(serial.error())};
     }
-    auto selected{services_.select_active(loader_abi::service_id, loader_id,
+    auto selected{services_.select_active(loader_abi::service_id, provider_id,
                                           effective_version, loader_id)};
     if (!selected) {
+        static_cast<void>(services_.remove_provider(*serial));
         return selected;
     }
     loaders_.push_back(registered_loader{
@@ -1412,9 +1473,127 @@ auto host::register_mod_loader(std::string_view loader_id,
         .unload = capabilities.unload,
         .sandboxed = capabilities.sandboxed,
         .supports_hot_install = capabilities.supports_hot_install,
+        .provider = std::string{provider},
+        .host_owned = host_owned,
     });
-    log_loader.info("registered mod loader {} version {}", loader_id,
-                    effective_version);
+    if (out_serial != nullptr) {
+        *out_serial = *serial;
+    }
+    if (host_owned) {
+        log_loader.info("registered bootstrap mod loader {} version {}",
+                        loader_id, effective_version);
+    } else {
+        log_loader.info("registered mod loader {} version {} from mod {}",
+                        loader_id, effective_version, provider);
+    }
+    return status_ok();
+}
+
+auto host::register_mod_loader_from_mod(std::string_view loader_id,
+                                        const provider_api &api,
+                                        std::string_view version) -> status {
+    if (staging_) {
+        return std::unexpected{fail(
+            error_code::unsupported,
+            fmt::format("mod '{}' cannot register loader '{}' while a "
+                        "composition epoch is staged; a loader provider is "
+                        "part of the bootstrap composition and changing it "
+                        "needs a process restart",
+                        current_mod_, loader_id))};
+    }
+    if (current_mod_.empty() || current_plan_ == nullptr) {
+        return std::unexpected{
+            fail(error_code::not_initialized,
+                 "register_provider() for the mod loader service is only legal "
+                 "from a mod factory during load()")};
+    }
+    // A loader provider is host-level code. A guest a sandboxed loader
+    // executes can never become the environment other guests run in.
+    if (current_loader_sandboxed_) {
+        return std::unexpected{fail(
+            error_code::permission_denied,
+            fmt::format("mod '{}' cannot provide loader '{}': it is loaded "
+                        "through the sandboxed loader '{}', and a sandboxed "
+                        "guest can never become a loader",
+                        current_mod_, loader_id, current_loader_id_))};
+    }
+    if (!is_host_loader_id(current_loader_id_)) {
+        return std::unexpected{fail(
+            error_code::permission_denied,
+            fmt::format("mod '{}' cannot provide loader '{}': it is loaded "
+                        "through loader '{}'; a loader-providing mod must run "
+                        "through the host-owned builtin or native loader",
+                        current_mod_, loader_id, current_loader_id_))};
+    }
+    if (auto allowed{check_mod_loader_id(loader_id)}; !allowed) {
+        return std::unexpected{fail(
+            allowed.error().code,
+            fmt::format("mod '{}' cannot provide loader '{}': {}", current_mod_,
+                        loader_id, allowed.error().message))};
+    }
+    // The gamepack plan is the trust selection: the loader id must be
+    // declared exactly once and with this mod as its provider.
+    const resolved_loader *declared{current_plan_->loader(loader_id)};
+    if (declared == nullptr) {
+        std::vector<std::string> declared_ids;
+        declared_ids.reserve(current_plan_->loaders.size());
+        for (const auto &entry : current_plan_->loaders) {
+            declared_ids.push_back(entry.id);
+        }
+        return std::unexpected{fail(
+            error_code::permission_denied,
+            fmt::format("mod '{}' cannot provide loader '{}': the gamepack "
+                        "plan declares no loader '{}'; declared loaders: {}",
+                        current_mod_, loader_id, loader_id,
+                        join_instance_names(declared_ids)))};
+    }
+    const auto declared_provider{
+        std::string{split_provider_ref(declared->provider).id}};
+    if (declared_provider != current_mod_) {
+        return std::unexpected{fail(
+            error_code::permission_denied,
+            fmt::format("mod '{}' cannot provide loader '{}': the gamepack "
+                        "plan declares mod '{}' as its provider",
+                        current_mod_, loader_id, declared_provider))};
+    }
+    // The package must be honest about the service it provides.
+    if (!declares_service(current_mod_provides_,
+                          std::string{loader_abi::service_id})) {
+        return std::unexpected{fail(
+            error_code::permission_denied,
+            fmt::format("mod '{}' cannot provide loader '{}': the manifest "
+                        "[provides] list does not declare '{}'",
+                        current_mod_, loader_id,
+                        std::string{loader_abi::service_id}))};
+    }
+    // The install/signature policy decides what is trusted before the host
+    // sees a package. A loader provider must come from the built-in image or
+    // an installed, receipt-checked package; a directory tree is not an
+    // install and is refused as a runtime source everywhere else too.
+    if (current_package_ == nullptr ||
+        (current_package_->kind() != package_kind::builtin &&
+         current_package_->kind() != package_kind::rfmod)) {
+        return std::unexpected{
+            fail(error_code::permission_denied,
+                 fmt::format("mod '{}' cannot provide loader '{}': a loader "
+                             "provider must come from the built-in image or an "
+                             "installed package that passed the install policy",
+                             current_mod_, loader_id))};
+    }
+    std::uint64_t serial{0};
+    const auto effective_version{version.empty()
+                                     ? std::string{current_mod_version_}
+                                     : std::string{version}};
+    if (auto added{add_loader_instance(loader_id, api, effective_version,
+                                       current_mod_, false, &serial)};
+        !added) {
+        return added;
+    }
+    current_mod_registered_slots_.push_back(provided_slot{
+        .service = std::string{loader_abi::service_id},
+        .instance = std::string{loader_id},
+        .serial = serial,
+    });
     return status_ok();
 }
 
@@ -1425,6 +1604,21 @@ auto host::find_loader(std::string_view loader_id) const noexcept
                                       return loader.id == loader_id;
                                   })};
     return match == loaders_.end() ? nullptr : &*match;
+}
+
+/// Package root handed to a loader contract call: the installed package's
+/// receipt directory, or empty for a manifest read from the built-in image.
+/// The contract documents the installed case as the directory that holds the
+/// receipt, so `<root>/<version>.json` names the install record a loader reads
+/// its guest members through.
+auto host::loader_package_root() const -> std::string {
+    if (current_candidate_ == nullptr ||
+        current_candidate_->kind == package_kind::builtin) {
+        return {};
+    }
+    const auto parent{
+        std::filesystem::path{current_candidate_->path}.parent_path()};
+    return parent.empty() ? std::string{} : parent.string();
 }
 
 auto host::resolve_loader(std::string_view loader_id) const
@@ -1449,11 +1643,20 @@ auto host::resolve_loader(std::string_view loader_id) const
     }
     const auto *record{find_loader(loader_id)};
     if (record == nullptr) {
+        return std::unexpected{
+            fail(error_code::not_found,
+                 fmt::format("mod loader '{}' is active but has no recorded "
+                             "loader registration; active mod loaders: {}",
+                             loader_id, registered_loader_ids()))};
+    }
+    // Every loader instance is registered under its loader id; a mismatch
+    // means the registry slot was replaced behind the loader record.
+    if (active->id != record->id) {
         return std::unexpected{fail(
-            error_code::not_found,
-            fmt::format("mod loader '{}' is active but was not registered by "
-                        "the host bootstrap",
-                        loader_id))};
+            error_code::version_mismatch,
+            fmt::format("mod loader '{}' is active but its provider slot names "
+                        "'{}' instead of '{}'",
+                        loader_id, active->id, record->id))};
     }
     const auto *api{static_cast<const provider_api *>(active->instance)};
     if (api == nullptr || api->vtable == nullptr || api->self == nullptr) {
@@ -1498,8 +1701,8 @@ auto host::read_loader_capabilities(const loader_binding &binding) const
                  fmt::format("mod loader '{}' capabilities threw an exception",
                              binding.record->id))};
     }
-    if (auto checked{
-            validate_loader_capabilities(binding.record->id, capabilities)};
+    if (auto checked{validate_loader_capabilities(
+            binding.record->id, binding.record->provider, capabilities)};
         !checked) {
         return std::unexpected{std::move(checked.error())};
     }
@@ -1507,12 +1710,17 @@ auto host::read_loader_capabilities(const loader_binding &binding) const
         capabilities.unload != binding.record->unload ||
         capabilities.sandboxed != binding.record->sandboxed ||
         capabilities.supports_hot_install !=
-            binding.record->supports_hot_install) {
+            binding.record->supports_hot_install ||
+        capabilities.provider != binding.record->provider) {
         return std::unexpected{fail(
             error_code::version_mismatch,
-            fmt::format("mod loader '{}' changed its declared capabilities "
-                        "while running",
-                        binding.record->id))};
+            binding.record->provider.empty()
+                ? fmt::format("mod loader '{}' changed its declared "
+                              "capabilities while running",
+                              binding.record->id)
+                : fmt::format("mod loader '{}' provided by mod '{}' changed "
+                              "its declared capabilities while running",
+                              binding.record->id, binding.record->provider))};
     }
     return capabilities;
 }
@@ -1525,12 +1733,9 @@ auto host::validate_with_loader(const loader_binding &binding,
             fail(error_code::unknown,
                  "mod loader dispatch has no candidate context")};
     }
-    auto package_root{std::string{}};
-    if (const auto parent{
-            std::filesystem::path{current_candidate_->path}.parent_path()};
-        !parent.empty()) {
-        package_root = parent.string();
-    }
+    // The contract borrows the package root for the duration of the call, so
+    // it must stay alive across `provider.validate()`.
+    const auto package_root{loader_package_root()};
     const auto entry{make_loader_entry(manifest, activate_code, package_root)};
     clear_loader_diagnostic();
     try {
@@ -1570,12 +1775,7 @@ auto host::load_with_loader(const loader_binding &binding,
             fail(error_code::unknown,
                  "mod loader dispatch has no candidate context")};
     }
-    auto package_root{std::string{}};
-    if (const auto parent{
-            std::filesystem::path{current_candidate_->path}.parent_path()};
-        !parent.empty()) {
-        package_root = parent.string();
-    }
+    const auto package_root{loader_package_root()};
     loader_abi::mod_load_request request{};
     request.struct_size = REFRAIN_SERVICES_MOD_LOADER_MOD_LOAD_REQUEST_SIZE;
     request.manifest = make_loader_entry(manifest, activate_code, package_root);
@@ -1635,12 +1835,7 @@ auto host::reload_with_loader(const loader_binding &binding,
             fail(error_code::unknown,
                  "mod loader dispatch has no candidate context")};
     }
-    auto package_root{std::string{}};
-    if (const auto parent{
-            std::filesystem::path{current_candidate_->path}.parent_path()};
-        !parent.empty()) {
-        package_root = parent.string();
-    }
+    const auto package_root{loader_package_root()};
     loader_abi::mod_load_request request{};
     request.struct_size = REFRAIN_SERVICES_MOD_LOADER_MOD_LOAD_REQUEST_SIZE;
     request.manifest = make_loader_entry(manifest, activate_code, package_root);
@@ -2154,12 +2349,24 @@ auto host::load(const composition &plan, const package_resolver &resolve)
         }
 
         // The resolved plan is the only authority on which mods may
-        // activate provider code, so project it once before any factory runs.
+        // activate provider code and which loaders are part of it, so project
+        // it once before any factory runs. The registration path reads the
+        // declared loader plan from `current_plan_` until it is published.
         planned_providers planned{plan_providers(plan)};
+        current_plan_ = &plan;
+
+        // The bootstrap set is derived from the plan and the manifests: every
+        // declared loader provider plus the transitive hard dependencies it
+        // needs. The providers themselves are identified in plan order, so the
+        // set and the order are deterministic.
+        auto bootstrap{bootstrap_mod_ids(plan)};
+        if (!bootstrap) {
+            return std::unexpected{std::move(bootstrap.error())};
+        }
 
         std::vector<loaded_mod> mods{};
         mods.reserve(plan.load_order.size());
-        for (const auto &entry : plan.load_order) {
+        const auto load_entry = [&](const candidate &entry) -> status {
             auto package{resolve(entry)};
             if (!package) {
                 return std::unexpected{
@@ -2189,7 +2396,47 @@ auto host::load(const composition &plan, const package_resolver &resolve)
                 return std::unexpected{std::move(loaded.error())};
             }
             mods.push_back(std::move(*loaded));
+            return status_ok();
+        };
+
+        // Bootstrap phase: loader-providing mods run before the rest of the
+        // composition, through a host-owned loader. Their factories register
+        // the namespaced loader instances the other packages dispatch through.
+        for (const auto &entry : plan.load_order) {
+            if (!bootstrap->contains(entry.id)) {
+                continue;
+            }
+            if (auto loaded{load_entry(entry)}; !loaded) {
+                return loaded;
+            }
         }
+        if (auto verified{verify_declared_loaders(plan)}; !verified) {
+            return verified;
+        }
+        if (!plan.loaders.empty()) {
+            std::string ids;
+            for (const auto &declared : plan.loaders) {
+                if (!ids.empty()) {
+                    ids += ", ";
+                }
+                ids += declared.id;
+            }
+            log_loader.info("bootstrapped {} package-provided loader(s): {}",
+                            plan.loaders.size(), ids);
+        }
+
+        // Main phase: the rest of the composition in dependency order. Every
+        // package naming a package-provided loader is ordered after its
+        // provider by the resolver, so the loader is active when it is needed.
+        for (const auto &entry : plan.load_order) {
+            if (bootstrap->contains(entry.id)) {
+                continue;
+            }
+            if (auto loaded{load_entry(entry)}; !loaded) {
+                return loaded;
+            }
+        }
+        current_plan_ = nullptr;
         current_mod_.clear();
         current_mod_version_.clear();
         current_mod_provides_.clear();
@@ -2282,7 +2529,115 @@ auto host::plan_providers(const composition &plan) -> planned_providers {
             add_provider_ref(wrapper, {});
         }
     }
+    // Package-provided loaders project onto the loader service the same way a
+    // provider binding does: the providing mod is selected for
+    // `refrain:mod.loader` on the instance named after the loader id, so the
+    // generic registration permission checks and the plan verification see the
+    // declared loader plan.
+    for (const auto &declared : plan.loaders) {
+        const auto provider{
+            std::string{split_provider_ref(declared.provider).id}};
+        if (provider.empty()) {
+            continue;
+        }
+        planned.mods.insert(provider);
+        planned.slots[provider].insert(std::string{loader_abi::service_id});
+        planned.instances[provider][std::string{loader_abi::service_id}].insert(
+            declared.id);
+    }
     return planned;
+}
+
+auto host::registered_loader_ids() const -> std::string {
+    std::vector<std::string> ids;
+    ids.reserve(loaders_.size());
+    for (const auto &loader : loaders_) {
+        ids.push_back(loader.id);
+    }
+    return join_instance_names(ids);
+}
+
+auto host::bootstrap_mod_ids(const composition &plan) const
+    -> result<std::set<std::string>> {
+    std::map<std::string, const candidate *> by_id;
+    for (const auto &entry : plan.load_order) {
+        by_id.emplace(entry.id, &entry);
+    }
+    std::set<std::string> bootstrap;
+    std::vector<const candidate *> pending;
+    pending.reserve(plan.loaders.size());
+    for (const auto &declared : plan.loaders) {
+        const auto provider{
+            std::string{split_provider_ref(declared.provider).id}};
+        const auto found{by_id.find(provider)};
+        if (found == by_id.end()) {
+            return std::unexpected{fail(
+                error_code::not_found,
+                fmt::format("gamepack declares loader '{}' provided by mod "
+                            "'{}' but that mod is not part of the composition",
+                            declared.id, provider))};
+        }
+        pending.push_back(found->second);
+    }
+    // Loader providers are loaded first together with the hard dependencies
+    // they need, so every dependency of a bootstrap mod is available before it
+    // and a package naming a package-provided loader is only dispatched after
+    // that loader's provider registered the instance.
+    while (!pending.empty()) {
+        const auto *mod{pending.back()};
+        pending.pop_back();
+        if (!bootstrap.insert(mod->id).second) {
+            continue;
+        }
+        for (const auto &requirement : mod->required) {
+            const auto found{by_id.find(requirement.id)};
+            if (found != by_id.end()) {
+                pending.push_back(found->second);
+            }
+        }
+    }
+    return bootstrap;
+}
+
+auto host::verify_declared_loaders(const composition &plan) const -> status {
+    for (const auto &declared : plan.loaders) {
+        // The plan is normally produced by `mod::resolve()`, which rejects
+        // host-owned ids; a hand-built plan must fail the same way instead of
+        // letting a package shadow `builtin`, `native` or a script loader.
+        if (auto allowed{check_mod_loader_id(declared.id)}; !allowed) {
+            return std::unexpected{
+                fail(allowed.error().code,
+                     fmt::format("gamepack declares loader '{}': {}",
+                                 declared.id, allowed.error().message))};
+        }
+        const auto provider{
+            std::string{split_provider_ref(declared.provider).id}};
+        const auto *record{find_loader(declared.id)};
+        if (record == nullptr) {
+            return std::unexpected{fail(
+                error_code::not_found,
+                fmt::format("mod '{}' was declared as the provider of loader "
+                            "'{}' but did not register it during the bootstrap "
+                            "phase; active mod loaders: {}",
+                            provider, declared.id, registered_loader_ids()))};
+        }
+        if (record->host_owned) {
+            return std::unexpected{fail(
+                error_code::permission_denied,
+                fmt::format("loader '{}' is registered by the host bootstrap "
+                            "but the gamepack declares mod '{}' as its "
+                            "provider",
+                            declared.id, provider))};
+        }
+        if (record->provider != provider) {
+            return std::unexpected{fail(
+                error_code::version_mismatch,
+                fmt::format("loader '{}' is declared with provider mod '{}' "
+                            "but was registered by mod '{}'",
+                            declared.id, provider, record->provider))};
+        }
+    }
+    return status_ok();
 }
 
 auto host::verify_plan_activation(const composition &plan, bool staged) const
@@ -2433,6 +2788,7 @@ void host::enter_failed_state() {
     current_mod_planned_instances_.clear();
     current_mod_selected_provider_ = false;
     current_manifest_ = nullptr;
+    current_plan_ = nullptr;
     current_candidate_ = nullptr;
     current_package_ = nullptr;
     current_static_descriptor_ = nullptr;
@@ -2475,6 +2831,17 @@ auto host::restart_required_reason_for(const loaded_mod &mod) const
                 "can be installed again",
                 mod.id);
         }
+    }
+    for (const auto &declared : plan_.loaders) {
+        if (split_provider_ref(declared.provider).id != mod.id) {
+            continue;
+        }
+        return fmt::format(
+            "mod '{}' provides the mod loader '{}' that other packages are "
+            "dispatched through; a loader provider is part of the bootstrap "
+            "composition and needs a process restart to be unloaded or "
+            "replaced",
+            mod.id, declared.id);
     }
     if (mod.has_code &&
         mod.loader_unload == mod_unload_semantics::restart_required) {
@@ -2562,6 +2929,10 @@ auto host::composition_digest_text() const -> std::string {
         fmt::format("refrain-mod-composition/1\nepoch {}\ngamepack "
                     "{} {}\n",
                     epoch_, plan_.spec.id, plan_.spec.version)};
+    for (const auto &declared : plan_.loaders) {
+        text += fmt::format("loader {} provider {}\n", declared.id,
+                            declared.provider);
+    }
     std::vector<const loaded_mod *> ordered;
     ordered.reserve(mods_.size());
     for (const auto &mod : mods_) {
@@ -2651,6 +3022,62 @@ auto host::stage_composition_locked(const composition &next,
                         "running composition is {} {} (abi {})",
                         next.spec.id, next.spec.version, next.spec.abi,
                         plan_.spec.id, plan_.spec.version, plan_.spec.abi))};
+    }
+    // Package-provided loaders are part of the bootstrap composition: the
+    // loader service is sealed once the first composition is published, so a
+    // hot epoch can neither add, remove nor repoint a declared loader. The
+    // guarantee is a refusal, not a quarantine: nothing of the running epoch
+    // changes.
+    if (next.loaders != plan_.loaders) {
+        auto added{std::string{}};
+        auto removed{std::string{}};
+        for (const auto &declared : next.loaders) {
+            if (plan_.loader(declared.id) == nullptr) {
+                if (!added.empty()) {
+                    added += ", ";
+                }
+                added += declared.id;
+            }
+        }
+        for (const auto &declared : plan_.loaders) {
+            if (next.loader(declared.id) == nullptr) {
+                if (!removed.empty()) {
+                    removed += ", ";
+                }
+                removed += declared.id;
+            }
+        }
+        for (const auto &declared : plan_.loaders) {
+            const auto *now{next.loader(declared.id)};
+            if (now != nullptr && now->provider != declared.provider) {
+                if (!removed.empty()) {
+                    removed += ", ";
+                }
+                removed += declared.id;
+            }
+        }
+        return std::unexpected{fail(
+            error_code::unsupported,
+            fmt::format("the staged composition changes the loader plan "
+                        "(added: {}, removed or repointed: {}); a "
+                        "package-provided loader is registered during the "
+                        "bootstrap phase and the loader service is sealed, so "
+                        "changing it needs a process restart",
+                        added.empty() ? std::string{"none"} : added,
+                        removed.empty() ? std::string{"none"} : removed))};
+    }
+    for (const auto &declared : next.loaders) {
+        const auto provider{
+            std::string{split_provider_ref(declared.provider).id}};
+        if (next.find(provider) == nullptr) {
+            return std::unexpected{fail(
+                error_code::unsupported,
+                fmt::format("cannot remove mod '{}': it provides the mod "
+                            "loader '{}' that other packages are dispatched "
+                            "through, so the loader provider needs a process "
+                            "restart",
+                            provider, declared.id))};
+        }
     }
 
     const auto planned{plan_providers(next)};
@@ -3433,6 +3860,13 @@ auto host::register_provider(std::string_view service,
             "register_provider() is only legal from a mod factory while the "
             "host is loading a composition")};
     }
+    if (service == loader_abi::service_id) {
+        // A loader provider is host-level code: the registration path has its
+        // own gates (planned loader declaration, first-party loader of the
+        // providing mod, package source) and records the loader contract
+        // instead of an ordinary service slot.
+        return register_mod_loader_from_mod(instance, api, version);
+    }
     if (current_loader_sandboxed_) {
         return std::unexpected{fail(
             error_code::permission_denied,
@@ -3440,12 +3874,6 @@ auto host::register_provider(std::string_view service,
                         "for mod '{}'; a sandboxed guest only reaches the host "
                         "through its imports",
                         current_loader_id_, service, current_mod_))};
-    }
-    if (service == loader_abi::service_id) {
-        return std::unexpected{fail(
-            error_code::permission_denied,
-            "the mod loader service is registered by the host bootstrap, not "
-            "by a mod")};
     }
     if (is_sealed_service(service)) {
         return std::unexpected{fail(
@@ -3621,10 +4049,14 @@ auto host::format() const -> std::string {
         out += " none";
     }
     for (const auto &loader : loaders_) {
-        out += fmt::format(" {} abi {} unload {}{}{};", loader_identity(loader),
-                           loader.abi_major, to_string(loader.unload),
-                           loader.sandboxed ? " sandboxed" : "",
-                           loader.supports_hot_install ? " hot-install" : "");
+        out +=
+            fmt::format(" {} abi {} unload {}{}{}{};", loader_identity(loader),
+                        loader.abi_major, to_string(loader.unload),
+                        loader.sandboxed ? " sandboxed" : "",
+                        loader.supports_hot_install ? " hot-install" : "",
+                        loader.provider.empty()
+                            ? std::string{}
+                            : fmt::format(" from mod {}", loader.provider));
     }
     out += '\n';
     for (const auto &mod : mods_) {

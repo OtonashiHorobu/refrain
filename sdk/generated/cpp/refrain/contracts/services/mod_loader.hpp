@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 0596e2c96392a578
+// Schema hash: a4cbf5b67e2cecb5
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_CONTRACTS_SERVICES_MOD_LOADER_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_CONTRACTS_SERVICES_MOD_LOADER_HPP
@@ -101,7 +101,7 @@ using mod_load_request = ::refrain_services_mod_loader_mod_load_request;
     return value;
 }
 
-static_assert(sizeof(mod_loader_capabilities) == 32);
+static_assert(sizeof(mod_loader_capabilities) == 48);
 static_assert(alignof(mod_loader_capabilities) == 8);
 static_assert(offsetof(mod_loader_capabilities, struct_size) == 0);
 static_assert(offsetof(mod_loader_capabilities, loader_id) == 8);
@@ -109,6 +109,7 @@ static_assert(offsetof(mod_loader_capabilities, abi_major) == 24);
 static_assert(offsetof(mod_loader_capabilities, unload) == 28);
 static_assert(offsetof(mod_loader_capabilities, sandboxed) == 29);
 static_assert(offsetof(mod_loader_capabilities, supports_hot_install) == 30);
+static_assert(offsetof(mod_loader_capabilities, provider) == 32);
 static_assert(sizeof(mod_entry_manifest) == 136);
 static_assert(alignof(mod_entry_manifest) == 8);
 static_assert(offsetof(mod_entry_manifest, struct_size) == 0);
@@ -129,7 +130,7 @@ static_assert(offsetof(mod_load_request, manifest) == 8);
 
 inline constexpr std::string_view service_id = "refrain:mod.loader";
 inline constexpr std::uint32_t abi_major = 1;
-inline constexpr std::uint32_t abi_minor = 1;
+inline constexpr std::uint32_t abi_minor = 2;
 inline constexpr std::uint32_t abi_patch = 0;
 inline constexpr ::refrain::contracts::side_kind side = ::refrain::contracts::side_kind::server;
 inline constexpr ::refrain::contracts::thread_kind thread = ::refrain::contracts::thread_kind::main;

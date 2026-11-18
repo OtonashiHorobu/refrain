@@ -180,6 +180,21 @@ struct discovery_policy {
     std::string conflict{"fail"}; ///< "fail" | "explicit"
 };
 
+/// One gamepack-level loader declaration (`[loaders]`): the namespaced loader
+/// id and the mod package that provides its `refrain:mod.loader` instance.
+///
+/// The declaration is the composition root's trust decision. A package whose
+/// manifest names this loader loads only after the provider mod is active, and
+/// a package naming a namespaced loader id that is not declared here is
+/// refused during composition resolution.
+struct loader_provider {
+    /// Loader id the provider registers on the loader service; also the
+    /// service instance name the host dispatches through.
+    std::string id{};
+    /// Provider mod package and accepted version range.
+    mod_requirement provider{};
+};
+
 /// Validated gamepack manifest.
 struct gamepack_spec {
     std::string id{};
@@ -195,9 +210,16 @@ struct gamepack_spec {
     discovery_policy policy{};
     std::vector<mod_entry> mods{};             ///< declaration order
     std::vector<provider_binding> providers{}; ///< sorted by service key
+    /// Package-provided loader instances (`[loaders]`), sorted by loader id.
+    /// The host-owned loader ids are not declarable here.
+    std::vector<loader_provider> loaders{};
 
     [[nodiscard]] auto find_mod(std::string_view id) const noexcept
         -> const mod_entry *;
+
+    /// Declared provider for one loader id, or nullptr.
+    [[nodiscard]] auto find_loader(std::string_view id) const noexcept
+        -> const loader_provider *;
 };
 
 struct resolved_instance {

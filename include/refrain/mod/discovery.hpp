@@ -310,6 +310,17 @@ struct mod_lock {
         -> bool = default;
 };
 
+/// One package-provided loader instance the resolved composition declares.
+/// `provider` is the canonical `id@version` reference of the mod that runs the
+/// bootstrap phase and registers the loader instance.
+struct resolved_loader {
+    std::string id{};
+    std::string provider{};
+
+    friend auto operator==(const resolved_loader &, const resolved_loader &)
+        -> bool = default;
+};
+
 /// One fully resolved composition: the single output of the mod pipeline
 /// (`catalog → resolve → select → load → activate`).
 ///
@@ -327,6 +338,11 @@ struct composition : public mod_lock {
     /// Provider selection (`mod::select_providers`) for every `[providers]`
     /// key, sorted by service.
     std::vector<mod::resolved_provider> providers{};
+    /// Package-provided loader instances (`[loaders]`), sorted by loader id.
+    /// The named provider mods are loaded in a bootstrap phase before the rest
+    /// of the composition; every mod that names one of these ids is ordered
+    /// after its provider.
+    std::vector<resolved_loader> loaders{};
     /// True for a manifest-level preview (no package/disk verification): the
     /// gamepack's declared list only, used by `gamepack check|dump` and
     /// `--dump-gamepack`. Never fed to the host.
@@ -334,6 +350,9 @@ struct composition : public mod_lock {
 
     [[nodiscard]] auto provider(std::string_view service) const noexcept
         -> const mod::resolved_provider *;
+    /// Resolved loader declared for `loader_id`, or nullptr.
+    [[nodiscard]] auto loader(std::string_view loader_id) const noexcept
+        -> const resolved_loader *;
     [[nodiscard]] auto find(std::string_view id) const noexcept
         -> const candidate *;
 
