@@ -347,16 +347,28 @@ suite<"worldgen/feature-pool"> feature_pool_tests = [] {
             expect(warm.chunk->state_at(3, 8, 4) == *water);
         };
 
-    "a feature element placed for a piece runs against the receiving chunk"_test = [] {
+    "a feature element placed for a piece reads the receiving chunk's "
+    "bounds"_test = [] {
+        // The tiled generator builds one placer for a whole generation region
+        // from the context of one chunk, and the pieces it places can belong
+        // to another chunk. Give the centre chunk build limits that let the
+        // pile place and the receiving neighbour limits that stop it: the pile
+        // only lands when the placer kept the centre chunk.
         fixture state;
-        // The tile generator builds one placer from a context that names
-        // the generation region and no chunk, because the pieces it places
-        // belong to several chunks. Every piece placement therefore binds
-        // the receiving chunk through the context hook, and a feature that
-        // reads the chunk (pile placement starts from its build limits)
-        // must run against that chunk.
-        auto region_context = state.context;
-        region_context.chunk = nullptr;
+        chunk_region region{*state.chunk, 1};
+        auto receiving =
+            std::make_unique<proto_chunk>(state.states, 1, 0, 64, 32);
+        receiving->set_status(chunk_status::terrain);
+        region.attach(*receiving);
+        region.set_write_focus(chunk_pos{.x = 1, .z = 0}, 0);
+        // A motion-blocking floor one row under the pile origin, so a placer
+        // bound to the centre chunk would place a pile. Chunk block access
+        // uses world Y, and the receiving chunk starts at 64.
+        for (jint z = 0; z < 16; ++z) {
+            for (jint x = 0; x < 16; ++x) {
+                (void)receiving->set_state(x, 67, z, state.stone);
+            }
+        }
         feature::feature_data_set data;
         data.features.emplace(
             "oracle:pile",
@@ -368,6 +380,9 @@ suite<"worldgen/feature-pool"> feature_pool_tests = [] {
                                                .id = "oracle:pile",
                                                .feature = "oracle:pile",
                                                .placement = parse("[]")});
+        auto region_context = state.context;
+        region_context.region = &region;
+        // The placer starts bound to the region's centre chunk (min_y 0).
         structure::structure_feature_placer placer{region_context, data};
         const std::array ids{std::string{"oracle:pile"}};
         const auto loaded = placer.load(ids);
@@ -375,39 +390,54 @@ suite<"worldgen/feature-pool"> feature_pool_tests = [] {
         if (!loaded) {
             return;
         }
-        // The pile places on a motion-blocking surface, so give the
-        // receiving chunk a floor one block under the pile origin.
-        for (jint z = 0; z < 16; ++z) {
-            for (jint x = 0; x < 16; ++x) {
-                (void)state.chunk->set_state(x, 9, z, state.stone);
+        const auto place_pile = [&](bool bind_receiving) {
+            auto piece_context = state.context;
+            piece_context.region = &region;
+            piece_context.chunk = receiving.get();
+            piece_context.place_feature = [&placer](std::string_view id,
+                                                    worldgen_random &random,
+                                                    const block_pos &position) {
+                return placer.place(id, random, position);
+            };
+            if (bind_receiving) {
+                piece_context.bind_feature_chunk =
+                    [&placer](proto_chunk &chunk) { placer.bind_chunk(chunk); };
             }
-        }
-        auto piece_context = state.context;
-        piece_context.place_feature = [&placer](std::string_view id,
-                                                worldgen_random &random,
-                                                const block_pos &position) {
-            return placer.place(id, random, position);
-        };
-        piece_context.bind_feature_chunk = [&placer](proto_chunk &chunk) {
-            placer.bind_chunk(chunk);
-        };
-        worldgen_random random{
-            std::make_unique<xoroshiro_random_source>(424242)};
-        structure::place_structure_piece(
-            piece_context,
-            make_piece(feature_element("oracle:pile"),
-                       block_pos{.x = 8, .y = 10, .z = 8}),
-            random);
-        jint placed = 0;
-        for (jint y = 10; y <= 11; ++y) {
-            for (jint z = 0; z < 16; ++z) {
-                for (jint x = 0; x < 16; ++x) {
-                    if (state.chunk->state_at(x, y, z) == state.stone) {
-                        ++placed;
+            worldgen_random random{
+                std::make_unique<xoroshiro_random_source>(424242)};
+            structure::place_structure_piece(
+                piece_context,
+                make_piece(feature_element("oracle:pile"),
+                           block_pos{.x = 24, .y = 68, .z = 8}),
+                random);
+            jint placed = 0;
+            for (jint y = 68; y <= 69; ++y) {
+                for (jint z = 0; z < 16; ++z) {
+                    for (jint x = 0; x < 16; ++x) {
+                        if (receiving->state_at(x, y, z) !=
+                            state.states.air()) {
+                            ++placed;
+                        }
                     }
                 }
             }
+            return placed;
+        };
+        // Control first: without the hook the placer stays on the centre
+        // chunk (min_y 0), so the same placement does write. This proves the
+        // element was dispatched and that the assertion below has content.
+        expect(place_pile(false) > 0)
+            << "the pile never reached the region, so the case proves nothing";
+        for (jint y = 68; y <= 69; ++y) {
+            for (jint z = 0; z < 16; ++z) {
+                for (jint x = 0; x < 16; ++x) {
+                    (void)receiving->set_state(x, y, z, state.air);
+                }
+            }
         }
-        expect(placed > 0) << "the pile placed nothing in its chunk";
+        // The receiving chunk's min_y (64) rejects the piece origin (68), so
+        // a placer rebound to it places nothing.
+        expect(place_pile(true) == 0)
+            << "the feature placed against the centre chunk's build limits";
     };
 };

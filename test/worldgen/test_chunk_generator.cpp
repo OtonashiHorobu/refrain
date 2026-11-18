@@ -619,6 +619,7 @@ void run_tile_feature_pool_case() {
         .seed = 368560065,
         .kind = dimension_kind::overworld,
         .target = generation_target::full,
+        .tile_size = 1,
     });
     expect(created.has_value()) << (created ? "" : created.error().message);
     if (!created) {
@@ -654,10 +655,11 @@ void run_tile_feature_pool_case() {
     expect(digest == expected_digest);
 }
 
-/// A bounded sweep over seeds through the same tiled structure-piece path.
-/// Only the village structure set runs, so each case stays a couple of
-/// seconds while still placing feature pool elements wherever a village
-/// reaches the tile.
+/// A bounded no-crash sweep over seeds through the same tiled structure-piece
+/// path. Only the village structure set runs so each case stays a couple of
+/// seconds. The pinned case above covers the feature-pool element that made
+/// this path crash; the sweep guards the path against a regression that does
+/// not depend on a village reaching the tested tile.
 void run_tile_structure_sweep() {
     std::string data_root{};
     std::string templates_root{};
@@ -672,6 +674,7 @@ void run_tile_structure_sweep() {
             .kind = dimension_kind::overworld,
             .target = generation_target::full,
             .structure_sets = {"minecraft:villages"},
+            .tile_size = 1,
         });
         expect(created.has_value()) << (created ? "" : created.error().message);
         if (!created) {
@@ -1322,7 +1325,6 @@ suite<"worldgen/chunk-generator"> chunk_generator_tests = [] {
     "a tiled chunk with village feature pool elements generates and keeps its "
     "digest"_test = [] { run_tile_feature_pool_case(); };
 
-    "a bounded seed sweep generates tiled village structure pieces"_test = [] {
-        run_tile_structure_sweep();
-    };
+    "a bounded seed sweep generates tiled structure pieces without crashing"_test =
+        [] { run_tile_structure_sweep(); };
 };

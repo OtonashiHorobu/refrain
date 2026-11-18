@@ -431,6 +431,7 @@ auto structure_generator::generate(const chunk_pos &pos)
                 .adjusted_heights = &adjusted_heights,
                 .data = &data_,
                 .place_feature = place_feature,
+                .bind_feature_chunk = place_context.bind_feature_chunk,
             };
             const auto index =
                 structure_step_index(data_, starts[start_index].structure);

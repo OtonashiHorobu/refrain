@@ -507,6 +507,13 @@ void run_full_stage_case(std::string_view prefix,
                 return feature_placer->place(id, random, position);
             };
             place_context.place_feature = place_feature;
+            // The copy of this context used for the neighbour pass carries
+            // the hook, so a feature element in a cross-chunk piece runs
+            // against the chunk that receives the piece, like the generator.
+            place_context.bind_feature_chunk =
+                [&feature_placer](proto_chunk &target) {
+                    feature_placer->bind_chunk(target);
+                };
         }
         worldgen_random decoration_random{
             std::make_unique<xoroshiro_random_source>(seed)};
