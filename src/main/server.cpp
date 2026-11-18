@@ -536,10 +536,17 @@ int main(int argc, char **argv) {
                    "the structure templates (default: data; the installed "
                    "content snapshot is used when it already holds the "
                    "datapack)");
+    std::string server_jar;
+    app.add_option("--server-jar", server_jar,
+                   "Your own Minecraft 26.3 server archive; when the tracked "
+                   "tables and reports are missing and the source tooling is "
+                   "available, the server generates them from this archive on "
+                   "first start");
     bool no_data_download{false};
     app.add_flag("--no-data-download", no_data_download,
                  "Never fetch the official server archive; start only from a "
-                 "staged or cached data directory");
+                 "staged or cached data directory, or generate from "
+                 "--server-jar");
     std::string data_manifest_url{
         std::string{refrain::server::default_version_manifest_url}};
     app.add_option("--data-manifest-url", data_manifest_url,
@@ -1710,7 +1717,11 @@ int main(int argc, char **argv) {
     // it against the published SHA-1 and keeps only the unpacked datapack and
     // structure templates. Later starts reuse the data directory without
     // touching the network. `--no-data-download` forbids the fetch entirely,
-    // for offline hosts and pre-staged installs.
+    // for offline hosts and pre-staged installs. When the install ships no
+    // content snapshot and the operator does not stage the tracked tables and
+    // reports, the generation entry point of a source checkout regenerates them
+    // from the operator's own archive; a new world otherwise fails here with
+    // one message instead of failing halfway through generation.
     std::unique_ptr<refrain::net::download_transport> downloader{};
     if (!no_data_download) {
         auto transport{refrain::net::make_curl_download_transport()};
@@ -1727,7 +1738,15 @@ int main(int argc, char **argv) {
             .installed_content_root = layout->content_root,
             .download_allowed = !no_data_download,
             .manifest_url = data_manifest_url,
-            .working_directory = {}},
+            .working_directory = {},
+            .generation =
+                refrain::server::game_data_generation_options{
+                    .script = layout->generation_script,
+                    .server_jar = server_jar,
+                    .tools = layout->tools_program},
+            // A world that generates chunks and serves clients cannot run
+            // without the tracked data; refuse before opening or creating one.
+            .require_tracked_artifacts = true},
         downloader.get())};
     if (!game_data) {
         return report_fatal(game_data.error());

@@ -15,6 +15,8 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <cstdint>
+#include <limits>
 #include <string>
 #include <system_error>
 #include <utility>
@@ -91,11 +93,34 @@ auto run_process(const subprocess_options &options)
         written += static_cast<std::size_t>(count);
     }
     ::CloseHandle(write_pipe);
-    ::WaitForSingleObject(process.hProcess, INFINITE);
+    bool timed_out{false};
+    bool stopped{false};
+    if (options.timeout.count() > 0) {
+        // The Win32 wait takes a millisecond bound; a value beyond the DWORD
+        // range is clamped to an effectively unlimited wait.
+        constexpr auto infinite_ms{
+            static_cast<std::uint64_t>(std::numeric_limits<DWORD>::max())};
+        const auto requested{static_cast<std::uint64_t>(
+            std::max<std::int64_t>(options.timeout.count(), 0))};
+        const auto bound{static_cast<DWORD>(
+            std::min<std::uint64_t>(requested, infinite_ms))};
+        if (::WaitForSingleObject(process.hProcess, bound) == WAIT_TIMEOUT) {
+            timed_out = true;
+            stopped = ::TerminateProcess(process.hProcess, 128 + 9) != 0;
+            ::WaitForSingleObject(process.hProcess, INFINITE);
+        }
+    } else {
+        ::WaitForSingleObject(process.hProcess, INFINITE);
+    }
     DWORD exit_code{1};
     ::GetExitCodeProcess(process.hProcess, &exit_code);
     ::CloseHandle(process.hThread);
     ::CloseHandle(process.hProcess);
+    if (timed_out) {
+        return subprocess_result{
+            .exit_code = stopped ? 128 + 9 : static_cast<int>(exit_code),
+            .timed_out = true};
+    }
     return subprocess_result{.exit_code = static_cast<int>(exit_code)};
 }
 

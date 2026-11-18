@@ -31,7 +31,8 @@ struct layout_root {
 /// running from an instance directory overrides the installation), then the
 /// executable's directory and up to three parents (release archive layout and
 /// build-tree layout).
-[[nodiscard]] auto candidate_roots(const install_layout_options &options)
+[[nodiscard]] auto candidate_roots(std::string_view working,
+                                   std::string_view executable)
     -> std::vector<layout_root> {
     std::vector<layout_root> roots{};
     const auto add = [&roots](std::string path, std::string label) {
@@ -47,20 +48,8 @@ struct layout_root {
             layout_root{.path = std::move(path), .label = std::move(label)});
     };
 
-    std::string working{options.working_directory};
-    if (working.empty()) {
-        if (auto current{io::current_path()}; current) {
-            working = std::move(*current);
-        }
-    }
-    add(working, "working directory");
+    add(std::string{working}, "working directory");
 
-    std::string executable{options.executable};
-    if (executable.empty()) {
-        if (auto image{refrain::platform::executable_path()}; image) {
-            executable = std::move(*image);
-        }
-    }
     if (executable.empty()) {
         return roots;
     }
@@ -92,13 +81,39 @@ struct layout_root {
     return "installed layout";
 }
 
+/// Windows binaries carry the `.exe` suffix; the tools binary next to the
+/// server has the same one.
+[[nodiscard]] auto executable_suffix(std::string_view executable)
+    -> std::string_view {
+    if (executable.size() >= 4 &&
+        (executable.ends_with(".exe") || executable.ends_with(".EXE"))) {
+        return ".exe";
+    }
+    return {};
+}
+
 } // namespace
 
 auto discover_install_layout(const install_layout_options &options)
     -> result<install_layout> {
-    const auto roots{candidate_roots(options)};
+    std::string working{options.working_directory};
+    if (working.empty()) {
+        if (auto current{io::current_path()}; current) {
+            working = std::move(*current);
+        }
+    }
+    std::string executable{options.executable};
+    if (executable.empty()) {
+        if (auto image{refrain::platform::executable_path()}; image) {
+            executable = std::move(*image);
+        }
+    }
+    const auto roots{candidate_roots(working, executable)};
 
     install_layout layout{};
+    if (!executable.empty()) {
+        layout.bin_directory = io::parent_directory(executable);
+    }
     if (!options.gamepack.empty()) {
         // An explicit composition still benefits from an installed content
         // snapshot: the tracked tables and reports are not part of the file.
@@ -119,6 +134,19 @@ auto discover_install_layout(const install_layout_options &options)
         if (layout.content_root.empty() && io::is_directory(content_root)) {
             layout.content_root = content_root;
             layout.content_source = content_source(candidate.path, roots);
+        }
+        if (layout.generation_script.empty()) {
+            const auto script{candidate.path + "/tools/content/generate.sh"};
+            if (regular_file(script)) {
+                layout.generation_script = script;
+            }
+        }
+    }
+    if (!layout.bin_directory.empty()) {
+        const auto tools{layout.bin_directory + "/refrain-tools" +
+                         std::string{executable_suffix(executable)}};
+        if (regular_file(tools)) {
+            layout.tools_program = tools;
         }
     }
     if (layout.gamepack.empty()) {

@@ -7,6 +7,7 @@
 #include <refrain/data/json.hpp>
 #include <refrain/net/crypto.hpp>
 #include <refrain/net/download.hpp>
+#include <refrain/platform/process.hpp>
 #include <refrain/server/game_data.hpp>
 
 #include "support/scratch_directory.hpp"
@@ -237,6 +238,68 @@ void write_text(const fs::path &path, std::string_view text) {
     auto text = io::read_text(path.string());
     expect(text.has_value());
     return text ? *text : std::string{};
+}
+
+/// The platform has no portable compile-time OS query in this test tree; the
+/// executable suffix distinguishes the Windows backend. The generation entry
+/// point is a POSIX shell script, so its tests skip on Windows.
+[[nodiscard]] auto on_windows() -> bool {
+    const auto executable{refrain::platform::executable_path()};
+    if (!executable) {
+        return false;
+    }
+    const auto &path{*executable};
+    return path.size() >= 4 &&
+           (path.ends_with(".exe") || path.ends_with(".EXE"));
+}
+
+/// Stage a datapack tree the resolver accepts as pre-staged.
+void stage_datapack(const fs::path &data_dir) {
+    write_text(data_dir / "data/minecraft/worldgen/biome/plains.json",
+               R"({"temperature":0.8})");
+}
+
+/// Write a synthetic generation entry point. It records its arguments and
+/// produces the two tracked artifacts the startup path validates.
+void write_generation_script(const fs::path &path) {
+    write_text(path, R"SH(#!/bin/sh
+all="$*"
+out=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --out) out="$2"; shift 2 ;;
+        *) shift ;;
+    esac
+done
+if [ -z "$out" ]; then
+    exit 2
+fi
+mkdir -p "$out/reports/biome_parameters"
+printf '%s\n' "$all" > "$out/generation-args.txt"
+printf 'tables' > "$out/tables.rvtb"
+printf '{}' > "$out/protocol_registry.json"
+printf '{}\n' > "$out/reports/biome_parameters/overworld.json"
+printf '{}\n' > "$out/reports/biome_parameters/nether.json"
+)SH");
+    std::error_code error;
+    fs::permissions(path,
+                    fs::perms::owner_read | fs::perms::owner_write |
+                        fs::perms::owner_exec,
+                    fs::perm_options::add, error);
+    expect(!error) << "cannot make the generation script executable";
+}
+
+/// The generation inputs for the synthetic entry point: a script, a jar and a
+/// tools binary only need to exist as regular files.
+[[nodiscard]] auto generation_options(const fs::path &script,
+                                      const fs::path &jar,
+                                      const fs::path &tools)
+    -> game_data_options {
+    return game_data_options{
+        .generation = {.script = script.string(),
+                       .server_jar = jar.string(),
+                       .tools = tools.string(),
+                       .timeout = std::chrono::seconds{30}}};
 }
 
 [[nodiscard]] auto data_options(const fs::path &working,
@@ -702,6 +765,180 @@ suite<"server/game-data"> game_data_tests = [] {
             expect(path.find("/recipe/") == std::string::npos);
             expect(path.find("/loot_table/") == std::string::npos);
         }
+    };
+
+    "game-data/a new world without tracked data fails naming it and the command"_test =
+        [] {
+            refrain::test_support::scratch_directory scratch{};
+            const auto data_dir{scratch.path() / "data"};
+            stage_datapack(data_dir);
+            auto options = data_options(scratch.path(), data_dir);
+            options.download_allowed = false;
+            options.require_tracked_artifacts = true;
+            const auto paths = ensure_game_data(options, nullptr);
+            expect(!paths.has_value());
+            if (!paths) {
+                expect(paths.error().code == refrain::error_code::not_found);
+                const auto &message{paths.error().message};
+                expect(message.find("tables.rvtb") != std::string::npos)
+                    << message;
+                expect(message.find("biome_parameters/overworld.json") !=
+                       std::string::npos)
+                    << message;
+                expect(message.find("tools/content/generate.sh") !=
+                       std::string::npos)
+                    << message;
+                expect(message.find("--server-jar") != std::string::npos)
+                    << message;
+            }
+        };
+
+    "game-data/without the requirement the degraded resolution is kept"_test =
+        [] {
+            refrain::test_support::scratch_directory scratch{};
+            const auto data_dir{scratch.path() / "data"};
+            stage_datapack(data_dir);
+            auto options = data_options(scratch.path(), data_dir);
+            options.download_allowed = false;
+            const auto paths = ensure_game_data(options, nullptr);
+            expect(paths.has_value());
+            if (paths) {
+                expect(paths->source == game_data_source::pre_staged);
+                expect(paths->tables_path.empty());
+                expect(paths->reports_root.empty());
+            }
+        };
+
+    "game-data/a complete installed snapshot satisfies a new world"_test = [] {
+        refrain::test_support::scratch_directory scratch{};
+        const auto installed{scratch.path() / "content/vanilla/26.3"};
+        write_text(installed / "tables.rvtb", "installed-tables");
+        write_text(installed / "protocol_registry.json", "installed-registry");
+        write_text(installed / "reports/biome_parameters/overworld.json", "{}");
+        write_text(installed / "reports/biome_parameters/nether.json", "{}");
+        const auto data_dir{scratch.path() / "data"};
+        stage_datapack(data_dir);
+        auto options = data_options(scratch.path(), data_dir, installed);
+        options.download_allowed = false;
+        options.require_tracked_artifacts = true;
+        const auto paths = ensure_game_data(options, nullptr);
+        expect(paths.has_value()) << (paths ? "" : paths.error().message);
+        if (!paths) {
+            return;
+        }
+        expect(paths->source == game_data_source::pre_staged);
+        expect(same_path(paths->tables_path, installed / "tables.rvtb"));
+        expect(same_path(paths->protocol_registry_path,
+                         installed / "protocol_registry.json"));
+        expect(same_path(paths->reports_root, data_dir / "reports"));
+        expect(fs::is_regular_file(data_dir /
+                                   "reports/biome_parameters/overworld.json"));
+    };
+
+    "game-data/generation fills the missing tracked data"_test = [] {
+        if (on_windows()) {
+            return;
+        }
+        refrain::test_support::scratch_directory scratch{};
+        const auto data_dir{scratch.path() / "data"};
+        stage_datapack(data_dir);
+        const auto script{scratch.path() / "generate.sh"};
+        write_generation_script(script);
+        const auto jar{scratch.path() / "server.jar"};
+        const auto tools{scratch.path() / "refrain-tools"};
+        write_text(jar, "jar");
+        write_text(tools, "tools");
+        auto options = data_options(scratch.path(), data_dir);
+        options.download_allowed = false;
+        options.require_tracked_artifacts = true;
+        options.generation = generation_options(script, jar, tools).generation;
+        const auto paths = ensure_game_data(options, nullptr);
+        expect(paths.has_value()) << (paths ? "" : paths.error().message);
+        if (!paths) {
+            return;
+        }
+        expect(same_path(paths->tables_path, data_dir / "tables.rvtb"));
+        expect(same_path(paths->protocol_registry_path,
+                         data_dir / "protocol_registry.json"));
+        expect(same_path(paths->reports_root, data_dir / "reports"));
+        expect(fs::is_regular_file(data_dir /
+                                   "reports/biome_parameters/nether.json"));
+        const auto arguments{read_text(data_dir / "generation-args.txt")};
+        expect(arguments.find("--server-jar") != std::string::npos)
+            << arguments;
+        expect(arguments.find("--out") != std::string::npos) << arguments;
+    };
+
+    "game-data/a failed generation is reported with the missing artifact"_test =
+        [] {
+            if (on_windows()) {
+                return;
+            }
+            refrain::test_support::scratch_directory scratch{};
+            const auto data_dir{scratch.path() / "data"};
+            stage_datapack(data_dir);
+            const auto script{scratch.path() / "generate.sh"};
+            write_text(script, "#!/bin/sh\nexit 4\n");
+            std::error_code permissions_error;
+            fs::permissions(script,
+                            fs::perms::owner_read | fs::perms::owner_write |
+                                fs::perms::owner_exec,
+                            fs::perm_options::add, permissions_error);
+            expect(!permissions_error);
+            const auto jar{scratch.path() / "server.jar"};
+            const auto tools{scratch.path() / "refrain-tools"};
+            write_text(jar, "jar");
+            write_text(tools, "tools");
+            auto options = data_options(scratch.path(), data_dir);
+            options.download_allowed = false;
+            options.require_tracked_artifacts = true;
+            options.generation =
+                generation_options(script, jar, tools).generation;
+            const auto paths = ensure_game_data(options, nullptr);
+            expect(!paths.has_value());
+            if (!paths) {
+                const auto &message{paths.error().message};
+                expect(message.find("tables.rvtb") != std::string::npos)
+                    << message;
+                expect(message.find("exit code 4") != std::string::npos)
+                    << message;
+            }
+        };
+
+    "game-data/a verified download feeds the generation fallback"_test = [] {
+        if (on_windows()) {
+            return;
+        }
+        refrain::test_support::scratch_directory scratch{};
+        const auto archive{scratch.path() / "server.jar"};
+        expect(make_plain_jar(archive));
+        const auto archive_bytes{read_bytes(archive)};
+        fake_transport transport{
+            manifest_document(),
+            version_document(sha1_hex(archive_bytes), archive_bytes), archive};
+        const auto data_dir{scratch.path() / "data"};
+        const auto script{scratch.path() / "generate.sh"};
+        write_generation_script(script);
+        const auto tools{scratch.path() / "refrain-tools"};
+        write_text(tools, "tools");
+        auto options = data_options(scratch.path(), data_dir);
+        options.require_tracked_artifacts = true;
+        options.generation.script = script.string();
+        options.generation.tools = tools.string();
+        options.generation.timeout = std::chrono::seconds{30};
+        const auto paths = ensure_game_data(options, &transport);
+        expect(paths.has_value()) << (paths ? "" : paths.error().message);
+        if (!paths) {
+            return;
+        }
+        expect(transport.download_calls == 1);
+        expect(same_path(paths->tables_path, data_dir / "tables.rvtb"));
+        expect(same_path(paths->protocol_registry_path,
+                         data_dir / "protocol_registry.json"));
+        expect(fs::is_regular_file(data_dir /
+                                   "reports/biome_parameters/overworld.json"));
+        // The archive is removed once the generation fallback has read it.
+        expect(!fs::exists(data_dir / ".server.jar.tmp"));
     };
 };
 

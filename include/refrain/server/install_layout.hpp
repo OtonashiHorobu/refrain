@@ -15,16 +15,19 @@ namespace refrain::server {
 // A release archive ships the binary under `bin/`, the default composition
 // under `gamepack/` and the tracked game-derived tables under
 // `content/vanilla/<version>/`. A checkout keeps the same three trees at its
-// root, one directory above `build/Release/bin`. Rather than embedding a copy
-// of the composition and the tables in the executable, the server searches the
-// working directory, the executable's directory and a few parent directories
-// for that layout. A checkout and an extracted release archive therefore both
-// start without an argument, and an operator can inspect or replace the
-// composition with an editor.
+// root, one directory above `build/Release/bin`, and additionally carries the
+// tooling that regenerates the tracked data from a server archive. Rather than
+// embedding a copy of the composition and the tables in the executable, the
+// server searches the working directory, the executable's directory and a few
+// parent directories for that layout. A checkout and an extracted release
+// archive therefore both start without an argument, and an operator can inspect
+// or replace the composition with an editor.
 //
 // The default composition is `gamepack/gamepack.toml`; the installed content
 // root is `content/vanilla/<version>` and holds the tracked tables, reports and
-// packet registry (never the datapack, which is generated locally).
+// packet registry (never the datapack, which is generated locally). The data
+// generation entry point is `tools/content/generate.sh`, present only in a
+// source checkout.
 //
 // The documented layout is chosen over an embedded composition because the
 // gamepack and the tracked tables are already repository files that ship in the
@@ -45,6 +48,16 @@ struct install_layout {
     /// Human-readable location the content root came from, for the startup
     /// summary: "working directory" or a location above the executable.
     std::string content_source{};
+    /// Directory holding the running binaries; empty when the platform did not
+    /// report the executable path. The generation fallback looks for
+    /// `refrain-tools` here.
+    std::string bin_directory{};
+    /// `refrain-tools` next to the server binary; empty when the install has
+    /// none.
+    std::string tools_program{};
+    /// Data generation entry point (`tools/content/generate.sh`) in a source
+    /// checkout; empty when the install ships only a packaged content snapshot.
+    std::string generation_script{};
 };
 
 struct install_layout_options {

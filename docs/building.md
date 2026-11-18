@@ -57,6 +57,37 @@ Binaries are written to `build/Release/bin/`. The build directory is
 `build/Release/` for the `conan-release` preset; other configurations require a
 matching Conan preset.
 
+## Game data
+
+The worldgen datapack, the tracked tables, the reports and the protocol registry
+are not compiled into the binaries. A source checkout always carries the tracked
+files under `content/vanilla/26.3/`; only the datapack is generated locally from
+a server archive the operator owns. A zero-argument start resolves the files
+next to the binary, so a build tree starts the same way an extracted release
+archive does.
+
+Generate the complete data directory, including the datapack, when the tracked
+files are missing or a fresh copy is needed:
+
+```bash
+tools/content/generate.sh --server-jar /path/to/server.jar \
+    --out content/vanilla/26.3
+```
+
+The entry point runs the vanilla data generator and the light, mining and
+climate probes through the existing tools, then imports the reports into
+`tables.rvtb` with `refrain-tools vanilla import`. It requires a Java runtime
+(25 or newer for 26.3), Python 3, `unzip`, `bash` and the `refrain-tools` binary
+of the same build; pass `--tools` or set `REFRAIN_TOOLS` to select another
+build. With `--work DIR` the intermediate reports are kept for inspection.
+
+The same entry point is what `refrain-server --server-jar <file>` invokes on a
+first start when the install ships no content snapshot, so a developer build
+with a local server archive can start from an empty data directory. Generation
+is optional and detected: a release archive already carries the tracked data and
+never needs Java, and a host without the source tooling fails with one message
+that names the missing artifact instead of starting half-configured.
+
 ## Build options
 
 `cmake/refrain_options.cmake` defines the project options. The defaults enable

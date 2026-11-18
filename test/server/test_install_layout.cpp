@@ -194,6 +194,48 @@ suite<"server/layout"> layout_tests = [] {
                                  install / "content" / "vanilla" / "27.1"));
             }
         };
+    "layout/the generation entry point and its tools binary are found"_test =
+        [] {
+            refrain::test_support::scratch_directory scratch{};
+            const auto install = scratch.path() / "install";
+            make_gamepack(install);
+            make_content(install);
+            fs::create_directories(install / "bin");
+            fs::create_directories(install / "tools" / "content");
+            write_file(install / "bin" / "refrain-tools");
+            write_file(install / "tools" / "content" / "generate.sh");
+            const auto layout = discover_install_layout(install_layout_options{
+                .working_directory = (scratch.path() / "instance").string(),
+                .executable = (install / "bin" / "refrain-server").string()});
+            expect(layout.has_value());
+            if (!layout) {
+                return;
+            }
+            expect(same_path(layout->bin_directory, install / "bin"));
+            expect(same_path(layout->tools_program,
+                             install / "bin" / "refrain-tools"));
+            expect(same_path(layout->generation_script,
+                             install / "tools" / "content" / "generate.sh"));
+        };
+
+    "layout/a packaged install carries the tools but no generation entry"_test =
+        [] {
+            refrain::test_support::scratch_directory scratch{};
+            const auto install = scratch.path() / "install";
+            make_gamepack(install);
+            make_content(install);
+            fs::create_directories(install / "bin");
+            write_file(install / "bin" / "refrain-tools");
+            const auto layout = discover_install_layout(install_layout_options{
+                .working_directory = (scratch.path() / "instance").string(),
+                .executable = (install / "bin" / "refrain-server").string()});
+            expect(layout.has_value());
+            if (!layout) {
+                return;
+            }
+            expect(!layout->tools_program.empty());
+            expect(layout->generation_script.empty());
+        };
 };
 
 } // namespace

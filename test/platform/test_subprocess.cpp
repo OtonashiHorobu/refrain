@@ -23,6 +23,7 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <filesystem>
 #include <fstream>
@@ -273,6 +274,29 @@ suite<"platform/subprocess"> subprocess_tests = [] {
                            "refrain-test-no-such-program") !=
                        std::string::npos);
             }
+        };
+
+    "platform/subprocess: a child that exceeds its timeout is killed"_test =
+        [] {
+            // The command sleeps for several seconds; the timeout must return
+            // control long before that and report the kill instead of blocking.
+            const auto sleeper{
+                shell(on_windows() ? "ping -n 6 127.0.0.1 >NUL" : "sleep 5")};
+            const auto started{std::chrono::steady_clock::now()};
+            const auto result{
+                platform::run_process(platform::subprocess_options{
+                    .program = sleeper.program,
+                    .arguments = sleeper.arguments,
+                    .timeout = std::chrono::milliseconds{300},
+                })};
+            const auto elapsed{std::chrono::steady_clock::now() - started};
+            expect(static_cast<bool>(result))
+                << (result ? "" : result.error().message);
+            if (result) {
+                expect(result->timed_out);
+                expect(result->exit_code == 128 + 9);
+            }
+            expect(elapsed < std::chrono::seconds{4});
         };
 
     "platform/subprocess: invocation from a multithreaded caller"_test = [] {

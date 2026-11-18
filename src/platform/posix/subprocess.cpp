@@ -9,11 +9,13 @@
 #include <fmt/format.h>
 
 #include <cerrno>
+#include <chrono>
 #include <csignal>
 #include <cstring>
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -226,11 +228,40 @@ auto run_process(const subprocess_options &options)
 
     int status{0};
     pid_t waited{-1};
-    do {
-        waited = ::waitpid(pid, &status, 0);
-    } while (waited < 0 && errno == EINTR);
+    bool timed_out{false};
+    if (options.timeout.count() > 0) {
+        // Poll so the wait remains interruptible: a bounded child is killed
+        // and reaped rather than left running behind a blocking wait.
+        const auto deadline{std::chrono::steady_clock::now() + options.timeout};
+        constexpr auto poll_interval{std::chrono::milliseconds{10}};
+        for (;;) {
+            waited = ::waitpid(pid, &status, WNOHANG);
+            if (waited < 0 && errno == EINTR) {
+                continue;
+            }
+            if (waited != 0) {
+                break;
+            }
+            if (std::chrono::steady_clock::now() >= deadline) {
+                timed_out = true;
+                static_cast<void>(::kill(pid, SIGKILL));
+                do {
+                    waited = ::waitpid(pid, &status, 0);
+                } while (waited < 0 && errno == EINTR);
+                break;
+            }
+            std::this_thread::sleep_for(poll_interval);
+        }
+    } else {
+        do {
+            waited = ::waitpid(pid, &status, 0);
+        } while (waited < 0 && errno == EINTR);
+    }
     if (waited < 0) {
         return std::unexpected{io_failure("cannot wait for the child")};
+    }
+    if (timed_out) {
+        return subprocess_result{.exit_code = 128 + SIGKILL, .timed_out = true};
     }
     if (WIFEXITED(status)) {
         return subprocess_result{.exit_code = WEXITSTATUS(status)};
