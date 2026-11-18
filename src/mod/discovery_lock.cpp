@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <map>
 #include <optional>
+#include <set>
 #include <span>
 #include <string>
 #include <string_view>
@@ -499,6 +500,93 @@ auto read_mod_lock(std::string_view path) -> result<mod_lock> {
 auto verify_mod_lock(const mod_lock &lock,
                      std::span<const discovered_mod> discovered) -> status {
     return verify_impl(lock, discovered);
+}
+
+auto format_lock_drift(const mod_lock &stored, const mod_lock &resolved)
+    -> std::string {
+    std::map<std::string, const locked_mod *> stored_by_id;
+    std::map<std::string, const locked_mod *> resolved_by_id;
+    for (const auto &mod : stored.mods) {
+        stored_by_id.emplace(mod.id, &mod);
+    }
+    for (const auto &mod : resolved.mods) {
+        resolved_by_id.emplace(mod.id, &mod);
+    }
+
+    std::vector<std::string> lines{};
+    const auto gamepack_changed{stored.gamepack_id != resolved.gamepack_id ||
+                                stored.gamepack_version !=
+                                    resolved.gamepack_version};
+    if (gamepack_changed) {
+        lines.push_back(
+            fmt::format("gamepack drift: lock says '{}@{}', resolved '{}@{}'",
+                        stored.gamepack_id, stored.gamepack_version,
+                        resolved.gamepack_id, resolved.gamepack_version));
+    }
+
+    const auto describe{[](const locked_mod &mod) {
+        return fmt::format("{}@{} (origin={})", mod.id, mod.version,
+                           to_string(mod.origin));
+    }};
+
+    // Walk the union of ids so the output is stable and names both sides of
+    // every change.
+    std::set<std::string> ids{};
+    for (const auto &entry : stored_by_id) {
+        ids.insert(entry.first);
+    }
+    for (const auto &entry : resolved_by_id) {
+        ids.insert(entry.first);
+    }
+    for (const auto &id : ids) {
+        const auto before_it{stored_by_id.find(id)};
+        const auto after_it{resolved_by_id.find(id)};
+        if (before_it == stored_by_id.end()) {
+            lines.push_back("added: " + describe(*after_it->second));
+            continue;
+        }
+        if (after_it == resolved_by_id.end()) {
+            lines.push_back("removed: " + describe(*before_it->second));
+            continue;
+        }
+        const auto &before{*before_it->second};
+        const auto &after{*after_it->second};
+        if (before.version != after.version) {
+            lines.push_back(
+                fmt::format("version drift: {}: lock says '{}', resolved '{}'",
+                            before.id, before.version, after.version));
+        }
+        if (before.abi != after.abi) {
+            lines.push_back(
+                fmt::format("abi drift: {}: lock says {}, resolved {}",
+                            before.id, before.abi, after.abi));
+        }
+        if (before.origin != after.origin) {
+            lines.push_back(fmt::format(
+                "origin drift: {}: lock says '{}', resolved '{}'", before.id,
+                to_string(before.origin), to_string(after.origin)));
+        }
+        if (before.manifest_hash != after.manifest_hash) {
+            lines.push_back(fmt::format(
+                "manifest hash drift: {}: lock says {}, resolved {}", before.id,
+                data::to_hex(before.manifest_hash),
+                data::to_hex(after.manifest_hash)));
+        }
+    }
+
+    if (lines.empty()) {
+        return "no drift";
+    }
+    lines.push_back(fmt::format("fingerprint: lock says {}, resolved {}",
+                                stored.fingerprint(), resolved.fingerprint()));
+    std::string out;
+    for (const auto &line : lines) {
+        if (!out.empty()) {
+            out += '\n';
+        }
+        out += line;
+    }
+    return out;
 }
 
 auto format_mod_lock(const mod_lock &lock) -> std::string {

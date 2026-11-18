@@ -500,7 +500,7 @@ id = "refrain.vanilla"
 version = "26.3.0"
 side = "server"
 abi = "1"
-auto_scan = false
+auto_scan = true
 
 [mods]
 list = [
@@ -525,18 +525,67 @@ that provides it, using a version range; it cannot bind the loader service
 (`refrain:mod.loader`), because package-provided loaders are declared in
 `[loaders]` and the host-owned ones come from the host bootstrap. `[loaders]`
 declares the package-provided loader instances a composition trusts, keyed by
-loader id and pointing at the providing mod. Both are optional. With
-`auto_scan = true` the resolved composition also includes every mod installed
-in the server's content store
-(`--content-store`, plus any `--mods` store roots); with `auto_scan = false` the
-gamepack is the only source of truth and every required version must be listed.
+loader id and pointing at the providing mod. Both are optional.
+
+Discovery is on in the shipped gamepack (`auto_scan = true`). A mod installed
+into a content store (`--content-store`, plus any `--mods` store roots) joins
+the composition on the next start without editing the gamepack; the gamepack
+stays the source of truth for provider bindings, loader declarations and
+explicit version pins. `--no-auto-scan`, or `auto_scan = false` in the gamepack,
+turns discovery off: then `[mods].list` is the only source and every required
+mod must be listed.
+
+An installed mod may declare `[provides]` for a service the gamepack already
+binds. Resolution fails closed in that case and names both candidates rather
+than silently keeping the gamepack's provider and loading the installed mod as
+data only. To choose the installed mod, name it explicitly: add it to
+`[mods].list` and bind it under `[providers]`. An explicit gamepack declaration
+always wins; the competition is then recorded as a lock warning. A mod that
+provides a different contract in the same namespace is not a conflict.
 
 A resolved composition is written to `mods.lock` next to the gamepack. The lock
-records the selected versions, the provider for each service, a fingerprint of
-the resolution and the build profile and build id that wrote it. Loading fails
-when a pinned mod is missing, the composition drifts or the lock was written by
-a different build; `refrain-server --update-lock` rewrites the lock for an
-intentional change.
+records the gamepack identity, every selected mod with its version, ABI, origin
+and manifest hash, a fingerprint of the resolution and the build profile and
+build id that wrote it. Provider bindings stay in the gamepack; the lock freezes
+which installed versions those bindings resolved to. It is a generated file: do
+not edit it by hand. Installing or updating a mod changes the
+resolved set, so the next start reports drift instead of silently changing the
+composition:
+
+```text
+mods.lock: '/srv/refrain/gamepack/mods.lock' is out of date:
+version drift: com.example.mod: lock says '1.0.0', resolved '1.0.1'
+fingerprint: lock says <old>, resolved <new>
+refresh it with: refrain-server --gamepack '/srv/refrain/gamepack/gamepack.toml' --mods '/srv/refrain/store' --mods-lock '/srv/refrain/gamepack/mods.lock' --update-lock --check
+```
+
+`--check` only resolves the composition, so the refresh does not open a world or
+a port. `refrain-tools mods lock` runs the same resolution from a development
+tree and reports or writes the lock without starting the server:
+
+```bash
+# Report drift; exit non-zero when the lock is missing or out of date.
+refrain-tools mods lock -g gamepack/gamepack.toml \
+    --mods /srv/refrain/store \
+    --image build/Release/generated/builtin.image \
+    --lock gamepack/mods.lock
+
+# Write the resolved lock after an intended install or update.
+refrain-tools mods lock -g gamepack/gamepack.toml \
+    --mods /srv/refrain/store \
+    --image build/Release/generated/builtin.image \
+    --lock gamepack/mods.lock --write
+```
+
+A missing lock is written once on the first start that resolves a composition;
+after that startup never rewrites it. A lock written by a different build
+profile or build id is refused rather than compared, and a lock that names a mod
+the binary was not built with fails before any world is opened.
+
+The install/update flow is therefore: install or update the package into the
+content store (`refrain-tools mods install`, or the server's startup inbox), then
+refresh `mods.lock`, then start. Installation writes receipts and content only;
+it never edits `gamepack.toml` or `mods.lock`.
 
 Validate and inspect a composition:
 
@@ -955,6 +1004,27 @@ untouched and the next install prunes a staging directory whose owner process is
 gone. Reinstalling the exact archive digest of an installed `(id, version)` is a
 no-op.
 
+An install changes the receipt catalog, not the gamepack: `gamepack.toml` is
+never edited by an install or an update. The composition is resolved again on
+the next start, and because discovery is on by default the installed mod is part
+of it. That resolved set is recorded in `mods.lock`, so an install that changes
+it is drift until the lock is refreshed:
+
+```bash
+# 1. install or update the package
+refrain-tools mods install package.rfmod --store /path/to/store
+# 2. refresh the lock from the same resolution the server uses
+refrain-tools mods lock -g gamepack/gamepack.toml --mods /path/to/store \
+    --image build/Release/generated/builtin.image \
+    --lock gamepack/mods.lock --write
+# 3. start; the composition is verified against the lock
+refrain-server --gamepack gamepack/gamepack.toml --content-store /path/to/store
+```
+
+On a deployed server without a built-in image file, step 2 is
+`refrain-server ... --update-lock --check`, which resolves the composition and
+exits before opening a world or a port.
+
 The receipt is one schema, `refrain.mod-receipt/1`. It records the package
 identity and digests, the signer identity (`key_id` and the BLAKE3
 `public_key_fingerprint` of the verifying key), the policy that accepted the
@@ -1212,7 +1282,9 @@ pin (`--keep-signer-pin` keeps it so a reinstall must use the same signer). The
 CAS is append-only: the blobs stay until the next mark-sweep GC runs with no
 root pointing at them. `--allow-empty-roots` is required when nothing is
 installed any more, because an empty root set by accident would otherwise look
-like a request to wipe the store.
+like a request to wipe the store. Uninstalling changes the resolved set, so
+refresh `mods.lock` exactly as after an install; the next start reports the
+removed mod as drift until it is refreshed.
 
 ## Managing mods on a running server
 
@@ -1247,8 +1319,11 @@ silently becomes a grant. The hot gates default off: installing or
 uninstalling changes the content store at
 once, but the running composition picks the change up on the next start unless
 the gate is enabled. A hot install only publishes a mod the composition
-resolves: with auto-scan off the gamepack has to list it, otherwise the receipt
-stays installed for the next start.
+resolves: with discovery on that is every trusted installed mod, with
+`--no-auto-scan` the gamepack has to list it, otherwise the receipt stays
+installed for the next start. A store change does not rewrite `mods.lock`; the
+next start verifies the lock and reports the change as drift until it is
+refreshed.
 
 `install`, `uninstall` and the trust changes require the literal `confirm`
 argument; `--dry-run` reports without writing store state. Every operation,

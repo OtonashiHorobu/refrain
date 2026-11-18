@@ -264,6 +264,29 @@ int main(int argc, char **argv) {
                               "mods.lock path to verify against the full "
                               "(builtin + installed) catalog");
 
+    mods_lock_options mods_lock{};
+    auto *mods_lock_cmd = mods_cmd->add_subcommand(
+        "lock", "Resolve a gamepack composition from install receipts and "
+                "report or write mods.lock (the same resolution startup uses)");
+    mods_lock_cmd->add_option("-g,--gamepack", mods_lock.gamepack,
+                              "gamepack.toml path");
+    mods_lock_cmd->add_option(
+        "--mods", mods_lock.roots,
+        "Content store root with installed mod receipts (repeatable)");
+    mods_lock_cmd->add_option(
+        "--image", mods_lock.image,
+        "Builtin image seeding the built-in mods (build/<preset>/generated/"
+        "builtin.image); required when the gamepack pins built-in mods");
+    mods_lock_cmd->add_option(
+        "--lock", mods_lock.lock,
+        "mods.lock path (default: <gamepack directory>/mods.lock)");
+    mods_lock_cmd->add_option("--side", mods_lock.side,
+                              "Host side for the side compatibility check");
+    mods_lock_cmd->add_flag(
+        "--write", mods_lock.write,
+        "Write the lock when it is missing or drifted instead of only "
+        "reporting it");
+
     mods_load_options mods_load{};
     auto *mods_load_cmd = mods_cmd->add_subcommand(
         "load", "Load a resolved gamepack's internal mods against a builtin "
@@ -819,6 +842,9 @@ int main(int argc, char **argv) {
     }
     if (mods_list_cmd->parsed()) {
         return app_services::run_mods_list(mods_list);
+    }
+    if (mods_lock_cmd->parsed()) {
+        return app_services::run_mods_lock(mods_lock);
     }
     if (mods_load_cmd->parsed()) {
         return app_services::run_mods_load(mods_load);

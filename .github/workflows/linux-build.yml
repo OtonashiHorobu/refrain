@@ -417,6 +417,7 @@ jobs:
             cd "$work"
             exec "$GITHUB_WORKSPACE/build/Release/bin/refrain-server" \
               --gamepack "$GITHUB_WORKSPACE/gamepack/gamepack.toml" \
+              --mods-lock "$work/mods.lock" \
               --accept-eula --eula-file "$work/eula.toml" \
               --data-dir "$work/data" --no-data-download \
               --world world --config-dir config --ticks 0 </dev/null

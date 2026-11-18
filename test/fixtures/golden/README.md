@@ -14,10 +14,10 @@ reviewable diff.
 
 ## Provenance
 
-`gamepack/gamepack.toml` (10 builtin mods, `auto_scan=false`) plus the
+`gamepack/gamepack.toml` (13 builtin mods, `auto_scan=true`) plus the
 repository root `mods/` (origin=builtin) plus `test/fixtures/instance`
-(origin=user, `auto_scan=true`, matching the CI `refrain-server --auto-scan`
-smoke) produce the 11-mod `mods.lock`.
+(origin=user, discovered through the same auto-scan policy, matching the CI
+`refrain-server --auto-scan` smoke) produce the 11-mod `mods.lock`.
 
 ## Updating
 

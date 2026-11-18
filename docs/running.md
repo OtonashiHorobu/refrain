@@ -260,6 +260,10 @@ only ends console input and does not stop the tick loop.
 | `--compact-interval-ticks <n>` | compact region files every n ticks, 0 disables |
 | `--content-store <dir>` | enable the content store and startup maintenance; installed mods in it are part of the composition |
 | `--mods <dir>` | content store root whose install receipts are part of the mod catalog, repeatable |
+| `--mods-lock <file>` | `mods.lock` path (default: next to the gamepack) |
+| `--auto-scan` | force discovery on regardless of the gamepack |
+| `--no-auto-scan` | disable discovery: only `[mods].list` entries load |
+| `--update-lock` | rewrite a drifted or missing `mods.lock` during this resolve instead of failing |
 | `--allow-downgrade` | accept a mod version lower than the installed highest (one run) |
 | `--replace-same-version` | accept the same mod `(id, version)` with a different archive digest (one run) |
 | `--keep-signer-pin` | keep a mod's signer pin after uninstalling its last version |
@@ -274,6 +278,37 @@ contributes the server's own store and `--mods` names additional store roots. A
 a load path. The install/trust policy is `mods.toml` in the configuration
 directory; the flags above override individual values for one run. See
 [Mods and gamepacks](modding.md#installing-mods).
+
+Discovery is on by default in the shipped gamepack: a trusted mod installed into
+a content store joins the composition without editing `gamepack.toml`.
+`--no-auto-scan` (or `auto_scan = false` in the gamepack) is the single opt-out;
+then only the mods pinned in `[mods].list` load. The gamepack always decides
+provider bindings and loader declarations, and an explicit pin still overrides
+the discovered version.
+
+`mods.lock` next to the gamepack is the generated resolution record: the
+gamepack identity, every selected mod with its version, ABI, origin and manifest
+hash, the resolution fingerprint and the build profile and build id that wrote
+it. Provider bindings stay in the gamepack. The server verifies the lock before
+loading. A missing lock is written once on the
+first resolve; after that startup never rewrites it. An install or update
+changes the resolved set, so the next start fails closed with a diff naming both
+sides and the exact refresh command:
+
+```text
+mods.lock: '/srv/refrain/gamepack/mods.lock' is out of date:
+version drift: com.example.mod: lock says '1.0.0', resolved '1.0.1'
+refresh it with: refrain-server --gamepack '/srv/refrain/gamepack/gamepack.toml' --content-store '/srv/refrain/store' --mods-lock '/srv/refrain/gamepack/mods.lock' --update-lock --check
+```
+
+Refresh it with `--update-lock` on a resolve-only run (`--check` opens no world
+and no port), or with `refrain-tools mods lock --write` in a development tree.
+The flow is install or update the package, refresh the lock, then start;
+installation writes the content store and its receipts only and never edits the
+gamepack or the lock. A lock written by a different build profile or build id is
+refused instead of compared, and a composition that claims a provider slot the
+gamepack already binds fails naming both candidates rather than silently
+keeping one.
 
 The server logs the build's mod profile and build id at startup:
 
@@ -837,10 +872,12 @@ The server builds the lifecycle service from the composition it is running and
 from the catalog the start resolved: the same content-store roots, install
 receipts and effective auto-scan policy. A staged change therefore follows the
 same rules as the next start would, and the running composition only changes
-when those rules resolve the mod into it. With `auto_scan` off and the mod not
-listed by the gamepack, the install command keeps the receipt for the next
-start and refuses with the reason instead of joining the running composition;
-enable auto-scan or list the mod.
+when those rules resolve the mod into it. With discovery on (the default) a
+trusted installed mod resolves; with `--no-auto-scan` and the mod not listed by
+the gamepack, the install command keeps the receipt for the next start and
+refuses with the reason instead of joining the running composition. A store
+change never rewrites `mods.lock`; the next start reports the change as drift
+until the lock is refreshed.
 
 A staged change is published at a tick boundary. The registry switch is atomic
 and no package or store IO happens there: reading and verifying the package,

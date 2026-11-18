@@ -136,6 +136,7 @@ case "$PROFILE" in
         [[ "${#MODULE_FILES[@]}" -ge 1 ]] \
             || die "dynamic profile produced no first-party module"
         "$SERVER" --gamepack gamepack/gamepack.toml --check \
+            --mods-lock "$WORK/mods.lock" \
             >"$WORK/server.txt" 2>&1 \
             || die "dynamic profile failed to start the composition"
         grep -q "with mod profile dynamic" "$WORK/server.txt" \
@@ -156,6 +157,7 @@ case "$PROFILE" in
     *)
         say "start the profile's default composition"
         "$SERVER" --gamepack gamepack/gamepack.toml --check \
+            --mods-lock "$WORK/mods.lock" \
             >"$WORK/server.txt" 2>&1 \
             || die "profile '$PROFILE' failed to start its default composition"
         grep -q "with mod profile $PROFILE" "$WORK/server.txt" \

@@ -8,7 +8,10 @@
 // receipt schema, and the receipt-only runtime catalog.
 
 #include <refrain/app/services.hpp>
+
+#include <refrain/builtin/image.hpp>
 #include <refrain/core/io.hpp>
+#include <refrain/core/version.hpp>
 #include <refrain/data/checksum.hpp>
 #include <refrain/data/content_maintenance.hpp>
 #include <refrain/data/content_store.hpp>
@@ -29,6 +32,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <optional>
 #include <span>
 #include <string>
@@ -1493,6 +1497,201 @@ const suite mod_install_cli_tests = [] {
             expect(fs::exists(
                 work.path("store-dev/mods/refrain.test.cli/1.0.0.json")));
         };
+};
+
+// ---------------------------------------------------------------------------
+// auto-discovery against the shipped gamepack
+// ---------------------------------------------------------------------------
+
+constexpr std::string_view shipped_gamepack{"gamepack/gamepack.toml"};
+
+[[nodiscard]] auto shipped_path(std::string_view relative) -> std::string {
+    return (fs::path{REFRAIN_SOURCE_DIR} / relative).string();
+}
+
+/// Write the image this binary embeds to a file, the way a deployed
+/// `refrain-tools` reads it (`build/<preset>/generated/builtin.image`).
+[[nodiscard]] auto write_embedded_image(const temp_workspace &work)
+    -> std::optional<std::string> {
+    const auto path{work.path("builtin.image")};
+    std::ofstream out{path, std::ios::binary};
+    if (!out) {
+        return std::nullopt;
+    }
+    const auto bytes{std::span<const std::byte>{
+        refrain::builtin::image_data(), refrain::builtin::image_size()}};
+    out.write(reinterpret_cast<const char *>(bytes.data()),
+              static_cast<std::streamsize>(bytes.size()));
+    if (!out) {
+        return std::nullopt;
+    }
+    return path.string();
+}
+
+const suite mod_catalog_discovery_tests = [] {
+    "catalog/an installed mod joins the shipped gamepack composition"_test =
+        [] {
+            temp_workspace work{"catalog-autodiscovery"};
+            expect(
+                materialise(work, "mod", "refrain.test.discovered", "1.0.0"));
+            auto archive{pack(work, "mod", "out/mod.rfmod")};
+            expect(archive.has_value());
+            if (!archive) {
+                return;
+            }
+            auto store{make_store(work)};
+            expect(store.has_value());
+            if (!store) {
+                return;
+            }
+            auto installed{install_archive(*store, *archive)};
+            expect(static_cast<bool>(installed));
+            if (!installed) {
+                return;
+            }
+            const auto image_path{write_embedded_image(work)};
+            expect(image_path.has_value());
+            if (!image_path) {
+                return;
+            }
+            auto image_bytes{io::read_file(*image_path)};
+            expect(image_bytes.has_value());
+            if (!image_bytes) {
+                return;
+            }
+            auto spec{mod::load_gamepack_spec(shipped_path(shipped_gamepack),
+                                              "server")};
+            expect(static_cast<bool>(spec));
+            if (!spec) {
+                return;
+            }
+            // The shipped gamepack enables discovery; the installed receipt is
+            // the only edit needed to load a new mod.
+            expect(spec->auto_scan);
+            const std::vector<std::string> roots{work.path("store").string()};
+            const auto plan{mod::resolve_installed_composition(
+                *spec, roots,
+                mod::composition_load_options{
+                    .builtin_image =
+                        std::span<const std::byte>{*image_bytes}})};
+            expect(static_cast<bool>(plan));
+            if (!plan) {
+                return;
+            }
+            const auto *resolved{plan->find("refrain.test.discovered")};
+            expect(resolved != nullptr);
+            if (resolved != nullptr) {
+                expect(resolved->origin == mod::mod_origin::user);
+                expect(resolved->version == "1.0.0");
+            }
+            expect(plan->find("refrain.world.vanilla") != nullptr);
+
+            // Resolution reads the gamepack; it never writes it.
+            auto after{io::read_text(shipped_path(shipped_gamepack))};
+            expect(after.has_value());
+            if (after) {
+                expect(after->find("refrain.test.discovered") ==
+                       std::string::npos);
+            }
+
+            // The documented opt-out keeps the explicit-only composition: the
+            // receipt stays installed but is not selected.
+            const auto pinned_only{mod::resolve_installed_composition(
+                *spec, roots,
+                mod::composition_load_options{
+                    .builtin_image = std::span<const std::byte>{*image_bytes},
+                    .auto_scan = false})};
+            expect(static_cast<bool>(pinned_only));
+            if (pinned_only) {
+                expect(pinned_only->find("refrain.test.discovered") == nullptr);
+                expect(pinned_only->mods.size() == spec->mods.size());
+            }
+        };
+
+    "catalog/mods lock writes the deterministic resolution from the same "
+    "path"_test = [] {
+        temp_workspace work{"catalog-tools-lock"};
+        expect(materialise(work, "mod", "refrain.test.discovered", "1.0.0"));
+        auto archive{pack(work, "mod", "out/mod.rfmod")};
+        expect(archive.has_value());
+        if (!archive) {
+            return;
+        }
+        auto store{make_store(work)};
+        expect(store.has_value());
+        if (!store) {
+            return;
+        }
+        auto installed{install_archive(*store, *archive)};
+        expect(static_cast<bool>(installed));
+        if (!installed) {
+            return;
+        }
+        const auto image_path{write_embedded_image(work)};
+        expect(image_path.has_value());
+        if (!image_path) {
+            return;
+        }
+
+        refrain::app::mods_lock_options options{};
+        options.gamepack = shipped_path(shipped_gamepack);
+        options.image = *image_path;
+        options.roots = {work.path("store").string()};
+        options.lock = work.path("mods.lock").string();
+        options.write = true;
+        expect(refrain::app::run_mods_lock(options) == 0);
+        auto written{io::read_text(options.lock)};
+        expect(written.has_value());
+        if (!written) {
+            return;
+        }
+        expect(written->find("refrain.test.discovered") != std::string::npos);
+        expect(written->find("profile = \"" +
+                             std::string{refrain::version::mod_profile} +
+                             "\"") != std::string::npos);
+        expect(written->find("build_id = \"" +
+                             std::string{refrain::version::mod_build_id} +
+                             "\"") != std::string::npos);
+
+        // A second run verifies instead of rewriting: same bytes, no drift.
+        expect(refrain::app::run_mods_lock(options) == 0);
+        auto second{io::read_text(options.lock)};
+        expect(second.has_value());
+        if (second) {
+            expect(*second == *written);
+        }
+
+        // The written text is exactly what the server's resolution produces;
+        // a second lock writer could otherwise drift from startup silently.
+        auto image_bytes{io::read_file(*image_path)};
+        expect(image_bytes.has_value());
+        if (!image_bytes) {
+            return;
+        }
+        const std::vector<std::string> roots{work.path("store").string()};
+        auto spec{mod::load_gamepack_spec(options.gamepack, "server")};
+        expect(static_cast<bool>(spec));
+        if (!spec) {
+            return;
+        }
+        auto plan{mod::resolve_installed_composition(
+            *spec, roots,
+            mod::composition_load_options{
+                .builtin_image = std::span<const std::byte>{*image_bytes}})};
+        expect(static_cast<bool>(plan));
+        if (plan) {
+            plan->profile = refrain::version::mod_profile;
+            plan->build_id = refrain::version::mod_build_id;
+            expect(plan->to_toml() == *written);
+        }
+
+        // Dry run: report only, never write, non-zero when the lock is absent
+        // or drifted.
+        options.lock = work.path("dry-run.lock").string();
+        options.write = false;
+        expect(refrain::app::run_mods_lock(options) != 0);
+        expect(!fs::exists(options.lock));
+    };
 };
 
 } // namespace

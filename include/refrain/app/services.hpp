@@ -127,6 +127,32 @@ struct mods_list_options {
     std::string image{};
 };
 
+/// `mods lock`: resolve the runtime composition (installed receipts + optional
+/// builtin image) exactly the way startup does and report or write `mods.lock`.
+/// Resolution goes through `app::resolve_server_mods`, so the lock this command
+/// writes is byte-identical to the one the server writes for the same inputs.
+struct mods_lock_options {
+    std::string gamepack{"gamepack/gamepack.toml"};
+    /// Content store roots whose install receipts form the external catalog
+    /// (repeatable).
+    std::vector<std::string> roots{};
+    /// Builtin RFSI image seeding origin=builtin candidates. Required when the
+    /// gamepack pins built-in mods: the deployed server embeds the image, the
+    /// development tree passes the generated `builtin.image`.
+    std::string image{};
+    /// Lock path; empty means `<gamepack directory>/mods.lock`.
+    std::string lock{};
+    std::string side{"server"};
+    /// Rewrite the lock when it is missing or drifted. Without it the command
+    /// only reports (`--check` style exit code).
+    bool write{false};
+};
+
+/// Default lock location: next to the gamepack file, so the lock travels with
+/// the composition it describes.
+[[nodiscard]] auto default_mods_lock_path(std::string_view gamepack_path)
+    -> std::string;
+
 struct data_options {
     std::vector<std::string> packs{}; ///< priority order (low -> high)
     std::uint32_t pack_format{0};     ///< 0 = accept any pack.mcmeta format
@@ -285,6 +311,7 @@ run_protocol_pool_load(const protocol_pool_load_options &options) -> int;
 [[nodiscard]] auto run_wasm_smoke() -> int;
 [[nodiscard]] auto run_mods_check(const mods_check_options &options) -> int;
 [[nodiscard]] auto run_mods_list(const mods_list_options &options) -> int;
+[[nodiscard]] auto run_mods_lock(const mods_lock_options &options) -> int;
 [[nodiscard]] auto run_mods_load(const mods_load_options &options) -> int;
 [[nodiscard]] auto run_mods_pack(const mods_pack_options &options) -> int;
 [[nodiscard]] auto run_mods_verify(const mods_verify_options &options) -> int;

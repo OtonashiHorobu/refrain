@@ -940,6 +940,161 @@ const suite discovery_tests = [] {
             }
         };
 
+    // Auto-discovery may add a provider claimant for a service the gamepack
+    // already binds. Silently ignoring the installed mod would hide the
+    // operator's intent, so resolution fails closed and names both candidates.
+    "discovery/resolve rejects a discovered provider for a bound service"_test =
+        [] {
+            temp_directory scratch{make_temp_directory()};
+            const auto root{create_root(scratch, "root")};
+            write_manifest(root, "pinned-world", "1.0.0",
+                           "\n[provides]\nservices = [\"refrain:world\"]\n");
+            write_manifest(root, "extra-world", "1.0.0",
+                           "\n[provides]\nservices = [\"refrain:world\"]\n");
+            auto spec{make_spec(true)};
+            pin_mod(spec, "pinned-world", "1.0.0");
+            spec.providers.push_back(mod::provider_binding{
+                .service = "world",
+                .mode = mod::provider_mode::exclusive,
+                .candidates = {mod::mod_requirement{.id = "pinned-world",
+                                                    .range = "^1.0.0"}}});
+            const auto scanned{scan_single(root, mod_origin::user)};
+            expect(static_cast<bool>(scanned));
+            if (!scanned) {
+                return;
+            }
+            const auto resolved{mod::resolve(spec, *scanned)};
+            expect(!resolved);
+            if (!resolved) {
+                expect(resolved.error().code ==
+                       refrain::error_code::already_exists);
+                const auto &message{resolved.error().message};
+                expect(message.find("extra-world") != std::string::npos);
+                expect(message.find("pinned-world") != std::string::npos);
+                expect(message.find("world") != std::string::npos);
+                expect(message.find("origin=user") != std::string::npos);
+            }
+
+            // An explicit gamepack declaration is the operator's decision: the
+            // pin makes the claim visible instead of fatal, and the binding
+            // still selects exactly one provider.
+            pin_mod(spec, "extra-world", "1.0.0");
+            const auto explicit_resolution{mod::resolve(spec, *scanned)};
+            expect(static_cast<bool>(explicit_resolution));
+            if (!explicit_resolution) {
+                return;
+            }
+            expect(explicit_resolution->mods.size() == 2U);
+            expect(explicit_resolution->providers.size() == 1U);
+            if (explicit_resolution->providers.size() == 1U) {
+                expect(explicit_resolution->providers[0].provider ==
+                       "pinned-world@1.0.0");
+            }
+            expect(explicit_resolution->warnings.size() == 1U);
+            if (explicit_resolution->warnings.size() == 1U) {
+                const auto &warning{explicit_resolution->warnings[0]};
+                expect(warning.find("extra-world") != std::string::npos);
+                expect(warning.find("explicit gamepack declaration wins") !=
+                       std::string::npos);
+            }
+        };
+
+    // A gamepack may bind an auto-discovered provider explicitly; that is the
+    // documented way to choose an installed provider and it must not be
+    // reported as a conflict.
+    "discovery/resolve binds a discovered provider named by the gamepack"_test =
+        [] {
+            temp_directory scratch{make_temp_directory()};
+            const auto root{create_root(scratch, "root")};
+            write_manifest(root, "extra-world", "1.0.0",
+                           "\n[provides]\nservices = [\"refrain:world\"]\n");
+            auto spec{make_spec(true)};
+            spec.providers.push_back(mod::provider_binding{
+                .service = "world",
+                .mode = mod::provider_mode::exclusive,
+                .candidates = {mod::mod_requirement{.id = "extra-world",
+                                                    .range = "^1.0.0"}}});
+            const auto scanned{scan_single(root, mod_origin::user)};
+            expect(static_cast<bool>(scanned));
+            if (!scanned) {
+                return;
+            }
+            const auto resolved{mod::resolve(spec, *scanned)};
+            expect(static_cast<bool>(resolved));
+            if (resolved) {
+                expect(resolved->providers.size() == 1U);
+                if (resolved->providers.size() == 1U) {
+                    expect(resolved->providers[0].provider ==
+                           "extra-world@1.0.0");
+                }
+            }
+        };
+
+    // A namespace sibling is a different contract: a mod that provides
+    // `refrain:world.migration` does not compete for the `world` binding, and
+    // must not be rejected just because the world service is bound.
+    "discovery/resolve allows a discovered namespace sibling provider"_test =
+        [] {
+            temp_directory scratch{make_temp_directory()};
+            const auto root{create_root(scratch, "root")};
+            write_manifest(root, "pinned-world", "1.0.0",
+                           "\n[provides]\nservices = [\"refrain:world\"]\n");
+            write_manifest(
+                root, "migration-mod", "1.0.0",
+                "\n[provides]\nservices = [\"refrain:world.migration\"]\n");
+            auto spec{make_spec(true)};
+            pin_mod(spec, "pinned-world", "1.0.0");
+            spec.providers.push_back(mod::provider_binding{
+                .service = "world",
+                .mode = mod::provider_mode::exclusive,
+                .candidates = {mod::mod_requirement{.id = "pinned-world",
+                                                    .range = "^1.0.0"}}});
+            const auto scanned{scan_single(root, mod_origin::user)};
+            expect(static_cast<bool>(scanned));
+            if (!scanned) {
+                return;
+            }
+            const auto resolved{mod::resolve(spec, *scanned)};
+            expect(static_cast<bool>(resolved));
+            if (resolved) {
+                expect(resolved->mods.size() == 2U);
+                expect(resolved->warnings.empty());
+            }
+        };
+
+    // A data-only binding activates no contract provider, so a discovered mod
+    // claiming the same slot is not competing with an active provider.
+    "discovery/resolve ignores provider claims against a data-only binding"_test =
+        [] {
+            temp_directory scratch{make_temp_directory()};
+            const auto root{create_root(scratch, "root")};
+            write_manifest(root, "data-mod", "1.0.0");
+            write_manifest(
+                root, "extra-content", "1.0.0",
+                "\n[provides]\nservices = [\"refrain:content.packs\"]\n");
+            auto spec{make_spec(true)};
+            pin_mod(spec, "data-mod", "1.0.0");
+            spec.providers.push_back(mod::provider_binding{
+                .service = "content",
+                .mode = mod::provider_mode::exclusive,
+                .candidates = {mod::mod_requirement{.id = "data-mod",
+                                                    .range = "^1.0.0"}}});
+            const auto scanned{scan_single(root, mod_origin::user)};
+            expect(static_cast<bool>(scanned));
+            if (!scanned) {
+                return;
+            }
+            const auto resolved{mod::resolve(spec, *scanned)};
+            expect(static_cast<bool>(resolved));
+            if (resolved) {
+                expect(resolved->mods.size() == 2U);
+                expect(resolved->providers.size() == 1U);
+                if (resolved->providers.size() == 1U) {
+                    expect(resolved->providers[0].provider == "data-mod@1.0.0");
+                }
+            }
+        };
+
     "discovery/resolve dependency satisfied across selected mods"_test = [] {
         temp_directory scratch{make_temp_directory()};
         const auto root{create_root(scratch, "root")};
@@ -1171,6 +1326,45 @@ const suite discovery_tests = [] {
         // ... but the composition identity is identical.
         expect(lock_a->fingerprint() == lock_b->fingerprint());
         expect(lock_a->canonical_text() == lock_b->canonical_text());
+    };
+
+    "discovery/lock drift diff names both sides of every change"_test = [] {
+        const auto locked = [](std::string id, std::string version) {
+            locked_mod entry{};
+            entry.id = std::move(id);
+            entry.version = std::move(version);
+            entry.abi = 1;
+            entry.origin = mod_origin::user;
+            entry.path = "mods/" + entry.id + "/manifest.toml";
+            return entry;
+        };
+        mod_lock stored{};
+        stored.gamepack_id = "test.gamepack";
+        stored.gamepack_version = "1.0.0";
+        stored.mods = {locked("kept", "1.0.0"), locked("removed", "1.0.0"),
+                       locked("changed", "1.0.0")};
+        expect(mod::format_lock_drift(stored, stored) == "no drift");
+
+        auto resolved{stored};
+        resolved.mods = {locked("added", "2.0.0"), locked("kept", "1.0.0"),
+                         locked("changed", "1.0.1")};
+        const auto diff{mod::format_lock_drift(stored, resolved)};
+        expect(diff.find("added: added@2.0.0") != std::string::npos);
+        expect(diff.find("removed: removed@1.0.0") != std::string::npos);
+        expect(diff.find("version drift: changed: lock says '1.0.0', resolved "
+                         "'1.0.1'") != std::string::npos);
+        expect(diff.find("fingerprint: lock says " + stored.fingerprint()) !=
+               std::string::npos);
+        expect(diff.find(resolved.fingerprint()) != std::string::npos);
+
+        // A gamepack change is drift even when the mod set is identical.
+        auto regamepack{stored};
+        regamepack.gamepack_version = "1.0.1";
+        const auto gamepack_diff{mod::format_lock_drift(stored, regamepack)};
+        expect(gamepack_diff.find("gamepack drift: lock says 'test.gamepack@"
+                                  "1.0.0', resolved 'test.gamepack@1.0.1'") !=
+               std::string::npos);
+        expect(gamepack_diff.find("fingerprint: ") != std::string::npos);
     };
 
     "discovery/lock write/read roundtrip"_test = [] {
