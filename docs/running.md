@@ -47,6 +47,30 @@ Later starts reuse `data` without touching the network. No game asset is
 committed, redistributed or bundled with the release archive: only the unpacked
 data stays on the machine that fetched it.
 
+### Where the game data comes from
+
+The datapack and the tracked artifacts (the table container, the climate
+reports and the protocol registry) resolve separately. Each lookup uses the
+first source that provides it:
+
+1. the data directory named by `--data-dir`, or `./data` when it holds a valid
+   marker or a staged datapack;
+2. the content snapshot shipped next to the binary
+   (`content/vanilla/<version>/`), which supplies the tracked data even when
+   the datapack itself has to be fetched or staged;
+3. the official server archive, downloaded and verified on the first accepted
+   start, unless `--no-data-download` disables the network;
+4. generation from an operator-owned server archive with `--server-jar`, when
+   a source checkout provides `tools/content/generate.sh` and its toolchain.
+
+A world cannot be generated or served without the tracked table container,
+the climate reports and the protocol registry. When no source provides them,
+startup stops before creating or opening a world with one message that names
+the missing file and the command that generates it. The check covers the
+artifact files: a table container that exists but carries no block light data
+is still reported by the runtime warning and falls back to the documented
+opaque default.
+
 The first start prints a one-screen summary at info level: the version it
 serves, the world and seed, where the game data came from, the generated
 configuration files, the listening address and the ready line with the console
@@ -55,15 +79,36 @@ hint.
 ### Offline and pre-staged starts
 
 `--no-data-download` never touches the network. It starts from an existing data
-directory: the default `./data`, or the directory named by `--data-dir`.
+directory, from the packaged content snapshot, or from data the server
+generates from a local archive.
 
 To stage the data directory for an offline host, either copy an existing
-`data` directory, or generate one from a `server.jar` you own:
+`data` directory, or generate one from a `server.jar` you own in a source
+checkout:
 
 ```bash
-scripts/fetch-content.sh /path/to/server.jar
+tools/content/generate.sh --server-jar /path/to/server.jar \
+    --out content/vanilla/26.3 --force
 refrain-server --data-dir content/vanilla/26.3 --no-data-download
 ```
+
+A checkout's `content/vanilla/26.3` already holds the tracked tables and
+reports, so replacing that snapshot requires `--force`; the entry point
+refuses before running the pipeline without it.
+
+The generation entry point runs the vanilla data generator and the light,
+mining and climate probes through the existing tools, so it needs a Java
+runtime (25 or newer for 26.3), Python 3, `unzip` and the `refrain-tools`
+binary of the same build, and it reuses the protocol registry tracked in the
+checkout. It writes `data/`, `reports/`, `tables.rvtb` and
+`protocol_registry.json`. `scripts/fetch-content.sh` remains available when
+only the datapack is needed.
+
+When `--server-jar` names an archive and the tracked data is missing, the
+server runs the same generation on the first start; a first-run download also
+feeds it when the install ships no content snapshot. A package that ships
+neither the content snapshot nor the source tooling therefore fails before the
+world is created, naming the artifact to install.
 
 The data directory layout is the content snapshot layout:
 
@@ -76,10 +121,10 @@ data/
     <namespace>/tags/worldgen/**  biome and structure tags
   templates/              structure templates, <namespace>/structure/**.nbt
   reports/                the climate, default-state, block light and block
-                          mining reports, when copied
+                          mining reports
   tables.rvtb             tracked block, item, registry, light, mining and tool
-                          tables, when staged
-  protocol_registry.json  tracked protocol registry, when staged
+                          tables
+  protocol_registry.json  tracked protocol registry
 ```
 
 A data directory is accepted when its marker names this game version and the
@@ -88,13 +133,16 @@ marker for another game version is stale: it is replaced when downloads are
 allowed and is a `version_mismatch` error otherwise. A directory with no marker
 that carries the datapack is used as-is and reported as pre-staged.
 
-The tracked tables and reports ship with the release archive under
-`content/vanilla/26.3`; a data directory that only holds the downloaded datapack
-receives the reports from there on first start. The tracked tables carry the
-block light table, so the runtime warns at startup when the tables it loaded
-carry no light data: every block state then falls back to opaque and emitting
-nothing, and lighting stays dark until a table with the block light report is
-staged.
+The tracked tables, reports and protocol registry ship with the release
+archive under `content/vanilla/26.3`; a data directory that only holds the
+downloaded datapack receives the reports from there on first start. The tracked
+tables carry the block light table, so the runtime warns at startup when the
+tables it loaded carry no light data: every block state then falls back to
+opaque and emitting nothing, and lighting stays dark until a table with the
+block light report is staged. A start instead refuses to proceed while a
+tracked artifact file is missing, so the failure is reported before world
+generation rather than inside it; a file that exists without light data still
+takes the documented warning path.
 
 The release archive layout is:
 
@@ -108,6 +156,12 @@ refrain-<version>-<platform>/
   content/vanilla/NOTICE.md
   run-server.sh
 ```
+
+The archive carries the tracked data but not the generation tooling: an
+incomplete package, or a binary moved away from its archive, fails closed and
+names what is missing instead of starting half-configured. Unpack the archive
+as a whole so the composition and the content snapshot stay next to the
+binaries.
 
 `logs/` and `crash/` are not part of the archive: the first start creates both
 next to the process working directory. The release archives for Windows carry
@@ -135,6 +189,7 @@ or TOML file:
 | World directory | `./world` | `--world`, `world.path` |
 | Configuration directory | `./config` | `--config-dir` |
 | Game data directory | `./data`, or the installed content snapshot when it already holds the datapack | `--data-dir` |
+| Server archive for generation | none; a first-run download feeds it | `--server-jar` |
 | Composition | `gamepack/gamepack.toml` in the working directory, next to the executable or in the checkout root above it | `--gamepack` |
 | Listening address | `0.0.0.0:25565` | `--bind`, `--port`, `bind_host` and `port` in `network.toml` |
 | Online mode | on | `online_mode` in `network.toml` |
@@ -185,7 +240,8 @@ only ends console input and does not stop the tick loop.
 | `--config-dir <dir>` | host config directory, created with the defaults on first start; each `*.toml` becomes a read-only runtime namespace (`refrain.toml` is `host`, `mods/*.toml` is `mod/<id>`); empty disables |
 | `--world <dir>` | RWF world directory (default `world`, or `world.path`) |
 | `--data-dir <dir>` | game data directory (default `data`, or the installed content snapshot) |
-| `--no-data-download` | never fetch the server archive; start only from staged or cached data |
+| `--no-data-download` | never fetch the server archive; start only from staged, cached or generated data |
+| `--server-jar <file>` | your own 26.3 server archive; generates missing tables and reports |
 | `--data-manifest-url <url>` | version manifest used to locate the server archive (default Mojang's launcher manifest); point it at a mirror |
 | `--accept-eula` | record EULA acceptance and start |
 | `--eula-file <file>` | EULA acceptance file (default `eula.toml`) |

@@ -10,10 +10,13 @@
 #include <refrain/data/checksum.hpp>
 #include <refrain/data/json.hpp>
 #include <refrain/data/path.hpp>
+#include <refrain/platform/subprocess.hpp>
 
 #include <fmt/format.h>
 
 #include <algorithm>
+#include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -146,6 +149,46 @@ constexpr std::uint64_t max_data_file_bytes = 64ULL * 1024ULL * 1024ULL;
         }
     }
     return false;
+}
+
+/// A datapack is complete when the worldgen tree and a marker are present and
+/// the marker's entry count matches the files below `data/`. A generation run
+/// interrupted while it writes the datapack leaves a partial tree with a
+/// stale or missing marker; that must fail closed instead of reaching world
+/// generation. A marker that does not record a count (a hand-staged directory)
+/// still has to match the worldgen tree.
+[[nodiscard]] auto datapack_is_complete(std::string_view root) -> bool {
+    const auto data_root{join(root, "data")};
+    if (!has_worldgen_documents(data_root)) {
+        return false;
+    }
+    auto files{list_files(data_root)};
+    if (!files || files->empty()) {
+        return false;
+    }
+    const auto marker_path{join(root, game_data_marker_name)};
+    if (!io::is_regular_file(marker_path)) {
+        return false;
+    }
+    auto text{io::read_text(marker_path,
+                            io::read_options{.max_bytes = max_marker_bytes,
+                                             .allow_symlink = false})};
+    if (!text) {
+        return false;
+    }
+    auto document{json::value::parse(*text)};
+    if (!document || !document->is_object()) {
+        return false;
+    }
+    if (const auto *entry_count{document->find("entry_count")};
+        entry_count != nullptr) {
+        const auto expected{entry_count->as_int64()};
+        if (!expected || *expected <= 0 ||
+            static_cast<std::uint64_t>(*expected) != files->size()) {
+            return false;
+        }
+    }
+    return true;
 }
 
 /// Digest of a datapack tree: BLAKE3 over the sorted `path\0file-digest\0`
@@ -736,25 +779,42 @@ struct extraction_report {
     return {};
 }
 
-/// Biome parameter reports are read as `<datapack-root>/../reports`, so a data
-/// directory that only holds a downloaded datapack needs a copy next to it.
+/// The reports world generation reads are loaded as
+/// `<datapack-root>/../reports` and `<root>/reports` is the source of truth. A
+/// data directory that only holds a downloaded datapack receives them from the
+/// installed content snapshot on first start; an incomplete local copy is
+/// completed from the snapshot the same way.
 [[nodiscard]] auto ensure_reports(std::string_view root,
-                                  const game_data_options &options) -> status {
+                                  const game_data_options &options)
+    -> result<std::string> {
     const auto target{join(root, "reports")};
-    if (io::is_directory(target)) {
-        return {};
+    const auto installed_reports{
+        options.installed_content_root.empty()
+            ? std::string{}
+            : join(options.installed_content_root, "reports")};
+    const bool installed_available{!installed_reports.empty() &&
+                                   io::is_directory(installed_reports)};
+    bool copy{false};
+    if (!io::is_directory(target)) {
+        if (!installed_available) {
+            log_game_data.warn(
+                "found no biome parameter reports for Minecraft {}; world "
+                "generation will report missing report documents",
+                game_data_version);
+            return std::string{};
+        }
+        copy = true;
+    } else if (installed_available && root != options.installed_content_root) {
+        // A partially populated local directory is completed from the
+        // snapshot; an existing and complete copy stays untouched.
+        copy = !io::is_regular_file(
+            join(target, "biome_parameters/overworld.json"));
     }
-    if (options.installed_content_root.empty() ||
-        !io::is_directory(join(options.installed_content_root, "reports"))) {
-        log_game_data.warn(
-            "found no biome parameter reports for Minecraft {}; world "
-            "generation will report missing report documents",
-            game_data_version);
-        return {};
+    if (!copy) {
+        return target;
     }
-    const auto source{join(options.installed_content_root, "reports")};
-    if (auto copied{copy_tree(source, target)}; !copied) {
-        return copied;
+    if (auto copied{copy_tree(installed_reports, target)}; !copied) {
+        return std::unexpected{copied.error()};
     }
     // The reports are game-derived data: carry the notice that accompanies the
     // tracked copy next to the new directory.
@@ -767,14 +827,264 @@ struct extraction_report {
         }
         if (auto written{io::write_file(join(root, "NOTICE.md"), *bytes)};
             !written) {
-            return written;
+            return std::unexpected{written.error()};
         }
     }
-    const auto copied_files{list_files(source)};
+    const auto copied_files{list_files(installed_reports)};
     log_game_data.info(
         "copied {} report files from the installed content into '{}'",
         copied_files ? copied_files->size() : std::size_t{0}, target);
+    return target;
+}
+
+/// The tracked artifacts one run resolved, with the source of each.
+struct tracked_artifacts {
+    std::string tables{};
+    std::string protocol_registry{};
+    std::string reports_root{};
+    std::string biome_overworld{};
+    std::string biome_nether{};
+};
+
+/// Biome reports the noise dimensions load when the first world is generated.
+/// The end selects its biomes from island bands and reads no report.
+constexpr std::array<std::string_view, 2> required_biome_reports{
+    "biome_parameters/overworld.json", "biome_parameters/nether.json"};
+
+[[nodiscard]] auto resolve_tracked_artifacts(std::string_view root,
+                                             const game_data_options &options)
+    -> result<tracked_artifacts> {
+    tracked_artifacts artifacts{};
+    artifacts.tables =
+        tracked_file(root, options.installed_content_root, "tables.rvtb");
+    artifacts.protocol_registry = tracked_file(
+        root, options.installed_content_root, "protocol_registry.json");
+    auto reports{ensure_reports(root, options)};
+    if (!reports) {
+        return std::unexpected{reports.error()};
+    }
+    artifacts.reports_root = std::move(*reports);
+    if (!artifacts.reports_root.empty()) {
+        const auto overworld{
+            join(artifacts.reports_root, required_biome_reports[0])};
+        if (io::is_regular_file(overworld)) {
+            artifacts.biome_overworld = overworld;
+        }
+        const auto nether{
+            join(artifacts.reports_root, required_biome_reports[1])};
+        if (io::is_regular_file(nether)) {
+            artifacts.biome_nether = nether;
+        }
+    }
+    return artifacts;
+}
+
+/// One artifact a new world cannot be generated without.
+struct missing_artifact {
+    std::string expected{};
+};
+
+/// Required tracked artifacts that no source produced, in the order the
+/// startup message names them. The protocol registry is shipped by the release
+/// archive and cannot be derived from a server archive; a source checkout
+/// carries the versioned copy the generation entry point installs.
+[[nodiscard]] auto missing_artifacts(const tracked_artifacts &artifacts,
+                                     std::string_view root)
+    -> std::vector<missing_artifact> {
+    std::vector<missing_artifact> missing{};
+    if (artifacts.tables.empty()) {
+        missing.push_back(
+            missing_artifact{.expected = join(root, "tables.rvtb")});
+    }
+    if (artifacts.protocol_registry.empty()) {
+        missing.push_back(
+            missing_artifact{.expected = join(root, "protocol_registry.json")});
+    }
+    const auto reports_root{join(root, "reports")};
+    if (artifacts.biome_overworld.empty()) {
+        missing.push_back(missing_artifact{
+            .expected = join(reports_root, required_biome_reports[0])});
+    }
+    if (artifacts.biome_nether.empty()) {
+        missing.push_back(missing_artifact{
+            .expected = join(reports_root, required_biome_reports[1])});
+    }
+    return missing;
+}
+
+[[nodiscard]] auto joined_paths(const std::vector<missing_artifact> &missing)
+    -> std::string {
+    std::string joined{};
+    for (const auto &artifact : missing) {
+        if (!joined.empty()) {
+            joined += ", ";
+        }
+        joined += "'" + artifact.expected + "'";
+    }
+    return joined;
+}
+
+/// Inputs the optional generation fallback needs, with the reason it is
+/// unavailable when one is missing.
+struct generation_plan {
+    bool available{false};
+    std::string script{};
+    std::string jar{};
+    std::string tools{};
+    std::string java{};
+    std::chrono::milliseconds timeout{};
+    std::string problem{};
+};
+
+/// Detect the generation inputs: the source entry point, the tools binary and
+/// a server archive. The Java runtime is checked by the entry point itself,
+/// which reports a prerequisite exit code with its own diagnostic.
+[[nodiscard]] auto plan_generation(const game_data_options &options,
+                                   std::string_view downloaded_jar)
+    -> generation_plan {
+    generation_plan plan{.script = options.generation.script,
+                         .tools = options.generation.tools,
+                         .java = options.generation.java,
+                         .timeout = options.generation.timeout};
+    if (plan.script.empty() || !io::is_regular_file(plan.script)) {
+        plan.problem = "this install carries no data generation entry point";
+        return plan;
+    }
+    if (plan.tools.empty() || !io::is_regular_file(plan.tools)) {
+        plan.problem = "refrain-tools is not installed next to the server";
+        return plan;
+    }
+    if (!downloaded_jar.empty() && io::is_regular_file(downloaded_jar)) {
+        plan.jar = std::string{downloaded_jar};
+    } else if (!options.generation.server_jar.empty()) {
+        if (!io::is_regular_file(options.generation.server_jar)) {
+            plan.problem = fmt::format("the server archive '{}' does not exist",
+                                       options.generation.server_jar);
+            return plan;
+        }
+        plan.jar = options.generation.server_jar;
+    } else {
+        plan.problem =
+            "no server archive was named, pass --server-jar <server.jar>";
+        return plan;
+    }
+    plan.available = true;
+    return plan;
+}
+
+/// Run the generation entry point for one data directory. The entry point
+/// prints its own progress and diagnostics; the wall clock is bounded so a
+/// stuck data generator cannot hang startup.
+[[nodiscard]] auto run_generation(const generation_plan &plan,
+                                  std::string_view root) -> status {
+    std::vector<std::string> arguments{
+        "--server-jar", plan.jar,   "--out",     std::string{root},
+        "--tools",      plan.tools, "--version", target_version()};
+    arguments.push_back("--data-version");
+    arguments.push_back(std::to_string(game_data_data_version));
+    // The server only generates when a required artifact is missing, so an
+    // earlier partial run must be repairable without an operator flag.
+    arguments.emplace_back("--force");
+    // A fixed scratch directory makes an interrupted run recoverable: it is
+    // swept before the next attempt and removed after every attempt, including
+    // the one the timeout kills.
+    const auto work{join(root, ".data-generation.tmp")};
+    arguments.push_back("--work");
+    arguments.push_back(work);
+    if (!plan.java.empty()) {
+        arguments.push_back("--java");
+        arguments.push_back(plan.java);
+    }
+    std::error_code sweep_error;
+    std::filesystem::remove_all(std::string{work}, sweep_error);
+    struct work_cleaner {
+        std::string path;
+        ~work_cleaner() {
+            std::error_code error;
+            std::filesystem::remove_all(path, error);
+            if (error) {
+                log_game_data.warn(
+                    "failed to remove the generation scratch directory '{}': "
+                    "{}",
+                    path, error.message());
+            }
+        }
+    } cleaner{std::string{work}};
+    log_game_data.info(
+        "generating the tracked game data from '{}' into '{}', this can take "
+        "a few minutes",
+        plan.jar, root);
+    auto run{refrain::platform::run_process(
+        refrain::platform::subprocess_options{.program = plan.script,
+                                              .arguments = std::move(arguments),
+                                              .timeout = plan.timeout})};
+    if (!run) {
+        return std::unexpected{make_error(
+            error_code::io_error,
+            fmt::format("failed to start the data generation entry point '{}': "
+                        "{}",
+                        plan.script, run.error().message))};
+    }
+    if (run->timed_out) {
+        return std::unexpected{make_error(
+            error_code::io_error,
+            fmt::format(
+                "data generation for Minecraft {} did not finish "
+                "within {}s; it was stopped and its scratch directory was "
+                "removed",
+                game_data_version,
+                std::chrono::duration_cast<std::chrono::seconds>(plan.timeout)
+                    .count()))};
+    }
+    if (run->exit_code != 0) {
+        if (run->exit_code == 3) {
+            return std::unexpected{make_error(
+                error_code::unsupported,
+                "the data generation prerequisites are missing, see the "
+                "diagnostic above")};
+        }
+        return std::unexpected{make_error(
+            error_code::io_error,
+            fmt::format("data generation for Minecraft {} failed with exit "
+                        "code {}, see the output above",
+                        game_data_version, run->exit_code))};
+    }
+    log_game_data.info("generated the tracked game data in '{}'", root);
     return {};
+}
+
+/// The one error a new world start returns when the tracked data no source
+/// produced. It names the missing artifact and the command that creates it.
+[[nodiscard]] auto
+missing_game_data_error(const game_data_options &options, std::string_view root,
+                        const std::vector<missing_artifact> &missing,
+                        const std::optional<error> &generation_error) -> error {
+    std::string message{fmt::format(
+        "cannot create a world without the tracked Minecraft {} game data; "
+        "missing: {}",
+        game_data_version, joined_paths(missing))};
+    if (generation_error.has_value()) {
+        message += fmt::format("; the generation fallback failed: {}",
+                               generation_error->message);
+    }
+    if (!options.generation.script.empty() &&
+        io::is_regular_file(options.generation.script)) {
+        message += fmt::format(
+            "; generate it from your own server.jar with '{} --server-jar "
+            "<server.jar> --out {}'",
+            options.generation.script, root);
+    } else {
+        message += fmt::format(
+            "; start from a complete release archive that ships "
+            "'content/vanilla/{}', or generate the tables and reports from "
+            "your own server.jar with 'tools/content/generate.sh --server-jar "
+            "<server.jar> --out <data-dir>'",
+            game_data_version);
+    }
+    if (!options.download_allowed) {
+        message += "; data download is disabled by --no-data-download";
+    }
+    return make_error(error_code::not_found, std::move(message));
 }
 
 /// One line that names the origin of the data for the startup summary.
@@ -876,62 +1186,150 @@ auto ensure_game_data(const game_data_options &options,
         }
     }
 
-    if (fetch_required) {
-        if (!options.download_allowed) {
-            return std::unexpected{make_error(
-                error_code::not_found,
-                fmt::format(
-                    "found no game data for Minecraft {} in '{}' and data "
-                    "download is disabled; stage the data directory or run "
-                    "without --no-data-download",
-                    game_data_version, *root))};
+    /// A downloaded archive is kept until the generation fallback has read it;
+    /// every early return below removes it first.
+    std::string downloaded_jar{};
+    const auto remove_downloaded = [&downloaded_jar] {
+        if (downloaded_jar.empty()) {
+            return;
         }
-        if (transport == nullptr) {
-            return std::unexpected{make_error(
-                error_code::unsupported,
-                "data download is enabled but this build has no HTTPS "
-                "transport")};
-        }
-        log_game_data.info(
-            "found no game data in '{}', downloading the Minecraft {} server "
-            "archive",
-            *root, game_data_version);
-        auto descriptor{select_archive(*transport, options, limits)};
-        if (!descriptor) {
-            return std::unexpected{descriptor.error()};
-        }
-        const auto temporary{join(*root, ".server.jar.tmp")};
-        if (auto directories{io::create_directories(*root)}; !directories) {
-            return std::unexpected{directories.error()};
-        }
-        auto downloaded{
-            download_archive(*descriptor, temporary, *transport, limits)};
-        if (!downloaded) {
-            std::error_code ignored;
-            std::filesystem::remove(std::string{temporary}, ignored);
-            return std::unexpected{downloaded.error()};
-        }
-        auto installed{install_from_archive(temporary, *root)};
         std::error_code ignored;
-        std::filesystem::remove(std::string{temporary}, ignored);
-        if (!installed) {
-            return std::unexpected{installed.error()};
+        std::filesystem::remove(downloaded_jar, ignored);
+        downloaded_jar.clear();
+    };
+
+    std::optional<error> generation_error{};
+    bool generated{false};
+    /// Try the optional generation fallback once. The returned flag reports
+    /// whether the entry point produced the data; a failure is remembered for
+    /// the startup diagnostic and never thrown away silently.
+    const auto attempt_generation = [&]() -> bool {
+        const auto plan{plan_generation(options, downloaded_jar)};
+        if (!plan.available) {
+            return false;
         }
-        auto digest{tree_digest(join(*root, "data"))};
-        if (!digest) {
-            return std::unexpected{digest.error()};
+        auto result{run_generation(plan, *root)};
+        if (!result) {
+            generation_error = result.error();
+            log_game_data.warn("generating the tracked game data failed: {}",
+                               result.error().message);
+            return false;
         }
-        if (auto marker{write_marker(*root, *descriptor, *downloaded,
-                                     *installed, *digest)};
-            !marker) {
-            return std::unexpected{marker.error()};
+        generated = true;
+        return true;
+    };
+
+    /// Why the generation fallback could not run, for the startup error when
+    /// the caller asked for a server archive. A failed run already carries the
+    /// entry point's diagnostic.
+    const auto generation_detail = [&]() -> std::string {
+        if (generation_error.has_value()) {
+            return fmt::format("; the generation fallback failed: {}",
+                               generation_error->message);
         }
-        source = game_data_source::downloaded;
-        log_game_data.info(
-            "verified the archive SHA-1, extracted {} datapack files and {} "
-            "structure templates, and wrote '{}'",
-            installed->datapack_files, installed->templates,
-            join(*root, game_data_marker_name));
+        if (!options.generation.server_jar.empty()) {
+            const auto plan{plan_generation(options, downloaded_jar)};
+            if (!plan.available && !plan.problem.empty()) {
+                return fmt::format("; {}", plan.problem);
+            }
+        }
+        return {};
+    };
+
+    if (fetch_required) {
+        const bool can_download{options.download_allowed &&
+                                transport != nullptr};
+        if (!can_download) {
+            // The operator's own server archive produces the datapack as well
+            // as the tracked data, so the generation fallback is the only way
+            // to start offline without a staged directory.
+            if (attempt_generation()) {
+                if (!datapack_is_complete(*root)) {
+                    return std::unexpected{make_error(
+                        error_code::io_error,
+                        fmt::format("the data generation entry point produced "
+                                    "an incomplete datapack in '{}'",
+                                    join(*root, "data")))};
+                }
+                auto marker{read_marker(*root)};
+                source = marker && cache_is_current(*marker, *root)
+                             ? game_data_source::cache
+                             : game_data_source::pre_staged;
+            } else if (options.download_allowed) {
+                return std::unexpected{make_error(
+                    error_code::unsupported,
+                    fmt::format(
+                        "data download is enabled but this build has no HTTPS "
+                        "transport; stage the data directory or pass "
+                        "--server-jar <server.jar> to generate it{}",
+                        generation_detail()))};
+            } else {
+                return std::unexpected{make_error(
+                    error_code::not_found,
+                    fmt::format(
+                        "found no game data for Minecraft {} in '{}': '{}' is "
+                        "missing and data download is disabled; stage the data "
+                        "directory, pass --server-jar <server.jar> to generate "
+                        "it, or run without --no-data-download{}",
+                        game_data_version, *root, join(*root, "data"),
+                        generation_detail()))};
+            }
+        } else {
+            if (transport == nullptr) {
+                return std::unexpected{make_error(
+                    error_code::unsupported,
+                    "data download is enabled but this build has no HTTPS "
+                    "transport")};
+            }
+            log_game_data.info(
+                "found no game data in '{}', downloading the Minecraft {} "
+                "server archive",
+                *root, game_data_version);
+            auto descriptor{select_archive(*transport, options, limits)};
+            if (!descriptor) {
+                return std::unexpected{descriptor.error()};
+            }
+            const auto temporary{join(*root, ".server.jar.tmp")};
+            if (auto directories{io::create_directories(*root)}; !directories) {
+                return std::unexpected{directories.error()};
+            }
+            auto downloaded{
+                download_archive(*descriptor, temporary, *transport, limits)};
+            if (!downloaded) {
+                std::error_code ignored;
+                std::filesystem::remove(std::string{temporary}, ignored);
+                return std::unexpected{downloaded.error()};
+            }
+            auto installed{install_from_archive(temporary, *root)};
+            if (!installed) {
+                std::error_code ignored;
+                std::filesystem::remove(std::string{temporary}, ignored);
+                return std::unexpected{installed.error()};
+            }
+            auto digest{tree_digest(join(*root, "data"))};
+            if (!digest) {
+                std::error_code ignored;
+                std::filesystem::remove(std::string{temporary}, ignored);
+                return std::unexpected{digest.error()};
+            }
+            if (auto marker{write_marker(*root, *descriptor, *downloaded,
+                                         *installed, *digest)};
+                !marker) {
+                std::error_code ignored;
+                std::filesystem::remove(std::string{temporary}, ignored);
+                return std::unexpected{marker.error()};
+            }
+            // Keep the verified archive until the tracked data is resolved:
+            // when the install carries no content snapshot the generation
+            // fallback derives the tables and reports from this same archive.
+            downloaded_jar = temporary;
+            source = game_data_source::downloaded;
+            log_game_data.info(
+                "verified the archive SHA-1, extracted {} datapack files and "
+                "{} structure templates, and wrote '{}'",
+                installed->datapack_files, installed->templates,
+                join(*root, game_data_marker_name));
+        }
     } else if (source == game_data_source::cache) {
         log_game_data.info("using cached game data for Minecraft {} from '{}'",
                            game_data_version, *root);
@@ -945,8 +1343,43 @@ auto ensure_game_data(const game_data_options &options,
             game_data_version, *root);
     }
 
-    if (auto reports{ensure_reports(*root, options)}; !reports) {
-        return std::unexpected{reports.error()};
+    auto artifacts{resolve_tracked_artifacts(*root, options)};
+    if (!artifacts) {
+        remove_downloaded();
+        return std::unexpected{artifacts.error()};
+    }
+    auto missing{missing_artifacts(*artifacts, *root)};
+    if (!missing.empty()) {
+        if (!generated) {
+            static_cast<void>(attempt_generation());
+        }
+        // A run that reported a failure can still have written part of the
+        // data before the failing step; resolve again so only what is actually
+        // missing decides the start.
+        auto refreshed{resolve_tracked_artifacts(*root, options)};
+        if (!refreshed) {
+            remove_downloaded();
+            return std::unexpected{refreshed.error()};
+        }
+        artifacts = std::move(*refreshed);
+        missing = missing_artifacts(*artifacts, *root);
+        // A failed run that still wrote the tracked artifacts must not leave
+        // an incomplete datapack behind; when artifacts are still missing the
+        // error below names them instead.
+        if ((generated || missing.empty()) && !datapack_is_complete(*root)) {
+            remove_downloaded();
+            return std::unexpected{make_error(
+                error_code::io_error,
+                fmt::format("the game data in '{}' holds an incomplete "
+                            "datapack; remove '{}' and retry so generation "
+                            "can unpack it again",
+                            *root, join(*root, "data")))};
+        }
+    }
+    remove_downloaded();
+    if (!missing.empty() && options.require_tracked_artifacts) {
+        return std::unexpected{
+            missing_game_data_error(options, *root, missing, generation_error)};
     }
 
     game_data_paths paths{};
@@ -956,10 +1389,8 @@ auto ensure_game_data(const game_data_options &options,
     const auto templates{join(*root, "templates")};
     paths.templates_root =
         io::is_directory(templates) ? templates : std::string{};
-    paths.tables_path =
-        tracked_file(*root, options.installed_content_root, "tables.rvtb");
-    paths.protocol_registry_path = tracked_file(
-        *root, options.installed_content_root, "protocol_registry.json");
+    paths.tables_path = std::move(artifacts->tables);
+    paths.protocol_registry_path = std::move(artifacts->protocol_registry);
     paths.game_version = target_version();
     paths.data_version = game_data_data_version;
     paths.detail = source_detail(source, *root);

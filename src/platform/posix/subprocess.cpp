@@ -9,11 +9,13 @@
 #include <fmt/format.h>
 
 #include <cerrno>
+#include <chrono>
 #include <csignal>
 #include <cstring>
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -116,6 +118,44 @@ class input_pipe {
     int fds_[2]{-1, -1};
 };
 
+/// Spawn attributes for a bounded child: put it in its own process group so a
+/// timeout can kill the whole tree the entry point starts, not only the shell.
+class spawn_attributes {
+  public:
+    spawn_attributes() = default;
+    ~spawn_attributes() {
+        if (active_) {
+            static_cast<void>(::posix_spawnattr_destroy(&attributes_));
+        }
+    }
+
+    spawn_attributes(const spawn_attributes &) = delete;
+    auto operator=(const spawn_attributes &) -> spawn_attributes & = delete;
+
+    /// Returns zero on success or the spawn error code.
+    [[nodiscard]] auto init() -> int {
+        const int created{::posix_spawnattr_init(&attributes_)};
+        if (created != 0) {
+            return created;
+        }
+        active_ = true;
+        const int flags_set{
+            ::posix_spawnattr_setflags(&attributes_, POSIX_SPAWN_SETPGROUP)};
+        if (flags_set != 0) {
+            return flags_set;
+        }
+        return ::posix_spawnattr_setpgroup(&attributes_, 0);
+    }
+
+    [[nodiscard]] auto get() noexcept -> posix_spawnattr_t * {
+        return active_ ? &attributes_ : nullptr;
+    }
+
+  private:
+    posix_spawnattr_t attributes_{};
+    bool active_{false};
+};
+
 } // namespace
 
 auto run_process(const subprocess_options &options)
@@ -190,9 +230,18 @@ auto run_process(const subprocess_options &options)
 #endif
     }
 
+    spawn_attributes attributes{};
+    if (options.timeout.count() > 0) {
+        const int configured{attributes.init()};
+        if (configured != 0) {
+            return std::unexpected{spawn_failure(
+                configured, "cannot configure the bounded child process")};
+        }
+    }
+
     pid_t pid{0};
     const int spawned{::posix_spawnp(&pid, options.program.c_str(), &actions,
-                                     nullptr, argv.data(), environ)};
+                                     attributes.get(), argv.data(), environ)};
     // The file actions have been consumed: the parent's read end is no longer
     // needed, and the child owns its stdin through the dup.
     input.close_read();
@@ -226,11 +275,58 @@ auto run_process(const subprocess_options &options)
 
     int status{0};
     pid_t waited{-1};
-    do {
-        waited = ::waitpid(pid, &status, 0);
-    } while (waited < 0 && errno == EINTR);
+    bool timed_out{false};
+    if (options.timeout.count() > 0) {
+        // Poll so the wait remains interruptible: a bounded child is killed
+        // and reaped rather than left running behind a blocking wait.
+        const auto deadline{std::chrono::steady_clock::now() + options.timeout};
+        constexpr auto poll_interval{std::chrono::milliseconds{10}};
+        for (;;) {
+            waited = ::waitpid(pid, &status, WNOHANG);
+            if (waited < 0 && errno == EINTR) {
+                continue;
+            }
+            if (waited != 0) {
+                break;
+            }
+            if (std::chrono::steady_clock::now() >= deadline) {
+                timed_out = true;
+                // The child leads its own process group: kill the group so a
+                // generator's grandchildren cannot keep writing after the
+                // timeout returns.
+                static_cast<void>(::kill(-pid, SIGKILL));
+                static_cast<void>(::kill(pid, SIGKILL));
+                do {
+                    waited = ::waitpid(pid, &status, 0);
+                } while (waited < 0 && errno == EINTR);
+                // Wait until the process group is empty, bounded so a member
+                // that escaped the group cannot hang the caller here.
+                const auto drain_deadline{std::chrono::steady_clock::now() +
+                                          std::chrono::seconds{2}};
+                for (;;) {
+                    const int probe{::kill(-pid, 0)};
+                    if (probe != 0 && errno == ESRCH) {
+                        break;
+                    }
+                    if (std::chrono::steady_clock::now() >= drain_deadline) {
+                        break;
+                    }
+                    std::this_thread::sleep_for(poll_interval);
+                }
+                break;
+            }
+            std::this_thread::sleep_for(poll_interval);
+        }
+    } else {
+        do {
+            waited = ::waitpid(pid, &status, 0);
+        } while (waited < 0 && errno == EINTR);
+    }
     if (waited < 0) {
         return std::unexpected{io_failure("cannot wait for the child")};
+    }
+    if (timed_out) {
+        return subprocess_result{.exit_code = 128 + SIGKILL, .timed_out = true};
     }
     if (WIFEXITED(status)) {
         return subprocess_result{.exit_code = WEXITSTATUS(status)};

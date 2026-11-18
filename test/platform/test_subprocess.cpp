@@ -23,6 +23,7 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <filesystem>
 #include <fstream>
@@ -53,6 +54,7 @@ using boost::ut::suite;
 
 namespace platform = refrain::platform;
 namespace test_support = refrain::test_support;
+namespace fs = std::filesystem;
 
 /// The platform layer has no portable compile-time OS query, and this file may
 /// not branch on a platform macro. The executable suffix distinguishes the
@@ -274,6 +276,107 @@ suite<"platform/subprocess"> subprocess_tests = [] {
                        std::string::npos);
             }
         };
+
+    "platform/subprocess: a child that exceeds its timeout is killed"_test =
+        [] {
+            // The command sleeps for several seconds; the timeout must return
+            // control long before that and report the kill instead of blocking.
+            const auto sleeper{
+                shell(on_windows() ? "ping -n 6 127.0.0.1 >NUL" : "sleep 5")};
+            const auto started{std::chrono::steady_clock::now()};
+            const auto result{
+                platform::run_process(platform::subprocess_options{
+                    .program = sleeper.program,
+                    .arguments = sleeper.arguments,
+                    .timeout = std::chrono::milliseconds{300},
+                })};
+            const auto elapsed{std::chrono::steady_clock::now() - started};
+            expect(static_cast<bool>(result))
+                << (result ? "" : result.error().message);
+            if (result) {
+                expect(result->timed_out);
+                expect(result->exit_code == 128 + 9);
+            }
+            expect(elapsed < std::chrono::seconds{4});
+        };
+
+    "platform/subprocess: a timeout kills the whole process group"_test = [] {
+        if (on_windows()) {
+            // The POSIX backend is the one that starts the child in its own
+            // process group and drains it; Win32 terminates only the child.
+            return;
+        }
+        const test_support::scratch_directory directory{};
+        const auto script{directory.path() / "wrapper.sh"};
+        const auto late_file{directory.path() / "late.txt"};
+        const auto pid_file{directory.path() / "grandchild.pid"};
+        {
+            // The grandchild writes after the timeout would have expired: if
+            // the group was not killed it keeps running and the write appears.
+            std::ofstream wrapper{script};
+            wrapper << "#!/bin/sh\n"
+                    << "( sleep 1; printf late > \"$1\" ) &\n"
+                    << "echo $! > \"$2\"\n"
+                    << "wait\n";
+            expect(static_cast<bool>(wrapper));
+        }
+        std::error_code error;
+        fs::permissions(script,
+                        fs::perms::owner_read | fs::perms::owner_write |
+                            fs::perms::owner_exec,
+                        fs::perm_options::add, error);
+        expect(!error);
+        const auto started{std::chrono::steady_clock::now()};
+        const auto result{platform::run_process(platform::subprocess_options{
+            .program = script.string(),
+            .arguments = {late_file.string(), pid_file.string()},
+            .timeout = std::chrono::milliseconds{300},
+        })};
+        const auto elapsed{std::chrono::steady_clock::now() - started};
+        expect(static_cast<bool>(result))
+            << (result ? "" : result.error().message);
+        if (!result) {
+            return;
+        }
+        expect(result->timed_out);
+        unsigned long long grandchild{0};
+        {
+            std::ifstream input{pid_file};
+            input >> grandchild;
+        }
+        expect(grandchild > 0);
+        // Past the grandchild's write deadline: the group kill must have
+        // stopped it before it could touch the file.
+        std::this_thread::sleep_for(std::chrono::milliseconds{1500});
+        expect(!fs::exists(late_file))
+            << "the grandchild outlived the timeout and wrote after it";
+        // The host may keep the killed grandchild as an unreaped zombie until
+        // PID 1 reaps it; both a missing process and a zombie mean it is no
+        // longer running.
+        const auto is_zombie = [](unsigned long long pid) {
+            std::ifstream stat{"/proc/" + std::to_string(pid) + "/stat"};
+            std::string line;
+            std::getline(stat, line);
+            if (!stat) {
+                return false;
+            }
+            const auto close{line.rfind(')')};
+            if (close == std::string::npos || close + 2 >= line.size()) {
+                return false;
+            }
+            return line[close + 2] == 'Z';
+        };
+        bool stopped{false};
+        for (int attempt{0}; attempt < 500 && !stopped; ++attempt) {
+            stopped =
+                !platform::process_alive(grandchild) || is_zombie(grandchild);
+            if (!stopped) {
+                std::this_thread::sleep_for(std::chrono::milliseconds{10});
+            }
+        }
+        expect(stopped) << "the grandchild outlived the timeout";
+        expect(elapsed < std::chrono::seconds{4});
+    };
 
     "platform/subprocess: invocation from a multithreaded caller"_test = [] {
         // Other threads allocate while the process is spawned: the spawn path
