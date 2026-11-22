@@ -692,8 +692,9 @@ auto processor_value(const data::json::value &node, std::size_t depth,
                 nbt::tag_type_name(first_different->type())));
         }
         // The reference persists a heterogeneous numeric list as a compound
-        // list with empty-name wrappers. Widening to TAG_Double keeps the same
-        // value for every numeric reader without those wrappers.
+        // list with empty-name wrappers. Widening to TAG_Double is accepted by
+        // every numeric reader without those wrappers, but integers above 2^53
+        // lose exactness; this NBT model cannot carry the wrapped form.
         auto list = nbt::make_list(tag_type::double_);
         for (const auto &item : converted) {
             const auto number = numeric_as_double(item);
