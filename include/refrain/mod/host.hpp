@@ -723,10 +723,13 @@ class host {
                                       const provider_api &api,
                                       std::string_view version) -> status;
 
-    /// Active `refrain:mod.loader` provider for `loader_id` plus its recorded
-    /// bootstrap registration.
+    /// Active `refrain:mod.loader` provider for `loader_id` plus a snapshot of
+    /// its bootstrap registration. The snapshot owns its storage because a
+    /// loader-providing mod can register another loader while this binding is
+    /// being dispatched, and that registration reallocates the host's loader
+    /// records.
     struct loader_binding {
-        const registered_loader *record{nullptr};
+        registered_loader record{};
         provider_api api{};
     };
 
