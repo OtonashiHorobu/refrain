@@ -109,6 +109,20 @@ using refrain::services::permissions::subject_kind;
 
 constexpr refrain::log::logger log_permissions{"permissions"};
 
+/// Publish at least `candidate`, keeping the higher of the values concurrent
+/// publishers have already handed out. `std::atomic::fetch_max` is not part of
+/// the C++26 interface every supported Windows toolchain implements.
+auto publish_revision(std::atomic<std::uint64_t> &value,
+                      std::uint64_t candidate) noexcept -> std::uint64_t {
+    auto previous{value.load(std::memory_order_acquire)};
+    while (previous < candidate &&
+           !value.compare_exchange_weak(previous, candidate,
+                                        std::memory_order_acq_rel,
+                                        std::memory_order_acquire)) {
+    }
+    return std::max(previous, candidate);
+}
+
 constexpr std::string_view namespace_name{"permissions"};
 constexpr std::string_view provider_id{"refrain.permissions"};
 constexpr std::string_view provider_version{"1.0.0"};
@@ -311,9 +325,7 @@ class provider_impl final : public permissions::admin {
         }
         const auto raw{walk.state->chain->revision() +
                        walk.state->revision_offset};
-        const auto previous{walk.state->revision->value.fetch_max(
-            raw, std::memory_order_acq_rel)};
-        return std::max(previous, raw);
+        return publish_revision(walk.state->revision->value, raw);
     }
 
     /// Reload the composed chain: the base policy first, then the wrappers in
@@ -340,7 +352,7 @@ class provider_impl final : public permissions::admin {
             result->previous_revision + walk.state->revision_offset, floor);
         result->revision =
             std::max(result->revision + walk.state->revision_offset, floor);
-        mark->value.fetch_max(result->revision, std::memory_order_acq_rel);
+        static_cast<void>(publish_revision(mark->value, result->revision));
         return result;
     }
 
