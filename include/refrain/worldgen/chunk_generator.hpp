@@ -689,10 +689,11 @@ enum class pipeline_step : std::uint8_t {
 /// from the dependency window of the demanded column `demand`; it is pure and
 /// therefore runs on every worker. `decorated` places the structure pieces of
 /// the demanded column's three-by-three and runs its feature step; `served`
-/// copies the column out. The latter two run as one ordered lane in demand
-/// order, so the decoration order is fixed by the demand sequence and never by
-/// which worker finished a job first. `position` is the chunk the job acts on;
-/// for `decorated` and `served` it equals `demand`.
+/// copies the column out. Decoration passes are ordered by chunk position, so
+/// neither the demand sequence nor the worker that finishes a job decides the
+/// write order. Passes far enough apart to touch no common chunk run
+/// concurrently; the rest follow the ascending position order. `position` is
+/// the chunk the job acts on; for `decorated` and `served` it equals `demand`.
 struct pipeline_job {
     pipeline_step step{pipeline_step::terrain};
     chunk_pos position{};
@@ -757,33 +758,43 @@ struct chunk_scheduler_stats {
 /// the demand that first publishes the chunk; the scheduler fixes that demand
 /// the first time a chunk is needed, so a fill does not depend on worker order
 /// and a refill from the recorded window reproduces the same blocks. Decoration
-/// is the only stage that mutates a neighbour's blocks; it runs on one ordered
-/// lane in demand order, exactly as the per-generator pipeline runs it
-/// serially, and a column is served only once its own three-by-three is
-/// decorated. A served chunk is sealed, so a later feature write into it is
-/// dropped just as on the serial path.
+/// is the only stage that mutates a neighbour's blocks. The reference features
+/// step writes within one chunk of its centre and reads the chunks around it,
+/// so two passes whose centres are more than four chunks apart cannot observe
+/// each other. Those passes run concurrently; every closer pair follows the
+/// ascending position order, which is the order the serial pipeline uses. A
+/// column is served only once its own three-by-three is decorated. A served
+/// chunk is sealed, so a later feature write into it is dropped just as on the
+/// serial path. A caller demands the positions of one window before draining
+/// it: a demand added inside the three-by-three of an already decorated column
+/// can no longer change the order those decorations saw. Terrain fills stay
+/// near the position-ordered front, including the demands that published the
+/// front's own window, so a written dependency ring cannot pile up ahead of
+/// the decorations that consume it.
 ///
 /// The shared cache keeps `capacity` a hard bound on pristine terrain entries:
 /// an insertion erases unpinned pristine entries in ascending position order
-/// until the count is back at the bound, and the ordered lane pins its
+/// until the count is back at the bound, and each decoration pass pins its
 /// five-by-five dependency window so a pointer it reads is never erased under
-/// it. The scheduler pins exactly one dependency window and its capacity is
-/// clamped to at least that window, so the published pristine count never
-/// leaves the bound; the cache's contract states the transient and generic
-/// pinning caveats. An evicted pristine entry is refilled from the dependency
-/// window of the demand that first published it, so the served content does not
-/// depend on when an eviction happened. A terrain entry that already received a
-/// structure or feature write, and every decorated entry, carries state that
-/// the seed cannot reproduce; those are kept until the caller unloads them with
-/// `trim_outside`, which drops the entries a caller-declared demand window can
-/// no longer read or write. A call without a demand window keeps them until
-/// `clear`, so the caller states the window it covers.
+/// it. The windows of concurrent passes are disjoint, and their count is
+/// bounded by the capacity divided by one window's size, so the published
+/// pristine count never leaves the bound; the cache's contract states the
+/// transient and generic pinning caveats. An evicted pristine entry is refilled
+/// from the dependency window of the demand that first published it, so the
+/// served content does not depend on when an eviction happened. A terrain entry
+/// that already received a structure or feature write, and every decorated
+/// entry, carries state that the seed cannot reproduce; those are kept until
+/// the caller unloads them with `trim_outside`, which drops the entries a
+/// caller-declared demand window can no longer read or write. A call without a
+/// demand window keeps them until `clear`, so the caller states the window it
+/// covers.
 class chunk_scheduler {
   public:
     struct config {
         chunk_generator_config generator{};
-        /// Worker generators. Every worker shares the table, cache and
-        /// ordered decoration lane.
+        /// Worker generators. Every worker shares the table and cache and can
+        /// run a decoration pass whose window does not interact with another
+        /// pass in flight.
         std::size_t workers{1};
     };
 
@@ -803,9 +814,10 @@ class chunk_scheduler {
     /// the wait predicate; `next_job` then decides which worker takes what.
     [[nodiscard]] auto has_job(std::size_t worker) const -> bool;
 
-    /// Take the next ready job for `worker`: the ordered decoration lane when
-    /// it is free and its next demand has terrain, otherwise a terrain fill.
-    /// Returns nothing when nothing is ready for this worker.
+    /// Take the next ready job for `worker`: the smallest-position decoration
+    /// pass that is ready and fits the concurrent window budget, then a ready
+    /// serve, otherwise a terrain fill. Returns nothing when the worker has no
+    /// job.
     [[nodiscard]] auto next_job(std::size_t worker)
         -> std::optional<pipeline_job>;
 
@@ -866,8 +878,8 @@ class chunk_scheduler {
         -> result<chunk_generator *>;
 
     /// Fills the 25 terrain chunks around `pos` whose entry is missing, each
-    /// from the dependency window of the demand that published it first. The
-    /// ordered lane calls it before decorating: a pristine terrain entry may
+    /// from the dependency window of the demand that published it first. A
+    /// decoration pass calls it before decorating: a pristine terrain entry may
     /// have been evicted to keep the cache bound, and refilling it from its
     /// original window is what keeps the content independent of when the
     /// eviction happened.
@@ -882,13 +894,32 @@ class chunk_scheduler {
         std::size_t terrain_remaining{0};
         bool terrain_done{false};
         bool decorated{false};
+        /// A decoration pass is running; no second pass may start for it.
+        bool decorating{false};
+        /// The served pass is running.
+        bool serving{false};
         bool served{false};
         bool failed{false};
     };
 
-    /// The next demand in the ordered lane that is not finished, skipping
-    /// failed chains.
-    [[nodiscard]] auto ordered_front() const -> const demand_chain *;
+    /// The smallest-position column that still needs a decoration pass.
+    [[nodiscard]] auto decoration_front() const -> const demand_chain *;
+
+    /// Whether a terrain fill is queued inside the front's fill window.
+    [[nodiscard]] auto terrain_ready(const chunk_pos &front) const -> bool;
+
+    /// Whether `chain` can start a decoration pass now. Every chain that
+    /// precedes it in position order and whose window can touch it has already
+    /// decorated, so the writes it sees are the serial pipeline's writes.
+    [[nodiscard]] auto decoration_ready(const demand_chain &chain) const
+        -> bool;
+
+    /// Whether `chain` can be served now: its own three-by-three is decorated.
+    [[nodiscard]] auto serve_ready(const demand_chain &chain) const -> bool;
+
+    /// Concurrent decoration passes are bounded so that the windows they pin
+    /// fit the configured pristine terrain capacity.
+    [[nodiscard]] auto decoration_limit() const noexcept -> std::size_t;
 
     config settings_{};
     mutable std::mutex mutex_{};
@@ -903,6 +934,8 @@ class chunk_scheduler {
     std::vector<std::string> biome_names_{};
 
     std::vector<demand_chain> chains_{};
+    /// Chain indices in ascending chunk position, the decoration order.
+    std::vector<std::size_t> decoration_order_{};
     /// Demanded, not yet served positions to their chain index.
     std::unordered_map<chunk_pos, std::size_t, chunk_pos_hash> active_{};
     /// First demanded column that published a terrain position.
@@ -910,8 +943,8 @@ class chunk_scheduler {
     /// Demanded columns whose published terrain still has to be filled, in
     /// demand order.
     std::deque<std::size_t> terrain_queue_{};
-    std::size_t ordered_front_{0};
-    bool ordered_busy_{false};
+    /// Decoration passes currently in flight.
+    std::size_t decorating_{0};
     std::size_t served_{0};
     std::size_t failed_count_{0};
     std::vector<pipeline_failure> failures_{};

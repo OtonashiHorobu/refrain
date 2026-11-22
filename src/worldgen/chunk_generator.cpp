@@ -25,6 +25,7 @@
 #include <array>
 #include <atomic>
 #include <cstddef>
+#include <cstdlib>
 #include <map>
 #include <memory>
 #include <optional>
@@ -2675,15 +2676,35 @@ namespace {
 /// radius of the feature step plus its own read ring.
 constexpr jint scheduler_terrain_radius = 2;
 
-/// Terrain fills run ahead of the ordered lane so the decoration steps never
-/// wait for a fill, but not so far that a stale window would be evicted again
-/// before it reaches the lane. The look-ahead paces the fills against the lane
-/// front; the cache bound is enforced on insertion, so this number never widens
-/// the resident terrain set beyond the configured capacity.
-[[nodiscard]] auto terrain_lookahead(std::size_t frontier,
-                                     std::size_t workers) noexcept
-    -> std::size_t {
-    return frontier + std::max<std::size_t>(workers * 4U, 8U);
+/// The reference features step writes within one chunk of its centre and reads
+/// the chunks around it. Two decoration passes whose centres are more than four
+/// chunks apart cannot reach a common chunk, so their relative timing is not
+/// observable. A closer pair keeps the ascending position order the serial
+/// pipeline has.
+constexpr jint decoration_interaction_radius = 4;
+
+/// A decoration pass reads two rings and the demand publishing a chunk writes
+/// two rings, so the terrain of a pass can be published by a demand within four
+/// chunks of it. The fill front keeps one more ring of demands ready for the
+/// pass that follows the current one.
+constexpr jint terrain_fill_front_radius =
+    decoration_interaction_radius + scheduler_terrain_radius;
+
+/// One pass pins its five-by-five dependency window while it reads and writes.
+constexpr std::size_t pinned_window_positions = 25;
+
+auto chunk_precedes(const chunk_pos &left, const chunk_pos &right) noexcept
+    -> bool {
+    return std::pair{left.x, left.z} < std::pair{right.x, right.z};
+}
+
+auto chunks_interact(const chunk_pos &left, const chunk_pos &right,
+                     jint radius) noexcept -> bool {
+    const auto dx =
+        std::abs(static_cast<jlong>(left.x) - static_cast<jlong>(right.x));
+    const auto dz =
+        std::abs(static_cast<jlong>(left.z) - static_cast<jlong>(right.z));
+    return std::max(dx, dz) <= static_cast<jlong>(radius);
 }
 
 } // namespace
@@ -2822,80 +2843,144 @@ auto chunk_scheduler::demand(const chunk_pos &pos) -> bool {
         terrain_queue_.push_back(index);
     }
     active_.emplace(pos, index);
+    const auto ordered =
+        std::lower_bound(decoration_order_.begin(), decoration_order_.end(),
+                         index, [this](std::size_t left, std::size_t right) {
+                             return chunk_precedes(chains_[left].position,
+                                                   chains_[right].position);
+                         });
+    decoration_order_.insert(ordered, index);
     return true;
 }
 
-auto chunk_scheduler::ordered_front() const -> const demand_chain * {
-    std::size_t index = ordered_front_;
-    while (index < chains_.size()) {
-        const auto &chain = chains_[index];
-        if (chain.failed || chain.served) {
-            ++index;
+auto chunk_scheduler::decoration_limit() const noexcept -> std::size_t {
+    return std::max<std::size_t>(
+        1U, static_cast<std::size_t>(settings_.generator.proto_cache_capacity) /
+                pinned_window_positions);
+}
+
+auto chunk_scheduler::decoration_ready(const demand_chain &chain) const
+    -> bool {
+    if (chain.failed || chain.served || chain.decorated || chain.decorating ||
+        !chain.terrain_done) {
+        return false;
+    }
+    for (const auto &other : chains_) {
+        if (&other == &chain || other.failed || other.served ||
+            other.decorated) {
             continue;
         }
-        return &chain;
+        if (chunk_precedes(other.position, chain.position) &&
+            chunks_interact(other.position, chain.position,
+                            decoration_interaction_radius)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+auto chunk_scheduler::serve_ready(const demand_chain &chain) const -> bool {
+    return chain.decorated && !chain.decorating && !chain.serving &&
+           !chain.served && !chain.failed;
+}
+
+auto chunk_scheduler::decoration_front() const -> const demand_chain * {
+    for (const auto index : decoration_order_) {
+        const auto &chain = chains_[index];
+        if (!chain.failed && !chain.served && !chain.decorated) {
+            return &chain;
+        }
     }
     return nullptr;
+}
+
+auto chunk_scheduler::terrain_ready(const chunk_pos &front) const -> bool {
+    for (const auto index : terrain_queue_) {
+        const auto &chain = chains_[index];
+        if (!chain.failed && !chain.served &&
+            chunks_interact(chain.position, front, terrain_fill_front_radius)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 auto chunk_scheduler::has_job(std::size_t worker) const -> bool {
     (void)worker;
     const std::lock_guard lock{mutex_};
-    if (!ordered_busy_) {
-        if (const auto *front = ordered_front();
-            front != nullptr && front->terrain_done) {
+    if (decorating_ < decoration_limit()) {
+        for (const auto index : decoration_order_) {
+            if (decoration_ready(chains_[index])) {
+                return true;
+            }
+        }
+    }
+    for (const auto &chain : chains_) {
+        if (serve_ready(chain)) {
             return true;
         }
     }
-    if (terrain_queue_.empty()) {
-        return false;
-    }
-    const auto *front = ordered_front();
-    const std::size_t frontier =
-        front == nullptr ? chains_.size()
-                         : static_cast<std::size_t>(front - chains_.data());
-    return terrain_queue_.front() <=
-           terrain_lookahead(frontier, settings_.workers);
+    const auto *front = decoration_front();
+    return front != nullptr && terrain_ready(front->position);
 }
 
 auto chunk_scheduler::next_job(std::size_t worker)
     -> std::optional<pipeline_job> {
     const std::lock_guard lock{mutex_};
-    if (!ordered_busy_) {
-        if (const auto *front = ordered_front();
-            front != nullptr && front->terrain_done) {
-            ordered_busy_ = true;
+    if (decorating_ < decoration_limit()) {
+        for (const auto index : decoration_order_) {
+            auto &chain = chains_[index];
+            if (!decoration_ready(chain)) {
+                continue;
+            }
+            chain.decorating = true;
+            ++decorating_;
             return pipeline_job{
-                .step = front->decorated ? pipeline_step::served
-                                         : pipeline_step::decorated,
-                .position = front->position,
-                .demand = front->position,
+                .step = pipeline_step::decorated,
+                .position = chain.position,
+                .demand = chain.position,
                 .worker = worker,
             };
         }
     }
-    const auto *front = ordered_front();
-    const std::size_t frontier =
-        front == nullptr ? chains_.size()
-                         : static_cast<std::size_t>(front - chains_.data());
-    const std::size_t limit = terrain_lookahead(frontier, settings_.workers);
-    while (!terrain_queue_.empty()) {
-        const auto index = terrain_queue_.front();
-        if (index > limit) {
-            return std::nullopt;
-        }
-        terrain_queue_.pop_front();
-        const auto &chain = chains_[index];
-        if (chain.failed || chain.served) {
-            // The chain died or a repeated demand already served it.
+    for (auto &chain : chains_) {
+        if (!serve_ready(chain)) {
             continue;
         }
+        chain.serving = true;
         return pipeline_job{
-            .step = pipeline_step::terrain,
+            .step = pipeline_step::served,
             .position = chain.position,
             .demand = chain.position,
             .worker = worker,
         };
+    }
+    const auto *front = decoration_front();
+    if (front != nullptr) {
+        for (auto it = terrain_queue_.begin(); it != terrain_queue_.end();) {
+            const auto index = *it;
+            const auto &chain = chains_[index];
+            if (chain.failed || chain.served) {
+                // The chain died or a repeated demand already served it.
+                it = terrain_queue_.erase(it);
+                continue;
+            }
+            // A fill far from the front can wait: the next pass cannot need
+            // its window until the front moves closer. The bound on written
+            // terrain entries relies on the fills staying near the front.
+            if (!chunks_interact(chain.position, front->position,
+                                 terrain_fill_front_radius)) {
+                ++it;
+                continue;
+            }
+            terrain_queue_.erase(it);
+            return pipeline_job{
+                .step = pipeline_step::terrain,
+                .position = chain.position,
+                .demand = chain.position,
+                .worker = worker,
+            };
+        }
     }
     return std::nullopt;
 }
@@ -2927,7 +3012,9 @@ auto chunk_scheduler::run(const pipeline_job &job)
         // The whole dependency window this step reads and writes is pinned
         // before the first lookup: the shared cache evicts unpinned terrain
         // entries when another worker inserts, and an eviction under the
-        // region pointers would be a use after free.
+        // region pointers would be a use after free. Concurrent passes have
+        // disjoint windows, so the pins of one pass cannot hide another's
+        // eviction candidates.
         const pinned_window pinned{
             *cache_, square_positions(job.position, scheduler_terrain_radius)};
         if (const auto refilled = refill_terrain(**generator, job.position);
@@ -2987,11 +3074,12 @@ auto chunk_scheduler::refill_terrain(chunk_generator &generator,
 void chunk_scheduler::complete(const pipeline_job &job,
                                const std::string *error_message) {
     const std::lock_guard lock{mutex_};
-    // The ordered lane carries one job at a time whatever happens to it.
-    if (job.step != pipeline_step::terrain) {
-        ordered_busy_ = false;
-    }
-    const auto finished = [&](demand_chain &chain) {
+    if (job.step == pipeline_step::terrain) {
+        const auto found = active_.find(job.demand);
+        if (found == active_.end()) {
+            return;
+        }
+        auto &chain = chains_[found->second];
         if (error_message != nullptr) {
             if (!chain.failed) {
                 chain.failed = true;
@@ -3002,35 +3090,40 @@ void chunk_scheduler::complete(const pipeline_job &job,
             active_.erase(chain.position);
             return;
         }
-        if (job.step == pipeline_step::terrain) {
-            chain.terrain_remaining = 0;
-            chain.terrain_done = true;
-            return;
-        }
-        if (job.step == pipeline_step::decorated) {
-            chain.decorated = true;
-            return;
-        }
-        chain.served = true;
-        active_.erase(chain.position);
-        ++served_;
-        if (ordered_front_ < chains_.size()) {
-            ++ordered_front_;
-        }
-    };
-    if (job.step == pipeline_step::terrain) {
-        const auto found = active_.find(job.demand);
-        if (found == active_.end()) {
-            return;
-        }
-        finished(chains_[found->second]);
+        chain.terrain_remaining = 0;
+        chain.terrain_done = true;
         return;
     }
     const auto found = active_.find(job.position);
     if (found == active_.end()) {
         return;
     }
-    finished(chains_[found->second]);
+    auto &chain = chains_[found->second];
+    if (job.step == pipeline_step::decorated) {
+        chain.decorating = false;
+        if (decorating_ > 0U) {
+            --decorating_;
+        }
+    } else {
+        chain.serving = false;
+    }
+    if (error_message != nullptr) {
+        if (!chain.failed) {
+            chain.failed = true;
+            failures_.push_back(pipeline_failure{.position = chain.position,
+                                                 .message = *error_message});
+            ++failed_count_;
+        }
+        active_.erase(chain.position);
+        return;
+    }
+    if (job.step == pipeline_step::decorated) {
+        chain.decorated = true;
+        return;
+    }
+    chain.served = true;
+    active_.erase(chain.position);
+    ++served_;
 }
 
 auto chunk_scheduler::take_failures() -> std::vector<pipeline_failure> {
@@ -3103,11 +3196,11 @@ void chunk_scheduler::clear() {
     {
         const std::lock_guard lock{mutex_};
         chains_.clear();
+        decoration_order_.clear();
         active_.clear();
         terrain_owner_.clear();
         terrain_queue_.clear();
-        ordered_front_ = 0;
-        ordered_busy_ = false;
+        decorating_ = 0;
         served_ = 0;
         failed_count_ = 0;
         failures_.clear();
