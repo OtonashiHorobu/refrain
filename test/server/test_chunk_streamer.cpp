@@ -380,10 +380,16 @@ constexpr std::size_t wire_section_count{24};
     return chunk;
 }
 
+/// A table view borrows the container bytes, so the fixture owns both and
+/// destroys the view before the buffer it reads.
+struct owned_block_tables {
+    std::vector<std::byte> bytes{};
+    refrain::data::vanilla_tables view{};
+};
+
 /// Block tables with two distinct vanilla state ids so a decoded packet shows
 /// which block the encoder read.
-[[nodiscard]] auto two_block_tables()
-    -> std::optional<refrain::data::vanilla_tables> {
+[[nodiscard]] auto two_block_tables() -> std::optional<owned_block_tables> {
     refrain::data::vanilla_spec spec{};
     spec.data_version = 5023;
     for (const auto &[name, vanilla_id] :
@@ -407,7 +413,8 @@ constexpr std::size_t wire_section_count{24};
     if (!tables) {
         return std::nullopt;
     }
-    return std::optional{std::move(*tables)};
+    return std::optional{owned_block_tables{.bytes = std::move(*bytes),
+                                            .view = std::move(*tables)}};
 }
 
 /// Open a synthetic world holding `flat_chunk()` at (0, 0).
@@ -1181,7 +1188,7 @@ suite<"server/chunk-streamer-cache-revision"> chunk_cache_revision_tests = [] {
         auto port{server::make_borrowed_world_port(*runtime)};
         const server::chunk_packet_source source{
             .world = port.get(),
-            .tables = &*tables,
+            .tables = &tables->view,
             .registries = nullptr,
         };
         recording_gateway gateway;
@@ -1243,7 +1250,7 @@ suite<"server/chunk-streamer-cache-revision"> chunk_cache_revision_tests = [] {
         auto port{server::make_borrowed_world_port(*runtime)};
         const server::chunk_packet_source source{
             .world = port.get(),
-            .tables = &*tables,
+            .tables = &tables->view,
             .registries = nullptr,
         };
         recording_gateway gateway;
