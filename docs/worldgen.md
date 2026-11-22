@@ -878,10 +878,14 @@ element stores its processor list the way the reference does: a named list as
 its id string and an inline list as the direct codec's object form
 (`{"processors": [...]}`), so a generated piece whose datapack document lists
 its processors inline round-trips. The inline document is converted under depth
-and value-count bounds, and a value the tag model cannot carry fails the
-conversion. A column with no structure data keeps the field empty, and any
-other record the compound cannot represent fails the conversion instead of
-losing a start silently. An Anvil export of a generated world therefore
+and value-count bounds. An array mixing numeric kinds becomes a `TAG_Double`
+list, which every numeric reader in the reference accepts; an array mixing a
+number with a non-numeric value fails the conversion because this NBT model has
+only homogeneous lists and does not use the reference's empty-name compound
+wrappers. A `processors` field on an element whose codec has no such field is
+ignored, as the reference does. A column with no structure data keeps the field
+empty. Any other record the compound cannot represent fails the conversion
+instead of losing a start silently. An Anvil export of a generated world therefore
 declares the structures the reference reader expects. Restoring persisted
 starts into generation is a separate capability: a loaded column does not take
 part in structure continuation because the stored compound does not carry the
