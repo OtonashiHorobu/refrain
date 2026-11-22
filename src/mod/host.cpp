@@ -1242,8 +1242,8 @@ auto host::load_one(const composition &plan, const package_source &package,
     if (!loader) {
         return std::unexpected{annotate(std::move(loader.error()), entry.path)};
     }
-    current_loader_id_ = loader->record->id;
-    current_loader_sandboxed_ = loader->record->sandboxed;
+    current_loader_id_ = loader->record.id;
+    current_loader_sandboxed_ = loader->record.sandboxed;
 
     if (auto capabilities{read_loader_capabilities(*loader)}; !capabilities) {
         return std::unexpected{
@@ -1296,8 +1296,8 @@ auto host::load_one(const composition &plan, const package_source &package,
                       .required = manifest->required,
                       .optional = manifest->optional,
                       .loader = manifest->loader,
-                      .loader_unload = loader->record->unload,
-                      .loader_sandboxed = loader->record->sandboxed,
+                      .loader_unload = loader->record.unload,
+                      .loader_sandboxed = loader->record.sandboxed,
                       .instance_handle = instance_handle,
                       .state = staging_ ? mod_lifecycle_state::staged
                                         : mod_lifecycle_state::active,
@@ -1711,12 +1711,12 @@ auto host::resolve_loader(std::string_view loader_id) const
                  fmt::format("mod loader '{}' provider has no ABI table",
                              loader_id))};
     }
-    return loader_binding{.record = record, .api = *api};
+    return loader_binding{.record = *record, .api = *api};
 }
 
 auto host::read_loader_capabilities(const loader_binding &binding) const
     -> result<mod_loader_capabilities> {
-    if (binding.record == nullptr || binding.api.vtable == nullptr ||
+    if (binding.record.id.empty() || binding.api.vtable == nullptr ||
         binding.api.self == nullptr) {
         return std::unexpected{
             fail(error_code::invalid_argument,
@@ -1725,7 +1725,7 @@ auto host::read_loader_capabilities(const loader_binding &binding) const
     if (auto checked{check_abi_header(binding.api)}; !checked) {
         return std::unexpected{
             annotate(std::move(checked.error()),
-                     fmt::format("mod loader '{}'", binding.record->id))};
+                     fmt::format("mod loader '{}'", binding.record.id))};
     }
     mod_loader_capabilities capabilities{};
     try {
@@ -1738,35 +1738,35 @@ auto host::read_loader_capabilities(const loader_binding &binding) const
         if (!decoded) {
             return std::unexpected{
                 annotate(std::move(decoded.error()),
-                         fmt::format("mod loader '{}'", binding.record->id))};
+                         fmt::format("mod loader '{}'", binding.record.id))};
         }
         capabilities = std::move(*decoded);
     } catch (...) {
         return std::unexpected{
             fail(error_code::unknown,
                  fmt::format("mod loader '{}' capabilities threw an exception",
-                             binding.record->id))};
+                             binding.record.id))};
     }
     if (auto checked{validate_loader_capabilities(
-            binding.record->id, binding.record->provider, capabilities)};
+            binding.record.id, binding.record.provider, capabilities)};
         !checked) {
         return std::unexpected{std::move(checked.error())};
     }
-    if (capabilities.abi_major != binding.record->abi_major ||
-        capabilities.unload != binding.record->unload ||
-        capabilities.sandboxed != binding.record->sandboxed ||
+    if (capabilities.abi_major != binding.record.abi_major ||
+        capabilities.unload != binding.record.unload ||
+        capabilities.sandboxed != binding.record.sandboxed ||
         capabilities.supports_hot_install !=
-            binding.record->supports_hot_install ||
-        capabilities.provider != binding.record->provider) {
+            binding.record.supports_hot_install ||
+        capabilities.provider != binding.record.provider) {
         return std::unexpected{fail(
             error_code::version_mismatch,
-            binding.record->provider.empty()
+            binding.record.provider.empty()
                 ? fmt::format("mod loader '{}' changed its declared "
                               "capabilities while running",
-                              binding.record->id)
+                              binding.record.id)
                 : fmt::format("mod loader '{}' provided by mod '{}' changed "
                               "its declared capabilities while running",
-                              binding.record->id, binding.record->provider))};
+                              binding.record.id, binding.record.provider))};
     }
     return capabilities;
 }
@@ -1798,16 +1798,16 @@ auto host::validate_with_loader(const loader_binding &binding,
                 fail(loader_error_to(validated.error()),
                      detail.empty()
                          ? fmt::format("mod loader '{}' rejected mod '{}'",
-                                       binding.record->id, manifest.common.id)
+                                       binding.record.id, manifest.common.id)
                          : fmt::format("mod loader '{}' rejected mod '{}': {}",
-                                       binding.record->id, manifest.common.id,
+                                       binding.record.id, manifest.common.id,
                                        detail))};
         }
     } catch (...) {
         return std::unexpected{
             fail(error_code::unknown,
                  fmt::format("mod loader '{}' validate threw an exception",
-                             binding.record->id))};
+                             binding.record.id))};
     }
     return status_ok();
 }
@@ -1841,7 +1841,7 @@ auto host::load_with_loader(const loader_binding &binding,
             // say so instead of leaving the operator with a bare permission
             // error.
             const auto sandbox_reason{
-                binding.record->sandboxed &&
+                binding.record.sandboxed &&
                         code == error_code::permission_denied
                     ? std::string{" because the loader is sandboxed"}
                     : std::string{}};
@@ -1849,11 +1849,11 @@ auto host::load_with_loader(const loader_binding &binding,
                 code,
                 detail.empty()
                     ? fmt::format("mod loader '{}' failed to load mod '{}'{}",
-                                  binding.record->id, manifest.common.id,
+                                  binding.record.id, manifest.common.id,
                                   sandbox_reason)
                     : fmt::format("mod loader '{}' failed to load mod '{}'{}: "
                                   "{}",
-                                  binding.record->id, manifest.common.id,
+                                  binding.record.id, manifest.common.id,
                                   sandbox_reason, detail))};
         }
         handle = loaded->raw();
@@ -1866,7 +1866,7 @@ auto host::load_with_loader(const loader_binding &binding,
         return std::unexpected{
             fail(error_code::unknown,
                  fmt::format("mod loader '{}' load threw an exception",
-                             binding.record->id))};
+                             binding.record.id))};
     }
     return status_ok();
 }
@@ -1901,10 +1901,10 @@ auto host::reload_with_loader(const loader_binding &binding,
                 loader_error_to(rebuilt.error()),
                 detail.empty()
                     ? fmt::format("mod loader '{}' failed to reload mod '{}'",
-                                  binding.record->id, manifest.common.id)
+                                  binding.record.id, manifest.common.id)
                     : fmt::format("mod loader '{}' failed to reload mod '{}': "
                                   "{}",
-                                  binding.record->id, manifest.common.id,
+                                  binding.record.id, manifest.common.id,
                                   detail))};
         }
         new_handle = rebuilt->raw();
@@ -1915,7 +1915,7 @@ auto host::reload_with_loader(const loader_binding &binding,
         return std::unexpected{
             fail(error_code::unknown,
                  fmt::format("mod loader '{}' reload threw an exception",
-                             binding.record->id))};
+                             binding.record.id))};
     }
     return status_ok();
 }
@@ -1950,16 +1950,16 @@ auto host::dispatch_loader_unload(const loaded_mod &mod, unload_reason reason)
                 loader_error_to(unloaded.error()),
                 detail.empty()
                     ? fmt::format("mod loader '{}' failed to unload mod '{}'",
-                                  binding->record->id, mod.id)
+                                  binding->record.id, mod.id)
                     : fmt::format("mod loader '{}' failed to unload mod '{}': "
                                   "{}",
-                                  binding->record->id, mod.id, detail))};
+                                  binding->record.id, mod.id, detail))};
         }
     } catch (...) {
         return std::unexpected{
             fail(error_code::unknown,
                  fmt::format("mod loader '{}' unload threw an exception",
-                             binding->record->id))};
+                             binding->record.id))};
     }
     return status_ok();
 }

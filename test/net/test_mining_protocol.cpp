@@ -73,6 +73,11 @@ struct destruction_packet {
 struct joined_player {
     std::uint64_t connection{0};
     sim::entity_id entity{0};
+    // The leave handler removes the level record, so the state the assertions
+    // need is captured while the record is still alive.
+    std::uint8_t selected_slot{0};
+    std::uint32_t tool_damage{0};
+    bool tool_present{false};
 };
 
 /// Everything one integration test drives: a real simulation world, the
@@ -89,6 +94,7 @@ struct harness {
     data::item_tool_table tools{};
     std::unique_ptr<server::mining_service> mining{};
     std::atomic<int> joins{0};
+    std::atomic<int> leaves{0};
     std::map<std::string, joined_player> players{};
     std::atomic<std::uint8_t> selected_slot{0};
     std::atomic<int> slot_updates{0};
@@ -234,7 +240,21 @@ struct harness {
             if (mining) {
                 mining->reset(identity.connection);
             }
+            if (const auto *record{
+                    level->players().find_by_connection(identity.connection)}) {
+                if (const auto found{players.find(std::string{identity.name})};
+                    found != players.end()) {
+                    found->second.selected_slot = record->selected_slot;
+                    if (record->inventory.size() > 3U) {
+                        found->second.tool_damage =
+                            sim::stack_damage(record->inventory[3]);
+                        found->second.tool_present =
+                            !sim::stack_empty(record->inventory[3]);
+                    }
+                }
+            }
             static_cast<void>(level->players().remove(identity.connection));
+            ++leaves;
         };
         inputs.held_slot = [this](std::uint64_t connection, std::uint8_t slot) {
             selected_slot.store(slot, std::memory_order_relaxed);
@@ -420,10 +440,13 @@ suite<"net/mining"> mining_protocol_tests = [] {
             return;
         }
         std::atomic<bool> ticking{true};
-        std::thread ticker{[&state, &ticking] {
+        std::atomic<bool> mining_done{false};
+        std::thread ticker{[&state, &ticking, &mining_done] {
             while (ticking.load(std::memory_order_relaxed)) {
                 state->listener->tick();
-                state->mining->tick();
+                if (!mining_done.load(std::memory_order_relaxed)) {
+                    state->mining->tick();
+                }
                 std::this_thread::sleep_for(std::chrono::milliseconds{1});
             }
         }};
@@ -468,6 +491,15 @@ suite<"net/mining"> mining_protocol_tests = [] {
         };
         auto miner{net::run_bot(miner_options)};
         expect(miner.has_value());
+        mining_done.store(true, std::memory_order_relaxed);
+        // Leave events are delivered by listener ticks, and the hook captures
+        // the player state before removing the record. Keep the listener
+        // running until both disconnects have reached it, but stop mining so
+        // the extra ticks cannot add destroy stages.
+        for (int wait{0}; wait < 1000 && state->leaves.load() < 2; ++wait) {
+            std::this_thread::sleep_for(std::chrono::milliseconds{5});
+        }
+        expect(state->leaves.load() >= 2);
         ticking.store(false, std::memory_order_relaxed);
         ticker.join();
         observer_thread.join();
@@ -489,16 +521,10 @@ suite<"net/mining"> mining_protocol_tests = [] {
         if (miner_player == state->players.end()) {
             return;
         }
-        const auto *record{state->level->players().find_by_connection(
-            miner_player->second.connection)};
-        expect(record != nullptr);
-        if (record == nullptr) {
-            return;
-        }
-        expect(record->selected_slot == 3U);
+        expect(miner_player->second.selected_slot == 3U);
         expect(state->slot_updates.load() >= 1);
-        expect(sim::stack_damage(record->inventory[3]) == 1U);
-        expect(!sim::stack_empty(record->inventory[3]));
+        expect(miner_player->second.tool_damage == 1U);
+        expect(miner_player->second.tool_present);
         // Every action packet is acknowledged, including the stop that arrived
         // after the server had already broken the block.
         expect(count_packets(*miner, play_cb::block_changed_ack::packet_id) >=
