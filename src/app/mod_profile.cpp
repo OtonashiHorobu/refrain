@@ -3,7 +3,10 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 
 #include <refrain/app/mod_profile.hpp>
+#include <refrain/app/services.hpp>
 
+#include <refrain/contracts/abi.h>
+#include <refrain/contracts/services/mod_loader.hpp>
 #include <refrain/core/config.hpp>
 #include <refrain/core/io.hpp>
 #include <refrain/core/semver.hpp>
@@ -19,7 +22,9 @@
 #include <array>
 #include <cstddef>
 #include <filesystem>
+#include <iostream>
 #include <iterator>
+#include <map>
 #include <ranges>
 #include <string>
 #include <string_view>
@@ -32,6 +37,7 @@ namespace refrain::app {
 namespace config = refrain::core::config;
 namespace core = refrain::core;
 namespace fs = std::filesystem;
+namespace io = refrain::core::io;
 namespace mod = refrain::mod;
 
 namespace {
@@ -88,6 +94,114 @@ namespace {
         }
     }
     return false;
+}
+
+/// Map a declared service contract id to the `[providers]` key the host
+/// resolves for it. A custom `namespace:name` contract keeps its full id; a
+/// first-party contract uses the short slot spelling, with the two historical
+/// aliases (`data.packs`, `net.protocol`) written out explicitly. The result
+/// always satisfies `mod::matches_slot(service, key)`.
+[[nodiscard]] auto provider_slot(std::string_view service) -> std::string {
+    constexpr std::string_view first_party{"refrain:"};
+    if (!service.starts_with(first_party)) {
+        return std::string{service};
+    }
+    const auto rest{service.substr(first_party.size())};
+    if (rest == "data.packs") {
+        return "data";
+    }
+    if (rest == "net.protocol") {
+        return "protocol";
+    }
+    std::string slot{};
+    slot.reserve(rest.size());
+    for (const char character : rest) {
+        slot.push_back(character == '.' ? '_' : character);
+    }
+    return slot;
+}
+
+/// Bare TOML key only for the lowercase slot spelling; quoted literal key for
+/// custom service ids, which contain ':'.
+[[nodiscard]] auto toml_key(std::string_view key) -> std::string {
+    const bool bare{!key.empty() && key.front() >= 'a' && key.front() <= 'z' &&
+                    std::all_of(key.begin() + 1, key.end(), [](char value) {
+                        return (value >= 'a' && value <= 'z') ||
+                               (value >= '0' && value <= '9') || value == '_';
+                    })};
+    return bare ? std::string{key} : fmt::format("\"{}\"", key);
+}
+
+[[nodiscard]] auto
+render_gamepack(const mod_profile_spec &profile,
+                const std::vector<mod::mod_manifest> &manifests,
+                const std::map<std::string, std::string> &providers)
+    -> std::string {
+    std::string out{
+        "# SPDX-License-Identifier: MIT\n"
+        "#\n"
+        "# SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu\n"
+        "#\n"};
+    out += fmt::format(
+        "# Generated from build profile '{}' by `refrain-tools gamepack gen`.\n"
+        "# Every profile mod is pinned at its manifest version and each "
+        "service\n"
+        "# is bound to its single declaring mod. Provider composition\n"
+        "# (exclusive, instanced or chain) remains a deployment decision: "
+        "edit\n"
+        "# [providers] to choose one. After an install or update, run\n"
+        "# `refrain-tools gamepack sync` to refresh pins together with the "
+        "lock.\n"
+        "\n"
+        "[gamepack]\n"
+        "id = \"refrain.{}\"\n"
+        "version = \"1.0.0\"\n"
+        "side = \"server\"\n"
+        "abi = \"{}\"\n"
+        "auto_scan = false\n"
+        "\n"
+        "[meta]\n"
+        "display_name = \"{} generated gamepack\"\n"
+        "description = \"Starter composition generated from build profile "
+        "'{}'.\"\n"
+        "\n"
+        "# An installed update of a pinned mod wins over the built-in copy;\n"
+        "# `gamepack sync` then brings the pin in line with the receipt.\n"
+        "[policy]\n"
+        "conflict = \"explicit\"\n"
+        "allow_custom_override = true\n"
+        "\n"
+        "[mods]\n"
+        "list = [\n",
+        profile.name, profile.name, REFRAIN_ABI_MAJOR, profile.name,
+        profile.name);
+    for (const auto &manifest : manifests) {
+        out += fmt::format("    \"{}@{}\",\n", manifest.common.id,
+                           manifest.common.version);
+    }
+    out += "]\n";
+
+    // Mirror the authoritative manifest dependencies so the composition root
+    // can order the listed mods without a second manifest read.
+    for (const auto &manifest : manifests) {
+        if (manifest.required.empty()) {
+            continue;
+        }
+        out +=
+            fmt::format("\n[mods.\"{}\"]\nrequires = [\n", manifest.common.id);
+        for (const auto &requirement : manifest.required) {
+            out += fmt::format("    \"{}\",\n", requirement.text());
+        }
+        out += "]\n";
+    }
+
+    if (!providers.empty()) {
+        out += "\n[providers]\n";
+        for (const auto &[slot, binding] : providers) {
+            out += fmt::format("{} = \"{}\"\n", toml_key(slot), binding);
+        }
+    }
+    return out;
 }
 
 } // namespace
@@ -479,6 +593,157 @@ auto format_profile_identity(const mod_profile_spec &profile) -> std::string {
                        profile.mods.size(), profile.dynamic.size(),
                        profile.build_id.empty() ? std::string{"<source>"}
                                                 : profile.build_id);
+}
+
+auto generate_gamepack(const mod_profile_spec &profile,
+                       std::string_view mods_root)
+    -> result<generated_gamepack> {
+    const std::string gamepack_id{fmt::format("refrain.{}", profile.name)};
+    if (!mod::is_valid_mod_id(gamepack_id)) {
+        return std::unexpected{profile_failure(
+            profile.source,
+            fmt::format("profile name '{}' cannot form a gamepack id",
+                        profile.name))};
+    }
+
+    // One manifest read per profile mod. Anything missing, mis-typed or
+    // unreadable stops generation: a starter with a silent gap would pass a
+    // later check with a different mod set than the profile declares.
+    std::vector<mod::mod_manifest> manifests{};
+    manifests.reserve(profile.mods.size());
+    for (const auto &id : profile.mods) {
+        const fs::path path{fs::path{mods_root} / id /
+                            mod::mod_manifest_filename};
+        auto manifest{mod::load_mod_manifest(path.string())};
+        if (!manifest) {
+            return std::unexpected{make_error(
+                error_code::io_error,
+                fmt::format("gamepack gen: profile '{}' mod '{}': {}",
+                            profile.name, id, manifest.error().message))};
+        }
+        if (manifest->common.id != id) {
+            return std::unexpected{make_error(
+                error_code::parse_error,
+                fmt::format("gamepack gen: profile '{}' lists '{}' but its "
+                            "manifest declares '{}'",
+                            profile.name, id, manifest->common.id))};
+        }
+        manifests.push_back(std::move(*manifest));
+    }
+
+    // Group declaring mods by the provider slot their contract maps to. Two
+    // different contracts mapping to the same slot are also a conflict: the
+    // gamepack cannot name both in one binding.
+    std::map<std::string, std::string> slot_service{};
+    std::map<std::string, std::vector<std::string>> slot_candidates{};
+    for (const auto &manifest : manifests) {
+        for (const auto &service : manifest.provides) {
+            if (mod::matches_slot(refrain::services::mod_loader::service_id,
+                                  service)) {
+                continue; // loaders are declared in [loaders], not [providers]
+            }
+            const auto slot{provider_slot(service)};
+            const auto [it, inserted]{slot_service.emplace(slot, service)};
+            if (!inserted && it->second != service) {
+                return std::unexpected{make_error(
+                    error_code::invalid_argument,
+                    fmt::format("gamepack gen: provider selection for services "
+                                "'{}' and '{}' is ambiguous: both map to slot "
+                                "'{}'",
+                                it->second, service, slot))};
+            }
+            slot_candidates[slot].emplace_back(fmt::format(
+                "{}@^{}", manifest.common.id, manifest.common.version));
+        }
+    }
+    std::map<std::string, std::string> providers{};
+    for (const auto &[slot, candidates] : slot_candidates) {
+        if (candidates.size() != 1U) {
+            std::string names{};
+            for (const auto &candidate : candidates) {
+                if (!names.empty()) {
+                    names += ", ";
+                }
+                const auto at{candidate.find('@')};
+                names += candidate.substr(0, at);
+            }
+            return std::unexpected{make_error(
+                error_code::invalid_argument,
+                fmt::format("gamepack gen: provider selection for service '{}' "
+                            "is ambiguous: {} candidate providers ({})",
+                            slot_service.at(slot), candidates.size(), names))};
+        }
+        providers.emplace(slot, candidates.front());
+    }
+
+    std::string text{render_gamepack(profile, manifests, providers)};
+    auto document{config::document::parse_text(text, "generated gamepack")};
+    if (!document) {
+        return std::unexpected{std::move(document.error())};
+    }
+    auto spec{mod::parse_gamepack(*document, "server")};
+    if (!spec) {
+        return std::unexpected{std::move(spec.error())};
+    }
+    return generated_gamepack{.spec = std::move(*spec),
+                              .text = std::move(text)};
+}
+
+auto run_gamepack_gen(const gamepack_gen_options &options) -> int {
+    if (options.profile.empty()) {
+        return report_error(
+            make_error(error_code::invalid_argument,
+                       "gamepack gen: --profile <name> is required"));
+    }
+    if (options.out.empty()) {
+        return report_error(
+            make_error(error_code::invalid_argument,
+                       "gamepack gen: --out <path> is required"));
+    }
+    auto profile{load_mod_profile_named(options.profile, options.profiles_dir)};
+    if (!profile) {
+        return report_error(profile.error());
+    }
+    auto generated{generate_gamepack(*profile, options.mods_dir)};
+    if (!generated) {
+        return report_error(generated.error());
+    }
+    if (options.check) {
+        auto existing{io::read_text(options.out)};
+        if (!existing) {
+            return report_error(make_error(
+                error_code::not_found,
+                fmt::format(
+                    "gamepack gen: '{}' is missing; run without --check "
+                    "to create it",
+                    options.out)));
+        }
+        if (*existing != generated->text) {
+            return report_error(make_error(
+                error_code::version_mismatch,
+                fmt::format("gamepack gen: '{}' differs from the generated "
+                            "gamepack for profile '{}'; regenerate to apply",
+                            options.out, profile->name)));
+        }
+        std::cout << fmt::format("gamepack gen: '{}' matches profile '{}'\n",
+                                 options.out, profile->name);
+        return 0;
+    }
+    const fs::path path{options.out};
+    if (const auto parent{path.parent_path()}; !parent.empty()) {
+        if (const auto made{io::create_directories(parent.string())}; !made) {
+            return report_error(made.error());
+        }
+    }
+    if (const auto written{io::atomic_write_text(options.out, generated->text)};
+        !written) {
+        return report_error(written.error());
+    }
+    std::cout << fmt::format(
+        "gamepack gen: wrote '{}' from profile '{}' ({} mods, {} providers)\n",
+        options.out, profile->name, generated->spec.mods.size(),
+        generated->spec.providers.size());
+    return 0;
 }
 
 } // namespace refrain::app

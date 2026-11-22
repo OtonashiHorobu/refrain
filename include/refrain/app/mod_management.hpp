@@ -5,6 +5,7 @@
 #pragma once
 
 #include <refrain/core/error.hpp>
+#include <refrain/mod/gamepack.hpp>
 #include <refrain/mod/install_policy.hpp>
 
 #include <cstdint>
@@ -211,5 +212,83 @@ class mod_management {
   private:
     mod_management_context context_;
 };
+
+// Gamepack synchronization from installed receipts.
+//
+// A gamepack generated from a build profile pins the versions that were
+// current when it was written. After an install or update those pins no longer
+// describe the content store. `gamepack sync` recomputes only the version
+// tokens: mod ids, provider keys, candidate order and composition modes are
+// never changed, so selecting a different provider stays an explicit edit.
+// The lock is refreshed afterwards through the same path as `mods lock
+// --write`; install and update themselves never touch either file.
+
+struct gamepack_sync_options {
+    std::string gamepack{};
+    /// Content store roots whose install receipts provide the new versions.
+    std::vector<std::string> roots{};
+    /// Builtin image seeding the built-in mods when the lock is refreshed.
+    std::string image{};
+    /// Lock path; empty means next to the gamepack.
+    std::string lock{};
+    /// Report-only mode; this is also the default when --write is absent.
+    bool check{false};
+    /// Rewrite the gamepack and the lock instead of only reporting drift.
+    bool write{false};
+};
+
+struct installed_mod_version {
+    std::string id{};
+    std::string version{};
+};
+
+/// The only two sections whose version tokens sync is allowed to rewrite.
+/// Dependency ranges under `[mods."<id>"]` and comments are out of scope.
+enum class gamepack_sync_section : std::uint8_t { mods_list, providers };
+
+struct gamepack_sync_change {
+    /// One operator-facing report line, without a leading indent.
+    std::string line{};
+    /// Quoted TOML token in the original file.
+    std::string old_text{};
+    /// Replacement token, preserving the original range operator.
+    std::string new_text{};
+    /// Section the token belongs to; replacements are confined to it.
+    gamepack_sync_section section{gamepack_sync_section::mods_list};
+};
+
+struct gamepack_sync_plan {
+    std::vector<gamepack_sync_change> changes{};
+
+    [[nodiscard]] auto empty() const noexcept -> bool {
+        return changes.empty();
+    }
+    [[nodiscard]] auto format(std::string_view path) const -> std::string;
+};
+
+/// Read the winning installed version per mod id from content-store receipts.
+/// Results are sorted by id; a store without receipts contributes nothing.
+[[nodiscard]] auto
+installed_versions_from_stores(std::span<const std::string> roots)
+    -> result<std::vector<installed_mod_version>>;
+
+/// Derive the version-token changes needed to bring `spec` in line with
+/// `installed`. Provider ranges keep their operator (`^1.0.0` becomes
+/// `^1.1.0`); a range that is not a single simple comparator is left alone.
+[[nodiscard]] auto
+plan_gamepack_sync(const mod::gamepack_spec &spec,
+                   std::span<const installed_mod_version> installed)
+    -> result<gamepack_sync_plan>;
+
+/// Apply `plan` to the gamepack text at `path` atomically. Only the recorded
+/// tokens are replaced; comments, ordering and provider table shapes survive.
+[[nodiscard]] auto apply_gamepack_sync(std::string_view path,
+                                       const gamepack_sync_plan &plan)
+    -> status;
+
+/// CLI entry point: report drift, and with `--write` update the gamepack and
+/// then the lock through the existing lock-writing path.
+[[nodiscard]] auto run_gamepack_sync(const gamepack_sync_options &options)
+    -> int;
 
 } // namespace refrain::app

@@ -3,6 +3,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 
 #include <refrain/app/mod_management.hpp>
+#include <refrain/app/services.hpp>
 
 #include <refrain/core/io.hpp>
 #include <refrain/core/log.hpp>
@@ -10,15 +11,21 @@
 #include <refrain/core/version.hpp>
 #include <refrain/data/checksum.hpp>
 #include <refrain/data/content_store.hpp>
+#include <refrain/mod/discovery.hpp>
+#include <refrain/mod/mod_ref.hpp>
 #include <refrain/mod/rfmod.hpp>
 
 #include <fmt/format.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <iostream>
+#include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -295,6 +302,67 @@ verify_lines(const refrain::mod::rfmod_reader &reader,
     }
     return lines;
 }
+
+namespace sync_detail {
+
+using refrain::core::semver_detail::trim;
+
+/// Which sync-managed section a TOML table header opens. A header under
+/// `[mods."<id>"]` is deliberately not the mods list: its `requires` array
+/// mirrors a manifest and must not be rewritten by a version sync.
+[[nodiscard]] auto section_of(std::string_view header)
+    -> std::optional<refrain::app::gamepack_sync_section> {
+    header = trim(header);
+    if (header == "mods") {
+        return refrain::app::gamepack_sync_section::mods_list;
+    }
+    if (header == "providers" || header.starts_with("providers.")) {
+        return refrain::app::gamepack_sync_section::providers;
+    }
+    return std::nullopt;
+}
+
+/// Rebase a simple SemVer range onto the installed version. A compound range
+/// (an AND group with bounds, or an `||` alternative) is left untouched: its
+/// shape carries a decision a version swap cannot express.
+[[nodiscard]] auto rebase_range(std::string_view range,
+                                std::string_view version)
+    -> std::optional<std::string> {
+    constexpr std::array<std::string_view, 7> operators{">=", "<=", "^", "~",
+                                                        ">",  "<",  "="};
+    std::string_view prefix{};
+    for (const auto op : operators) {
+        if (range.starts_with(op)) {
+            prefix = op;
+            break;
+        }
+    }
+    const auto bound{trim(range.substr(prefix.size()))};
+    if (!refrain::core::semver::parse(bound) ||
+        !refrain::core::semver::parse(version)) {
+        return std::nullopt;
+    }
+    return fmt::format("{}{}", prefix, version);
+}
+
+template <class Function>
+void for_each_requirement(const refrain::mod::provider_binding &binding,
+                          Function &&function) {
+    for (const auto &candidate : binding.candidates) {
+        function(candidate);
+    }
+    for (const auto &instance : binding.instances) {
+        function(instance.requirement);
+    }
+    if (binding.base) {
+        function(*binding.base);
+    }
+    for (const auto &wrapper : binding.wrappers) {
+        function(wrapper);
+    }
+}
+
+} // namespace sync_detail
 
 } // namespace
 
@@ -1124,6 +1192,277 @@ auto mod_management::execute(std::span<const std::string_view> arguments,
         log_audit.info("{}", line);
     }
     return report;
+}
+
+auto gamepack_sync_plan::format(std::string_view path) const -> std::string {
+    std::string out{fmt::format("gamepack sync: '{}' is out of date:\n", path)};
+    for (const auto &change : changes) {
+        out += fmt::format("  {}\n", change.line);
+    }
+    return out;
+}
+
+auto installed_versions_from_stores(std::span<const std::string> roots)
+    -> result<std::vector<installed_mod_version>> {
+    for (const auto &root : roots) {
+        if (!refrain::core::io::is_directory(root)) {
+            return std::unexpected{make_error(
+                error_code::invalid_argument,
+                fmt::format("gamepack sync: content store root '{}' is not a "
+                            "directory",
+                            root))};
+        }
+    }
+    auto catalog{mod::scan_installed(
+        roots, mod::discover_options{.require_mods_dir = false})};
+    if (!catalog) {
+        return std::unexpected{std::move(catalog.error())};
+    }
+    std::vector<installed_mod_version> installed{};
+    installed.reserve(catalog->size());
+    for (const auto &candidate : *catalog) {
+        installed.push_back({.id = candidate.id, .version = candidate.version});
+    }
+    std::sort(installed.begin(), installed.end(),
+              [](const installed_mod_version &lhs,
+                 const installed_mod_version &rhs) { return lhs.id < rhs.id; });
+    return installed;
+}
+
+auto plan_gamepack_sync(const mod::gamepack_spec &spec,
+                        std::span<const installed_mod_version> installed)
+    -> result<gamepack_sync_plan> {
+    std::map<std::string, std::string> by_id{};
+    for (const auto &entry : installed) {
+        if (!entry.id.empty() && !entry.version.empty()) {
+            by_id[entry.id] = entry.version;
+        }
+    }
+
+    gamepack_sync_plan plan{};
+    // old token -> new token. An exact pin owns its token: a provider
+    // requirement spelling the same text must not override it.
+    std::map<std::string, std::string> replacements{};
+    for (const auto &entry : spec.mods) {
+        const auto found{by_id.find(entry.ref.id)};
+        if (found == by_id.end() || found->second == entry.ref.version) {
+            continue;
+        }
+        const auto old_text{
+            fmt::format("\"{}@{}\"", entry.ref.id, entry.ref.version)};
+        const auto new_text{
+            fmt::format("\"{}@{}\"", entry.ref.id, found->second)};
+        plan.changes.push_back(
+            {.line =
+                 fmt::format("mod {}: pinned {}, installed {}", entry.ref.id,
+                             entry.ref.version, found->second),
+             .old_text = old_text,
+             .new_text = new_text,
+             .section = gamepack_sync_section::mods_list});
+        replacements.emplace(old_text, new_text);
+    }
+
+    for (const auto &binding : spec.providers) {
+        std::vector<mod::mod_requirement> originals{};
+        std::vector<std::string> resulting{};
+        sync_detail::for_each_requirement(
+            binding, [&](const mod::mod_requirement &requirement) {
+                originals.push_back(requirement);
+                const auto found{by_id.find(requirement.id)};
+                if (found == by_id.end()) {
+                    resulting.push_back(requirement.text());
+                    return;
+                }
+                auto range{sync_detail::rebase_range(requirement.range,
+                                                     found->second)};
+                resulting.push_back(
+                    range ? fmt::format("{}@{}", requirement.id, *range)
+                          : requirement.text());
+            });
+
+        // Two distinct ranges can rebase onto one text. parse_gamepack rejects
+        // a repeated id@range in one binding, so fail here, before any write.
+        std::set<std::string> unique{};
+        for (const auto &text : resulting) {
+            if (!unique.insert(text).second) {
+                return std::unexpected{make_error(
+                    error_code::invalid_argument,
+                    fmt::format("gamepack sync: provider '{}' would bind '{}' "
+                                "more than once after rebasing; refusing to "
+                                "change the gamepack",
+                                binding.service, text))};
+            }
+        }
+
+        for (std::size_t index{0}; index < originals.size(); ++index) {
+            if (resulting[index] == originals[index].text()) {
+                continue;
+            }
+            const auto old_text{fmt::format("\"{}\"", originals[index].text())};
+            const auto new_text{fmt::format("\"{}\"", resulting[index])};
+            if (const auto existing{replacements.find(old_text)};
+                existing != replacements.end()) {
+                if (existing->second != new_text) {
+                    return std::unexpected{make_error(
+                        error_code::invalid_argument,
+                        fmt::format("gamepack sync: token '{}' would become "
+                                    "both '{}' and '{}'; refusing to change "
+                                    "the gamepack",
+                                    old_text, existing->second, new_text))};
+                }
+                continue; // collapse repeated old -> new edits
+            }
+            plan.changes.push_back(
+                {.line = fmt::format("provider {}: pinned {}, installed {}",
+                                     binding.service, originals[index].text(),
+                                     resulting[index]),
+                 .old_text = old_text,
+                 .new_text = new_text,
+                 .section = gamepack_sync_section::providers});
+            replacements.emplace(old_text, new_text);
+        }
+    }
+    return plan;
+}
+
+auto apply_gamepack_sync(std::string_view path, const gamepack_sync_plan &plan)
+    -> status {
+    auto text{refrain::core::io::read_text(path)};
+    if (!text) {
+        return std::unexpected{std::move(text.error())};
+    }
+
+    // Rewrite line by line so a token in a dependency array or a comment can
+    // never be caught by a provider or mods-list replacement.
+    std::vector<std::size_t> counts(plan.changes.size(), 0U);
+    std::string out{};
+    out.reserve(text->size());
+    std::optional<gamepack_sync_section> active{};
+    std::size_t position{0};
+    while (position < text->size()) {
+        const auto newline{text->find('\n', position)};
+        const auto end{newline == std::string::npos ? text->size() : newline};
+        std::string line{text->substr(position, end - position)};
+        const auto trimmed{sync_detail::trim(line)};
+        if (!trimmed.empty() && trimmed.front() == '#') {
+            // Comments are operator prose, never version tokens.
+        } else if (!trimmed.empty() && trimmed.front() == '[') {
+            const auto close{trimmed.find(']')};
+            active =
+                close == std::string_view::npos
+                    ? std::nullopt
+                    : sync_detail::section_of(trimmed.substr(1, close - 1));
+        } else if (active) {
+            for (std::size_t index{0}; index < plan.changes.size(); ++index) {
+                const auto &change{plan.changes[index]};
+                if (change.section != *active) {
+                    continue;
+                }
+                std::size_t at{0};
+                while ((at = line.find(change.old_text, at)) !=
+                       std::string::npos) {
+                    line.replace(at, change.old_text.size(), change.new_text);
+                    at += change.new_text.size();
+                    ++counts[index];
+                }
+            }
+        }
+        out += line;
+        if (newline == std::string::npos) {
+            break;
+        }
+        out.push_back('\n');
+        position = newline + 1;
+    }
+    for (std::size_t index{0}; index < counts.size(); ++index) {
+        if (counts[index] == 0U) {
+            return std::unexpected{make_error(
+                error_code::not_found,
+                fmt::format(
+                    "gamepack sync: '{}' has no '{}' in its {} section; "
+                    "re-read the gamepack before writing",
+                    path, plan.changes[index].old_text,
+                    plan.changes[index].section ==
+                            gamepack_sync_section::mods_list
+                        ? "[mods]"
+                        : "[providers]"))};
+        }
+    }
+    return refrain::core::io::atomic_write_text(path, out);
+}
+
+auto run_gamepack_sync(const gamepack_sync_options &options) -> int {
+    if (options.check && options.write) {
+        return report_error(
+            make_error(error_code::invalid_argument,
+                       "gamepack sync: --check and --write are mutually "
+                       "exclusive"));
+    }
+    if (options.gamepack.empty()) {
+        return report_error(
+            make_error(error_code::invalid_argument,
+                       "gamepack sync: --gamepack <path> is required"));
+    }
+    auto spec{mod::load_gamepack_spec(options.gamepack, "server")};
+    if (!spec) {
+        return report_error(spec.error());
+    }
+    auto installed{installed_versions_from_stores(options.roots)};
+    if (!installed) {
+        return report_error(installed.error());
+    }
+    auto plan{plan_gamepack_sync(*spec, *installed)};
+    if (!plan) {
+        return report_error(plan.error());
+    }
+    std::optional<std::string> original{};
+    bool wrote_gamepack{false};
+    if (!plan->empty()) {
+        std::cout << plan->format(options.gamepack);
+        if (!options.write) {
+            return report_error(make_error(
+                error_code::version_mismatch,
+                fmt::format("gamepack sync: '{}' has out-of-date version pins; "
+                            "re-run with --write to apply them",
+                            options.gamepack)));
+        }
+        auto original_text{refrain::core::io::read_text(options.gamepack)};
+        if (!original_text) {
+            return report_error(original_text.error());
+        }
+        original = std::move(*original_text);
+        if (const auto written{apply_gamepack_sync(options.gamepack, *plan)};
+            !written) {
+            return report_error(written.error());
+        }
+        wrote_gamepack = true;
+        std::cout << fmt::format("gamepack sync: '{}' updated ({} pin(s))\n",
+                                 options.gamepack, plan->changes.size());
+    } else {
+        std::cout << fmt::format("gamepack sync: '{}' pins are up to date\n",
+                                 options.gamepack);
+    }
+
+    if (!options.write) {
+        return 0;
+    }
+
+    // The lock is refreshed through the same path as `mods lock --write` and
+    // `refrain-server --update-lock`; sync never implements a second writer.
+    mods_lock_options lock_options{};
+    lock_options.gamepack = options.gamepack;
+    lock_options.roots = options.roots;
+    lock_options.image = options.image;
+    lock_options.lock = options.lock;
+    lock_options.write = true;
+    const auto locked{run_mods_lock(lock_options)};
+    if (locked != 0 && wrote_gamepack) {
+        // The gamepack and the lock must describe one composition. A lock that
+        // cannot be refreshed leaves the old pins in place so the pair stays
+        // consistent; the lock writer is atomic and has not changed on error.
+        (void)refrain::core::io::atomic_write_text(options.gamepack, *original);
+    }
+    return locked;
 }
 
 } // namespace refrain::app

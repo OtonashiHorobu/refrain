@@ -34,6 +34,8 @@
 
 #include <schema/schema.hpp>
 
+#include <refrain/app/mod_management.hpp>
+#include <refrain/app/mod_profile.hpp>
 #include <refrain/app/services.hpp>
 #include <refrain/app/world_service.hpp>
 
@@ -135,6 +137,49 @@ int main(int argc, char **argv) {
                           "Profile directory (default: profiles)");
     check_cmd->add_flag("--built", gamepack_check.built,
                         "Also verify the profile matches this binary");
+
+    gamepack_gen_options gamepack_gen{};
+    auto *gamepack_gen_cmd = gamepack_cmd->add_subcommand(
+        "gen",
+        "Generate a deterministic starter gamepack from a build profile");
+    gamepack_gen_cmd
+        ->add_option("--profile", gamepack_gen.profile,
+                     "Build profile name under the profile directory")
+        ->required();
+    gamepack_gen_cmd->add_option("--mods", gamepack_gen.mods_dir,
+                                 "Root with <id>/manifest.toml for the profile "
+                                 "mods (default: mods)");
+    gamepack_gen_cmd->add_option("--profiles", gamepack_gen.profiles_dir,
+                                 "Profile directory (default: profiles)");
+    gamepack_gen_cmd
+        ->add_option("-o,--out", gamepack_gen.out, "Output gamepack.toml path")
+        ->required();
+    gamepack_gen_cmd->add_flag(
+        "--check", gamepack_gen.check,
+        "Verify the existing file matches the generated gamepack without "
+        "writing");
+
+    gamepack_sync_options gamepack_sync{};
+    auto *gamepack_sync_cmd = gamepack_cmd->add_subcommand(
+        "sync", "Recompute gamepack version pins from installed receipts");
+    gamepack_sync_cmd
+        ->add_option("-g,--gamepack", gamepack_sync.gamepack,
+                     "gamepack.toml path")
+        ->required();
+    gamepack_sync_cmd->add_option(
+        "--mods", gamepack_sync.roots,
+        "Content store root with install receipts (repeatable)");
+    gamepack_sync_cmd->add_option(
+        "--image", gamepack_sync.image,
+        "Builtin image seeding built-in mods when --write refreshes the lock");
+    gamepack_sync_cmd->add_option(
+        "--lock", gamepack_sync.lock,
+        "mods.lock path (default: next to the gamepack)");
+    gamepack_sync_cmd->add_flag("--check", gamepack_sync.check,
+                                "Report version-pin drift without writing");
+    gamepack_sync_cmd->add_flag(
+        "--write", gamepack_sync.write,
+        "Rewrite the gamepack and mods.lock instead of only reporting drift");
 
     auto *schema_cmd =
         app.add_subcommand("schema", "RSC/RIDL schema toolchain");
@@ -839,6 +884,12 @@ int main(int argc, char **argv) {
     }
     if (check_cmd->parsed()) {
         return app_services::run_gamepack_check(gamepack_check);
+    }
+    if (gamepack_gen_cmd->parsed()) {
+        return app_services::run_gamepack_gen(gamepack_gen);
+    }
+    if (gamepack_sync_cmd->parsed()) {
+        return app_services::run_gamepack_sync(gamepack_sync);
     }
     if (gen_cmd->parsed()) {
         if (schema_roots.empty()) {

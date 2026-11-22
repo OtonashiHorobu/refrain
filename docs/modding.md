@@ -612,6 +612,65 @@ refrain-tools gamepack dump-plan --file gamepack/gamepack.toml
 refrain-tools mods check --gamepack gamepack/gamepack.toml
 ```
 
+### Generated gamepacks and group servers
+
+A build profile is enough to write a starter gamepack. The generator reads the
+profile's mod set and the manifest of each mod, pins every mod at its manifest
+version and binds every declared service contract to the mod that provides it:
+
+```bash
+refrain-tools gamepack gen \
+    --profile vanilla --mods mods --out gamepack/gamepack.toml
+```
+
+The output is byte-identical for the same profile and manifests: mod ids are
+sorted, provider bindings are sorted by service key, and no host-local paths or
+timestamps enter the file. A service with no candidates is left unbound. A
+service with more than one candidate fails and names the service and every
+candidate; the generator never guesses which mod should provide a contract.
+Use `--check` with the same arguments to verify that an existing file is still
+the generated one without writing it.
+Provider composition is a deployment decision: the generated bindings are all
+exclusive, and switching a service to instanced or chain is an explicit edit to
+`[providers]`. The generated gamepack sets `policy.conflict = "explicit"` so an
+installed update of a pinned mod can win over the built-in copy of that mod.
+
+On a group server, keep one gamepack and its `mods.lock` with the shared
+instance files and keep installed packages in a content store reachable by every
+server that uses them. The gamepack decides which services exist and how they
+are composed; the lock records the exact versions the group has agreed on; the
+content store supplies the package bytes. All three travel together. A new mod
+or a new provider is a deliberate gamepack edit followed by a lock refresh, not
+a side effect of installing a package.
+
+An install or update never edits either file. After a package changes, report
+pin drift first and only rewrite when the change is intended:
+
+```bash
+# Report version pins that no longer match the installed receipts.
+refrain-tools gamepack sync --check \
+    -g gamepack/gamepack.toml --mods /srv/refrain/store
+
+# Apply the new pins, then refresh the lock through the normal lock path.
+refrain-tools gamepack sync --write \
+    -g gamepack/gamepack.toml --mods /srv/refrain/store \
+    --image build/Release/generated/builtin.image
+```
+
+`sync` replaces only the version tokens in `[mods].list` and `[providers]`. Mod
+ids, provider keys, candidate order, composition modes, comments and loader
+declarations are left as written, so the group's provider decisions survive an
+update. A provider range keeps its operator: `^1.0.0` becomes `^1.1.0` when the
+installed version is `1.1.0`. A compound range is left alone because changing
+its bounds would change the decision it encodes. The lock is written through
+the same resolution as `mods lock --write` and `refrain-server --update-lock`;
+`--image` seeds the built-in mods when the gamepack pins them. A second
+`--check` after `--write` reports that the pins are up to date.
+
+The manual path stays first-class: edit the gamepack and refresh the lock with
+`mods lock --write`, or start the server with `--update-lock --check`. Generated
+gamepacks are a starting point for that workflow, not a replacement for it.
+
 ## Providers
 
 A provider implements a RIDL service and registers its service key. The

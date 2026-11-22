@@ -121,4 +121,41 @@ struct profile_check_result {
 [[nodiscard]] auto format_profile_identity(const mod_profile_spec &profile)
     -> std::string;
 
+// Gamepack generation from a build profile.
+//
+// Generated gamepacks are starters: they pin every profile mod at the version
+// its manifest declares and bind each service contract to its single declaring
+// mod. Provider composition (exclusive, instanced or chain) is a deployment
+// decision and is never inferred. A service with more than one candidate is a
+// hard error naming the service and the candidates.
+
+struct gamepack_gen_options {
+    /// Profile name under the profile directory.
+    std::string profile{};
+    /// Root holding `<id>/manifest.toml` for the profile mods.
+    std::string mods_dir{"mods"};
+    /// Profile directory used to find `<name>.toml`.
+    std::string profiles_dir{"profiles"};
+    /// Destination `gamepack.toml` path.
+    std::string out{};
+    /// Compare with the existing file instead of writing it.
+    bool check{false};
+};
+
+struct generated_gamepack {
+    /// The parsed, validated form of `text`.
+    mod::gamepack_spec spec{};
+    /// Byte-identical TOML written for the same profile and manifests.
+    std::string text{};
+};
+
+/// Build the starter gamepack text for `profile` from the manifests under
+/// `mods_root`. No paths, clocks or iteration-order accidents enter `text`.
+[[nodiscard]] auto generate_gamepack(const mod_profile_spec &profile,
+                                     std::string_view mods_root)
+    -> result<generated_gamepack>;
+
+/// CLI entry point: load the named profile, generate and write `--out`.
+[[nodiscard]] auto run_gamepack_gen(const gamepack_gen_options &options) -> int;
+
 } // namespace refrain::app
