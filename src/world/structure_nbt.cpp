@@ -556,13 +556,52 @@ auto encode_fortress(nbt::compound &tag,
     return status_ok();
 }
 
+/// The numeric tag kinds that the reference's `NumericTag.asNumber` accepts.
+[[nodiscard]] auto is_numeric_tag(tag_type kind) noexcept -> bool {
+    switch (kind) {
+    case tag_type::byte:
+    case tag_type::short_:
+    case tag_type::int_:
+    case tag_type::long_:
+    case tag_type::float_:
+    case tag_type::double_:
+        return true;
+    default:
+        return false;
+    }
+}
+
+/// Widens any numeric tag to a double; the caller only passes numeric tags.
+[[nodiscard]] auto numeric_as_double(const value &stored) noexcept
+    -> std::optional<double> {
+    if (const auto number = stored.as_byte()) {
+        return static_cast<double>(*number);
+    }
+    if (const auto number = stored.as_short()) {
+        return static_cast<double>(*number);
+    }
+    if (const auto number = stored.as_int()) {
+        return static_cast<double>(*number);
+    }
+    if (const auto number = stored.as_long()) {
+        return static_cast<double>(*number);
+    }
+    if (const auto number = stored.as_float()) {
+        return static_cast<double>(*number);
+    }
+    return stored.as_double();
+}
+
 /// Converts one JSON node of an inline processor list into the NBT value the
 /// reference codec writes for it. The document is the datapack's codec form,
 /// so its JSON kinds map onto the codec's value kinds: booleans are bytes,
 /// integers are ints while they fit and longs beyond, reals are doubles, and
-/// arrays become lists of one element type. A JSON value the NBT tag model
-/// cannot express (a null, or an array mixing tag types) fails instead of
-/// being coerced.
+/// arrays become lists of one element type. An array mixing numeric kinds is
+/// widened to a TAG_Double list: the reference reads every numeric tag through
+/// `NumericTag.asNumber`, so all of its numeric decoders accept a double. An
+/// array mixing numbers with non-numeric values fails instead: this NBT DOM
+/// has only homogeneous lists and does not carry the reference's empty-name
+/// compound wrappers for heterogeneous lists. A null also fails.
 auto processor_value(const data::json::value &node, std::size_t depth,
                      std::size_t &budget) -> result<value> {
     if (depth > max_processor_depth) {
@@ -628,15 +667,41 @@ auto processor_value(const data::json::value &node, std::size_t depth,
             converted.push_back(std::move(*encoded));
         }
         const auto element_type = converted.front().type();
-        auto list = nbt::make_list(element_type);
-        for (auto &item : converted) {
-            if (item.type() != element_type) {
-                return parse_failure(
-                    fmt::format("inline processor array mixes {} and {} values",
-                                nbt::tag_type_name(element_type),
-                                nbt::tag_type_name(item.type())));
+        const auto first_different =
+            std::find_if(converted.begin(), converted.end(),
+                         [element_type](const value &item) {
+                             return item.type() != element_type;
+                         });
+        if (first_different == converted.end()) {
+            auto list = nbt::make_list(element_type);
+            for (auto &item : converted) {
+                if (auto pushed = list.push(std::move(item)); !pushed) {
+                    return std::unexpected{std::move(pushed.error())};
+                }
             }
-            if (auto pushed = list.push(std::move(item)); !pushed) {
+            return list;
+        }
+        if (!std::all_of(converted.begin(), converted.end(),
+                         [](const value &item) {
+                             return is_numeric_tag(item.type());
+                         })) {
+            return parse_failure(fmt::format(
+                "inline processor array mixes {} and {} values; this NBT list "
+                "model is homogeneous and has no empty-name wrappers",
+                nbt::tag_type_name(element_type),
+                nbt::tag_type_name(first_different->type())));
+        }
+        // The reference persists a heterogeneous numeric list as a compound
+        // list with empty-name wrappers. Widening to TAG_Double keeps the same
+        // value for every numeric reader without those wrappers.
+        auto list = nbt::make_list(tag_type::double_);
+        for (const auto &item : converted) {
+            const auto number = numeric_as_double(item);
+            if (!number) {
+                return parse_failure(
+                    "inline processor array has an unreadable number");
+            }
+            if (auto pushed = list.push(nbt::make_double(*number)); !pushed) {
                 return std::unexpected{std::move(pushed.error())};
             }
         }
@@ -727,15 +792,6 @@ auto encode_pool_element(const structure::jigsaw_element_info &element,
         return parse_failure("jigsaw pool element nesting exceeds its bound");
     }
     --budget;
-    if (element.inline_processors != nullptr &&
-        element.kind != structure::pool_element_kind::single &&
-        element.kind != structure::pool_element_kind::legacy_single) {
-        // Only the template-backed elements carry a processor field in the
-        // reference codec; an inline list on any other kind has no stored
-        // place and must not be dropped silently.
-        return parse_failure("jigsaw pool element kind cannot carry an inline "
-                             "processor list");
-    }
     static constexpr std::array<
         std::pair<structure::pool_element_kind, std::string_view>, 5>
         kinds{{
@@ -775,6 +831,9 @@ auto encode_pool_element(const structure::jigsaw_element_info &element,
                         : "apply_waterlogging");
             }
         };
+    // Only the template-backed element codecs declare a `processors` field.
+    // The other reference codecs ignore unknown fields, so a list carried on
+    // those kinds is accepted and dropped rather than rejecting the column.
     switch (element.kind) {
     case structure::pool_element_kind::empty:
         return nbt::value{std::move(out)};

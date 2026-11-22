@@ -6,8 +6,10 @@
 // the reference's shape: a named processor list as its id string, and an
 // inline list as the direct codec's object form `{"processors": [...]}`.
 // The generation record keeps the datapack document of an inline list, so the
-// encoder converts it; a document the tag model cannot carry fails instead of
-// being dropped.
+// encoder converts it. A mixed numeric array becomes a TAG_Double list, which
+// every numeric reader in the reference accepts; a mixed array containing a
+// non-numeric value has no tag form in this model and fails. A `processors`
+// field on a kind whose codec has no such field is ignored.
 
 #include "../../src/world/structure_nbt_internal.hpp"
 
@@ -143,6 +145,28 @@ auto pool_element(const nbt::compound &piece) -> const nbt::compound * {
 /// The processors child of a pool element, whichever shape it carries.
 auto processors_field(const nbt::compound &element) -> const nbt::value * {
     return child(element, "processors");
+}
+
+/// The first processor entry of an encoded inline list.
+auto first_processor(const nbt::value &root) -> const nbt::compound * {
+    const auto *piece = first_piece(root);
+    if (piece == nullptr) {
+        return nullptr;
+    }
+    const auto *element = pool_element(*piece);
+    if (element == nullptr) {
+        return nullptr;
+    }
+    const auto *processors = processors_field(*element);
+    if (processors == nullptr || processors->as_compound() == nullptr) {
+        return nullptr;
+    }
+    const auto *list = child(*processors->as_compound(), "processors");
+    if (list == nullptr || list->as_list() == nullptr ||
+        list->as_list()->items.empty()) {
+        return nullptr;
+    }
+    return list->as_list()->items.front().as_compound();
 }
 
 } // namespace
@@ -380,6 +404,66 @@ suite<"world/structure-nbt"> structure_nbt_tests = [] {
         }
     };
 
+    "a mixed numeric array in inline processor data becomes a double list"_test =
+        [] {
+            const std::string document = R"({"processors":[
+                {"processor_type":"minecraft:nop",
+                 "mixed":[1,2.5,3,true]}]})";
+            auto element = make_element(structure::pool_element_kind::single);
+            element.inline_processors = inline_processors(document);
+            expect(element.inline_processors != nullptr);
+            const auto encoded = encode_one(make_start({make_piece(element)}));
+            expect(encoded.has_value());
+            if (!encoded) {
+                return;
+            }
+            const auto *entry = first_processor(*encoded);
+            expect(entry != nullptr);
+            if (entry == nullptr) {
+                return;
+            }
+            const auto *mixed = child(*entry, "mixed");
+            expect(mixed != nullptr && mixed->as_list() != nullptr);
+            if (mixed == nullptr || mixed->as_list() == nullptr) {
+                return;
+            }
+            expect(mixed->as_list()->element_type == nbt::tag_type::double_);
+            const auto &items = mixed->as_list()->items;
+            expect(items.size() == 4U);
+            if (items.size() != 4U) {
+                return;
+            }
+            expect(items[0].as_double() == 1.0);
+            expect(items[1].as_double() == 2.5);
+            expect(items[2].as_double() == 3.0);
+            expect(items[3].as_double() == 1.0);
+        };
+
+    "a homogeneous numeric array keeps its tag type"_test = [] {
+        const std::string document = R"({"processors":[
+            {"processor_type":"minecraft:nop","values":[1,2,3]}]})";
+        auto element = make_element(structure::pool_element_kind::single);
+        element.inline_processors = inline_processors(document);
+        expect(element.inline_processors != nullptr);
+        const auto encoded = encode_one(make_start({make_piece(element)}));
+        expect(encoded.has_value());
+        if (!encoded) {
+            return;
+        }
+        const auto *entry = first_processor(*encoded);
+        expect(entry != nullptr);
+        if (entry == nullptr) {
+            return;
+        }
+        const auto *values = child(*entry, "values");
+        expect(values != nullptr && values->as_list() != nullptr);
+        if (values == nullptr || values->as_list() == nullptr) {
+            return;
+        }
+        expect(values->as_list()->element_type == nbt::tag_type::int_);
+        expect(values->as_list()->items.size() == 3U);
+    };
+
     "an inline processor document the tag model cannot carry fails closed"_test =
         [] {
             const auto encode = [](std::string_view document) {
@@ -397,21 +481,57 @@ suite<"world/structure-nbt"> structure_nbt_tests = [] {
             expect(!encode(R"({"processors":[{"processor_type":"minecraft:nop"},
                                              null]})")
                         .has_value());
-            // NBT lists are homogeneous; a JSON array mixing kinds has no
-            // representable tag.
+            // This NBT model has only homogeneous lists and does not carry the
+            // reference's empty-name wrappers, so an array mixing a number
+            // with a string has no representable tag here.
             expect(!encode(
                         R"({"processors":[{"processor_type":"minecraft:nop",
                                            "mixed":[1,"two"]}]})")
                         .has_value());
         };
 
-    "an inline processor list on a non-template element fails closed"_test =
+    "a processors field on an element without a processor codec is ignored"_test =
         [] {
-            auto element = make_element(structure::pool_element_kind::feature);
-            element.feature = "minecraft:test_feature";
-            element.inline_processors =
-                inline_processors(R"({"processors":[]})");
-            expect(!encode_one(make_start({make_piece(element)})).has_value());
+            const auto encode = [](structure::pool_element_kind kind,
+                                   bool inline_list) {
+                auto element = make_element(kind);
+                if (kind == structure::pool_element_kind::feature) {
+                    element.feature = "minecraft:test_feature";
+                }
+                if (kind == structure::pool_element_kind::list) {
+                    element.elements.push_back(
+                        make_element(structure::pool_element_kind::empty));
+                }
+                if (inline_list) {
+                    element.inline_processors =
+                        inline_processors(R"({"processors":[]})");
+                } else {
+                    element.processor_list = "minecraft:test_processors";
+                }
+                return encode_one(make_start({make_piece(element)}));
+            };
+            for (const auto kind : {structure::pool_element_kind::feature,
+                                    structure::pool_element_kind::empty,
+                                    structure::pool_element_kind::list}) {
+                for (const bool inline_list : {false, true}) {
+                    const auto encoded = encode(kind, inline_list);
+                    expect(encoded.has_value());
+                    if (!encoded) {
+                        continue;
+                    }
+                    const auto *piece = first_piece(*encoded);
+                    expect(piece != nullptr);
+                    if (piece == nullptr) {
+                        continue;
+                    }
+                    const auto *element = pool_element(*piece);
+                    expect(element != nullptr);
+                    if (element == nullptr) {
+                        continue;
+                    }
+                    expect(processors_field(*element) == nullptr);
+                }
+            }
         };
 
     "a named processor list stays a processor-list id"_test = [] {
