@@ -8,10 +8,14 @@ The test binary uses Boost.UT and contains every suite in one process:
 build/Release/bin/refrain-tests
 ```
 
-Pass a suite name or a test name to run a subset:
+Pass an exact test name to run one case. The filter matches the full name
+printed by `--list-tests`; a suite name or a partial pattern matches nothing and
+exits successfully with every case reported as skipped. Add `-s` when the
+passing case should be printed.
 
 ```bash
-build/Release/bin/refrain-tests "world/rwf"
+build/Release/bin/refrain-tests --list-tests
+build/Release/bin/refrain-tests "storage/refrain.storage.rwf serves self-contained chunk payloads" -s
 build/Release/bin/refrain-tests --help
 ```
 
