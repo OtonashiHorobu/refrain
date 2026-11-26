@@ -72,6 +72,7 @@ suite<"server/entity-broadcast"> entity_broadcast_tests = [] {
 
     "a non-finite reported position produces no entity packet"_test = [] {
         const auto nan{std::numeric_limits<double>::quiet_NaN()};
+        const auto nan_float{std::numeric_limits<float>::quiet_NaN()};
         const auto inf{std::numeric_limits<double>::infinity()};
         expect(
             choose_entity_move(at(0.0, 64.0, 0.0), at(nan, 64.0, 0.0)).kind ==
@@ -83,7 +84,7 @@ suite<"server/entity-broadcast"> entity_broadcast_tests = [] {
                                   at(0.0, 64.0, 0.0, inf, 0.0F))
                    .kind == entity_move_kind::none);
         expect(choose_entity_move(at(0.0, 64.0, 0.0),
-                                  at(0.0, 64.0, 0.0, 0.0F, nan))
+                                  at(0.0, 64.0, 0.0, 0.0F, nan_float))
                    .kind == entity_move_kind::none);
     };
 
@@ -98,13 +99,14 @@ suite<"server/entity-broadcast"> entity_broadcast_tests = [] {
 
     "a finite position predicate rejects a non-finite component"_test = [] {
         const auto nan{std::numeric_limits<double>::quiet_NaN()};
+        const auto nan_float{std::numeric_limits<float>::quiet_NaN()};
         const auto inf{std::numeric_limits<double>::infinity()};
         expect(finite_position(0.5, 64.0, 0.5, 0.0F, 0.0F));
         expect(!finite_position(nan, 64.0, 0.5, 0.0F, 0.0F));
         expect(!finite_position(0.5, inf, 0.5, 0.0F, 0.0F));
         expect(!finite_position(0.5, 64.0, nan, 0.0F, 0.0F));
         expect(!finite_position(0.5, 64.0, 0.5, inf, 0.0F));
-        expect(!finite_position(0.5, 64.0, 0.5, 0.0F, nan));
+        expect(!finite_position(0.5, 64.0, 0.5, 0.0F, nan_float));
         expect(addressable_position(0.5, 64.0, 0.5));
         expect(addressable_position(world_horizontal_limit, 64.0,
                                     -world_horizontal_limit));
