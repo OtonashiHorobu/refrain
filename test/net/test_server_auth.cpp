@@ -775,8 +775,8 @@ suite<"net/auth"> server_auth_tests = [] {
                     return;
                 }
                 test.send_key(connection, challenge, shared_secret());
-                expect(wait_until(
-                    [&test] { return !test.codec->live(connection); }));
+                expect(
+                    wait_until([&] { return !test.codec->live(connection); }));
                 expect(!test.has_packet(connection,
                                         login_cb::login_finished::packet_id));
                 expect(test.disconnect_reason(connection)
