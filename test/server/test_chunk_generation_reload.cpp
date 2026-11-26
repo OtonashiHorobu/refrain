@@ -540,22 +540,45 @@ const suite chunk_generation_reload_tests = [] {
         static_cast<void>((*service)->dispatch(0));
         const auto deadline{std::chrono::steady_clock::now() +
                             std::chrono::seconds{30}};
+        // Both tasks fail, but they need not land on different workers: one
+        // worker can serve both, and after its first generator creation fails
+        // it reports every later task from the cached error without attempting
+        // another bind. Wait for both task reports instead of the per-worker
+        // bind-failure count, and assert that count separately below.
         std::size_t reported_failures{0};
+        bool first_task_reported{false};
+        bool second_task_reported{false};
         while (std::chrono::steady_clock::now() < deadline) {
             static_cast<void>((*service)->dispatch(0));
             static_cast<void>((*service)->take_results());
-            reported_failures += (*service)->take_failures().size();
-            if (reported_failures >= 2U &&
-                (*service)->generation_rebuild_failures() >= 2U) {
+            for (const auto &failure : (*service)->take_failures()) {
+                ++reported_failures;
+                if (failure.tile.z != 0) {
+                    continue;
+                }
+                if (failure.tile.x == 0) {
+                    first_task_reported = true;
+                } else if (failure.tile.x == 1) {
+                    second_task_reported = true;
+                }
+            }
+            if (first_task_reported && second_task_reported) {
                 break;
             }
             std::this_thread::sleep_for(std::chrono::milliseconds{5});
         }
-        // Two workers failed to bind and to create their boot generator, but
-        // the generation was composed once for both, nothing was applied, and
-        // no rebuild was reported.
+        // Every queued task was reported exactly once. The bind-failure counter
+        // records failed workers, not failed tasks: the worker that attempted
+        // the bind is counted, and no worker counts more than once. The failed
+        // epoch was composed once, no worker applied it, and no rebuild was
+        // reported.
+        expect(reported_failures == 2U);
+        expect(first_task_reported);
+        expect(second_task_reported);
         expect((*service)->generation_compose_attempts() == 1U);
-        expect((*service)->generation_rebuild_failures() >= 2U);
+        expect((*service)->generation_rebuild_failures() >= 1U);
+        expect((*service)->generation_rebuild_failures() <=
+               (*service)->worker_count());
         expect((*service)->bound_generation() == 0U);
         expect((*service)->generation_rebuilds() == 0U);
         (*service)->stop();
